@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Atom sorting using AODs · AtomTwin.jl</title><meta name="title" content="Atom sorting using AODs · AtomTwin.jl"/><meta property="og:title" content="Atom sorting using AODs · AtomTwin.jl"/><meta property="twitter:title" content="Atom sorting using AODs · AtomTwin.jl"/><meta name="description" content="Documentation for AtomTwin.jl."/><meta property="og:description" content="Documentation for AtomTwin.jl."/><meta property="twitter:description" content="Documentation for AtomTwin.jl."/><script data-outdated-warner src="../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL=".."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../assets/documenter.js"></script><script src="../search_index.js"></script><script src="../siteinfo.js"></script><script src="../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../assets/themeswap.js"></script><link href="../assets/custom.css" rel="stylesheet" type="text/css"/></head><body><div id="documenter"><nav class="docs-sidebar"><div class="docs-package-name"><span class="docs-autofit"><a href="../">AtomTwin.jl</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../">Home</a></li><li><a class="tocitem" href="../quickstart/">Quick Start</a></li><li><span class="tocitem">Examples</span><ul><li><a class="tocitem" href="../rabi_with_dissipation/">Rabi with dissipation</a></li><li><a class="tocitem" href="../rabi_with_noise/">Rabi with noise</a></li><li><a class="tocitem" href="../rabi_with_motion/">Rabi with motion</a></li><li><a class="tocitem" href="../rabi_with_static_intensity_noise/">Rabi with static noise</a></li><li><a class="tocitem" href="../rydberg_blockade/">Rydberg blockade</a></li><li><a class="tocitem" href="../time-optimal_rydberg_gate/">Time-optimal Rydberg gate</a></li><li><a class="tocitem" href="../gateX_tomography/">GateX tomography</a></li><li><a class="tocitem" href="../eit_with_dissipation/">EIT with dissipation</a></li><li><a class="tocitem" href="../yb171_raman_gate/">Yb-171 Raman gate</a></li><li><a class="tocitem" href="../k39_state_prep/">K-39 state preparation</a></li><li class="is-active"><a class="tocitem" href>Atom sorting using AODs</a><ul class="internal"><li><a class="tocitem" href="#Parameters"><span>Parameters</span></a></li><li><a class="tocitem" href="#System-definition"><span>System definition</span></a></li><li><a class="tocitem" href="#Detectors"><span>Detectors</span></a></li><li><a class="tocitem" href="#Build-sequence"><span>Build sequence</span></a></li><li><a class="tocitem" href="#Run-simulations"><span>Run simulations</span></a></li><li><a class="tocitem" href="#Plot-results"><span>Plot results</span></a></li></ul></li></ul></li><li><span class="tocitem">API reference</span><ul><li><a class="tocitem" href="../api_system/">System building</a></li><li><a class="tocitem" href="../api_physics/">Physical processes</a></li><li><a class="tocitem" href="../api_dag/">DAG system</a></li><li><a class="tocitem" href="../api_sequence/">Running simulations</a></li><li><a class="tocitem" href="../api_noise/">Parameters and noise</a></li><li><a class="tocitem" href="../api_visualization/">Visualization</a></li><li><a class="tocitem" href="../internals/">Internals</a></li></ul></li><li><a class="tocitem" href="../CONTRIBUTING/">Contributing</a></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li><a class="is-disabled">Examples</a></li><li class="is-active"><a href>Atom sorting using AODs</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Atom sorting using AODs</a></li></ul></nav><div class="docs-right"><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Atom-Sorting"><a class="docs-heading-anchor" href="#Atom-Sorting">Atom Sorting</a><a id="Atom-Sorting-1"></a><a class="docs-heading-anchor-permalink" href="#Atom-Sorting" title="Permalink"></a></h1><p>In this example we simulate an atom sorting protocol using two tweezer arrays.</p><p>A two-dimensional array is loaded with a particular arrangement of atoms defined by an occupancy matrix. A second one-dimensional tweezer array is used to transfer atoms row-by-row into a dense arrangement. The final state is a dense 5×5 atom array.</p><pre><code class="language-julia hljs">using AtomTwin
+using AtomTwin.Units
+using GLMakie
+using AtomTwin.Visualization: animate</code></pre><h2 id="Parameters"><a class="docs-heading-anchor" href="#Parameters">Parameters</a><a id="Parameters-1"></a><a class="docs-heading-anchor-permalink" href="#Parameters" title="Permalink"></a></h2><pre><code class="language-julia hljs">occ =  [0  1  0  1  0  1  1  0  0  1;
+        0  0  1  1  1  0  0  1  1  0;
+        1  0  0  0  1  0  0  1  1  1;
+        0  1  1  0  1  0  1  0  1  0;
+        1  0  0  1  0  1  1  1  0  0] # initial occupancy matrix
+
+temperature = 5e-6
+
+dt     = 0.50e-6     # simulation timestep 500 ns
+T_sort = 100e-6      # sorting time within each row (horizontal)</code></pre><h2 id="System-definition"><a class="docs-heading-anchor" href="#System-definition">System definition</a><a id="System-definition-1"></a><a class="docs-heading-anchor-permalink" href="#System-definition" title="Permalink"></a></h2><p><code>static</code> is a static 2D array holding the atoms. <code>dynamic</code> is a 1D array used as a movable “conveyor belt”.</p><p>10x5-site tweezer array</p><pre><code class="language-julia hljs">static = TweezerArray(
+    λ         = 759nm,
+    w0        = 1.0µm,
+    P_total   = 500mW,
+    row_freqs = [-2:2...]*MHz,
+    col_freqs = [-4.5:4.5...]*MHz,
+    dx        = 3µm/MHz,
+    dy        = 3µm/MHz,
+)</code></pre><p>10x1-site tweezer array</p><pre><code class="language-julia hljs">dynamic = TweezerArray(
+    λ         = 759nm,
+    w0        = 1.0µm,
+    P_total   = 100mW,
+    row_freqs = [-2.0]*MHz,   # single dynamic row
+    col_freqs = [-4.5:4.5...]*MHz,
+    dx        = 3µm/MHz,
+    dy        = 3µm/MHz,
+)</code></pre><p>Place atoms according to occupancy matrix with a thermal velocity distribution</p><pre><code class="language-julia hljs">atoms = Ytterbium171Atom[]
+for r in 1:size(occ,1)
+    for c in 1:size(occ,2)
+        if occ[r,c] == 1
+            push!(atoms, Ytterbium171Atom(;
+                levels = [Level(&quot;1S0&quot;)],
+                x_init = getposition(static[r,c]),
+                v_init = maxwellboltzmann(T = temperature)))
+        end
+    end
+end
+
+system = System(atoms, [static, dynamic])</code></pre><h2 id="Detectors"><a class="docs-heading-anchor" href="#Detectors">Detectors</a><a id="Detectors-1"></a><a class="docs-heading-anchor-permalink" href="#Detectors" title="Permalink"></a></h2><pre><code class="language-julia hljs">for (i, atom) in enumerate(atoms)
+    add_detector!(system, MotionDetectorSpec(atom; dims=[1,2], name = &quot;atom_$i&quot;))
+end
+for (i, beam) in enumerate(static)
+    add_detector!(system, MotionDetectorSpec(beam; dims=[1,2], name = &quot;static_$i&quot;))
+end
+for (i, beam) in enumerate(dynamic)
+    add_detector!(system, MotionDetectorSpec(beam; dims=[1,2], name = &quot;dynamic_$i&quot;))
+end</code></pre><h2 id="Build-sequence"><a class="docs-heading-anchor" href="#Build-sequence">Build sequence</a><a id="Build-sequence-1"></a><a class="docs-heading-anchor-permalink" href="#Build-sequence" title="Permalink"></a></h2><p>We bypass @sequence and construct the sequence procedurally.</p><p>Helper functions are defined in a <code>let</code> block to keep them local to this script and avoid method-redefinition warnings when the script is run multiple times.</p><pre><code class="language-julia hljs">seq = let
+    &quot;&quot;&quot;
+        row_moves(occ_row)
+
+    From a 0/1 occupancy row, return (col, Δcol) moves that left-compress
+    all occupied sites into contiguous columns starting at 1.
+    &quot;&quot;&quot;
+    function row_moves(occ_row)
+        src = findall(!iszero, occ_row)   # occupied columns
+        k   = length(src)
+        tgt = 1:k                         # target columns 1..k
+        [(src[i], tgt[i] - src[i]) for i in eachindex(src)]
+    end
+
+    &quot;&quot;&quot;
+        sort_row!(seq, static, dynamic, row, occ_row;
+                  sort_duration=T_sort)
+
+    Sort static row `row` using the dynamic row:
+    1. load static → dynamic
+    2. horizontal MoveCol sorting moves
+    3. hand back to static
+    4. reset dynamic columns with FreqCol.
+    &quot;&quot;&quot;
+    function sort_row!(seq, static, dynamic, row, occ_row;
+                       sort_duration = T_sort)
+
+        ncols = length(occ_row)
+
+        &quot;Step 1: load static row into dynamic row&quot;
+        for col in 1:ncols
+            push!(seq, AmplCol(dynamic, col, occ_row[col]))
+        end
+        push!(seq, AmplRow(static,  row, 0.0))
+        push!(seq, AmplRow(dynamic, 1,   1.0))
+
+        &quot;Step 2: horizontal sorting moves: Δcol from occupancy&quot;
+        moves = row_moves(occ_row)
+        if !isempty(moves)
+            push!(seq, Parallel([
+                MoveCol(dynamic,
+                        col,
+                        Δcol * 1MHz,
+                        sort_duration)
+                for (col, Δcol) in moves
+            ]))
+        end
+
+        &quot;Step 3: hand atoms back to static row&quot;
+        push!(seq, AmplRow(static,  row, 1.0))
+        push!(seq, AmplRow(dynamic, 1,   0.0))
+
+        &quot;Step 4: reset dynamic columns to their original frequencies using FreqCol&quot;
+        if !isempty(moves)
+            push!(seq, Parallel([
+                FreqCol(dynamic,
+                        col,
+                        dynamic.col_freqs[col])
+                for (col, Δcol) in moves
+            ]))
+        end
+    end
+
+    &quot;&quot;&quot;
+        build_sort_sequence_from_occ(occ, static, dynamic, dt; row_step=1MHz)
+
+    Build a row-by-row sorting sequence from `occ` using a single movable
+    dynamic row. Uses FreqRow for vertical jumps, MoveCol for horizontal moves.
+    &quot;&quot;&quot;
+    function build_sort_sequence_from_occ(occ, static, dynamic, dt;
+                                          row_step = 1MHz)
+
+        nrows, _ = size(occ)
+
+        seq = Sequence(dt)
+        push!(seq, AmplRow(dynamic, 1, 0.0))
+        push!(seq, Wait(0.25ms))
+
+        current_static_row = 1  # which static row dynamic row 1 is aligned to
+
+        for target_row in 1:nrows
+            &quot;Jump dynamic row 1 vertically to align with `target_row`&quot;
+            if target_row != current_static_row
+                target_freq = dynamic.row_freqs[1] + (target_row - 1) * row_step
+                push!(seq, FreqRow(dynamic, 1, target_freq))
+                current_static_row = target_row
+            end
+
+            occ_row = view(occ, target_row, :)
+            sort_row!(seq, static, dynamic, target_row, occ_row)
+        end
+
+        push!(seq, Wait(0.25ms))
+        return seq
+    end
+
+    build_sort_sequence_from_occ(occ, static, dynamic, dt)
+end</code></pre><h2 id="Run-simulations"><a class="docs-heading-anchor" href="#Run-simulations">Run simulations</a><a id="Run-simulations-1"></a><a class="docs-heading-anchor-permalink" href="#Run-simulations" title="Permalink"></a></h2><pre><code class="language-julia hljs">out = play(system, seq)</code></pre><h2 id="Plot-results"><a class="docs-heading-anchor" href="#Plot-results">Plot results</a><a id="Plot-results-1"></a><a class="docs-heading-anchor-permalink" href="#Plot-results" title="Permalink"></a></h2><pre><code class="language-julia hljs">tlist = out.times
+
+plot_options = Dict(
+           &quot;atom&quot;   =&gt; (marker=:circle, color=:black),
+           &quot;static&quot;   =&gt; (marker=:rect, strokecolor=:gray, strokewidth=1,
+                            alpha=0.0, markersize=20),
+           &quot;dynamic&quot;   =&gt; (marker=:rect, strokecolor=:red, strokewidth=1,
+                            alpha=0.0, markersize=12),
+       )
+
+animate(out;
+        options=plot_options,
+        limits = ((-20, 20), (-12, 12)),)</code></pre><hr/><p><em>This page was generated using <a href="https://github.com/fredrikekre/Literate.jl">Literate.jl</a>.</em></p></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../k39_state_prep/">« K-39 state preparation</a><a class="docs-footer-nextpage" href="../api_system/">System building »</a><div class="flexbox-break"></div><p class="footer-message">Copyright 2025-2026 University of Strasbourg. All rights reserved.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.17.0 on <span class="colophon-date" title="Friday 3 April 2026 18:11">Friday 3 April 2026</span>. Using Julia version 1.11.9.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
