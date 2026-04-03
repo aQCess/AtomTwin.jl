@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Yb-171 Raman gate · AtomTwin.jl</title><meta name="title" content="Yb-171 Raman gate · AtomTwin.jl"/><meta property="og:title" content="Yb-171 Raman gate · AtomTwin.jl"/><meta property="twitter:title" content="Yb-171 Raman gate · AtomTwin.jl"/><meta name="description" content="Documentation for AtomTwin.jl."/><meta property="og:description" content="Documentation for AtomTwin.jl."/><meta property="twitter:description" content="Documentation for AtomTwin.jl."/><script data-outdated-warner src="../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL=".."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../assets/documenter.js"></script><script src="../search_index.js"></script><script src="../siteinfo.js"></script><script src="../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../assets/themeswap.js"></script><link href="../assets/custom.css" rel="stylesheet" type="text/css"/></head><body><div id="documenter"><nav class="docs-sidebar"><div class="docs-package-name"><span class="docs-autofit"><a href="../">AtomTwin.jl</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../">Home</a></li><li><a class="tocitem" href="../quickstart/">Quick Start</a></li><li><span class="tocitem">Examples</span><ul><li><a class="tocitem" href="../rabi_with_dissipation/">Rabi with dissipation</a></li><li><a class="tocitem" href="../rabi_with_noise/">Rabi with noise</a></li><li><a class="tocitem" href="../rabi_with_motion/">Rabi with motion</a></li><li><a class="tocitem" href="../rabi_with_static_intensity_noise/">Rabi with static noise</a></li><li><a class="tocitem" href="../rydberg_blockade/">Rydberg blockade</a></li><li><a class="tocitem" href="../time-optimal_rydberg_gate/">Time-optimal Rydberg gate</a></li><li><a class="tocitem" href="../gateX_tomography/">GateX tomography</a></li><li><a class="tocitem" href="../eit_with_dissipation/">EIT with dissipation</a></li><li class="is-active"><a class="tocitem" href>Yb-171 Raman gate</a><ul class="internal"><li><a class="tocitem" href="#Parameters"><span>Parameters</span></a></li><li><a class="tocitem" href="#System-definition"><span>System definition</span></a></li><li><a class="tocitem" href="#Build-sequence"><span>Build sequence</span></a></li><li><a class="tocitem" href="#Run-simulations"><span>Run simulations</span></a></li><li><a class="tocitem" href="#Plot-results"><span>Plot results</span></a></li><li><a class="tocitem" href="#Performance-analysis"><span>Performance analysis</span></a></li></ul></li><li><a class="tocitem" href="../k39_state_prep/">K-39 state preparation</a></li><li><a class="tocitem" href="../atom_sorting/">Atom sorting using AODs</a></li></ul></li><li><span class="tocitem">API reference</span><ul><li><a class="tocitem" href="../api_system/">System building</a></li><li><a class="tocitem" href="../api_physics/">Physical processes</a></li><li><a class="tocitem" href="../api_dag/">DAG system</a></li><li><a class="tocitem" href="../api_sequence/">Running simulations</a></li><li><a class="tocitem" href="../api_noise/">Parameters and noise</a></li><li><a class="tocitem" href="../api_visualization/">Visualization</a></li><li><a class="tocitem" href="../internals/">Internals</a></li></ul></li><li><a class="tocitem" href="../CONTRIBUTING/">Contributing</a></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li><a class="is-disabled">Examples</a></li><li class="is-active"><a href>Yb-171 Raman gate</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Yb-171 Raman gate</a></li></ul></nav><div class="docs-right"><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Yb-171-nuclear-spin-Raman-gate"><a class="docs-heading-anchor" href="#Yb-171-nuclear-spin-Raman-gate">Yb-171 nuclear-spin Raman gate</a><a id="Yb-171-nuclear-spin-Raman-gate-1"></a><a class="docs-heading-anchor-permalink" href="#Yb-171-nuclear-spin-Raman-gate" title="Permalink"></a></h1><p>In this example we simulate a two-photon Raman coupling between the nuclear spin states of the Yb-171 \(^{3}P<em>{0}\) ground state manifold, mediated by the \(^{3}D</em>{1}\) hyperfine structure.</p><p>A pair of off-resonant Raman beams drives an effective qubit rotation between the ground hyperfine states, including spontaneous decay and leakage via the excited-state branching ratios. An effective Raman Rabi frequency and scattering rate are compared to the full simulation, and a process fidelity is extracted from quantum process tomography.</p><pre><code class="language-julia hljs">using AtomTwin
+using Printf
+using LinearAlgebra
+using Plots</code></pre><h2 id="Parameters"><a class="docs-heading-anchor" href="#Parameters">Parameters</a><a id="Parameters-1"></a><a class="docs-heading-anchor-permalink" href="#Parameters" title="Permalink"></a></h2><pre><code class="language-julia hljs">Ω_base = 2π * 50e6     # Base single-photon Rabi frequency (50 MHz)
+Ω_π    = Ω_base / √2   # π-polarization strength
+Ω_σ    = Ω_base / 2    # σ±-polarization strength
+
+Δ      = -2π * 1.85e9  # One-photon detuning from ³D₁
+A_hfs  = 2π * 4.5e9    # Hyperfine splitting between excited manifolds
+Γ_3D1  = 2π * 6.9e6    # ³D₁ natural linewidth (~23 ns lifetime)
+η_leak = 0.36          # Branching to ³P₁,₂ (leakage fraction)
+B      = 0.0           # Magnetic field in Gauss
+
+dt      = 0.005e-9
+T_total = 1.31e-6    # Total evolution time (s)</code></pre><h2 id="System-definition"><a class="docs-heading-anchor" href="#System-definition">System definition</a><a id="System-definition-1"></a><a class="docs-heading-anchor-permalink" href="#System-definition" title="Permalink"></a></h2><p>The full Yb-171 hyperfine structure is included, with Zeeman shifts, off-resonant Raman couplings via both excited manifolds, and decay to both the ground manifold and a leakage level.</p><p>Hyperfine manifolds for ground and excited states</p><pre><code class="language-julia hljs">excited  = HyperfineManifold(1//2, 1; label = &quot;³D₁&quot;, g_F = 0.667)
+excited2 = HyperfineManifold(3//2, 1; label = &quot;³D₁&quot;, g_F = 0.333)
+ground   = HyperfineManifold(1//2, 0; label = &quot;³P₀&quot;, g_F = -0.00067875)
+
+leak = Level(; label = &quot;³P₁&quot;)  # leakage level (effective reservoir)</code></pre><p>Yb-171 atom including hyperfine manifolds and leakage level</p><pre><code class="language-julia hljs">yb = Ytterbium171Atom(; levels = [ground..., excited..., excited2..., leak])
+display(yb)
+
+system = System(yb)</code></pre><p>Zeeman detunings for ground and excited manifolds</p><pre><code class="language-julia hljs">add_zeeman_detunings!(system, yb, ground;   B = B, delta = 0)
+add_zeeman_detunings!(system, yb, excited;  B = B, delta = Δ)
+add_zeeman_detunings!(system, yb, excited2; B = B, delta = Δ + A_hfs)</code></pre><p>Raman couplings: ground → excited, ground → excited2</p><pre><code class="language-julia hljs">couplings = vcat(
+    add_coupling!(system, yb, ground =&gt; excited,  Ω_π, Ω_σ, Ω_σ; active = false),
+    add_coupling!(system, yb, ground =&gt; excited2, Ω_π, Ω_σ, Ω_σ; active = false),
+)</code></pre><p>Decay channels from excited manifolds</p><pre><code class="language-julia hljs">add_decay!(system, yb, excited  =&gt; ground, (1 - η_leak) * Γ_3D1)
+add_decay!(system, yb, excited  =&gt; leak,   η_leak * Γ_3D1)
+add_decay!(system, yb, excited2 =&gt; ground, (1 - η_leak) * Γ_3D1)
+add_decay!(system, yb, excited2 =&gt; leak,   η_leak * Γ_3D1)
+
+println(&quot;System Hamiltonian&quot;)
+display(gethamiltonian(system))</code></pre><h2 id="Build-sequence"><a class="docs-heading-anchor" href="#Build-sequence">Build sequence</a><a id="Build-sequence-1"></a><a class="docs-heading-anchor-permalink" href="#Build-sequence" title="Permalink"></a></h2><p>Populations in the ground-manifold Zeeman states are monitored to track Raman population transfer and leakage out of the qubit subspace.</p><pre><code class="language-julia hljs">for (i, level) in enumerate(ground)
+    add_detector!(system, PopulationDetectorSpec(yb, level; name = &quot;pop_$i&quot;))
+end
+
+seq = Sequence(dt)
+@sequence seq begin
+    Pulse(couplings, T_total)   # nominal π/2–like Raman pulse
+end</code></pre><h2 id="Run-simulations"><a class="docs-heading-anchor" href="#Run-simulations">Run simulations</a><a id="Run-simulations-1"></a><a class="docs-heading-anchor-permalink" href="#Run-simulations" title="Permalink"></a></h2><p>The dynamics are simulated starting from the |↓⟩ state, and an effective single-qubit X gate is characterized by process tomography on the nuclear-spin qubit subspace.</p><pre><code class="language-julia hljs">out = play(system, seq; initial_state = ground[-1//2], density_matrix = true)</code></pre><p>Ideal X-gate Choi matrix (Pauli-transfer representation)</p><pre><code class="language-julia hljs">J_X = [
+    0 0 0 0;
+    0 1 1 0;
+    0 1 1 0;
+    0 0 0 0
+]
+
+d  = 2
+pt = process_tomography(system, seq, yb, [ground[-1//2], ground[1//2]])
+fid = abs(tr(pt.choi_matrix * J_X) / d^2)</code></pre><h2 id="Plot-results"><a class="docs-heading-anchor" href="#Plot-results">Plot results</a><a id="Plot-results-1"></a><a class="docs-heading-anchor-permalink" href="#Plot-results" title="Permalink"></a></h2><p>We will compare the numerical simulations with an analytical model</p><pre><code class="language-julia hljs">tlist = out.times</code></pre><p>Total leakage probability (one minus population in monitored ground states)</p><pre><code class="language-julia hljs">P_leak_total = 1 .- sum(p for p in values(out.detectors))</code></pre><p>Effective Raman Rabi frequency (two-path interference via excited manifolds)</p><pre><code class="language-julia hljs">function Ω_eff(Δ, A_hfs, Ω_π, Ω_σ)
+    coupling_strength = Ω_π * Ω_σ * √(2/3) * √(1/3) * 2
+    return coupling_strength / (2 * Δ) - coupling_strength / (2 * (Δ + A_hfs))
+end</code></pre><p>Effective scattering rate from Raman beams</p><pre><code class="language-julia hljs">function G_eff(Δ, A_hfs, Ω_π, Ω_σ, Γ_3D1)
+    rabi_term = Ω_π^2 + 2 * Ω_σ^2
+    return Γ_3D1 * rabi_term / (4 * Δ^2 * 3) +
+           2 * Γ_3D1 * rabi_term / (4 * (Δ + A_hfs)^2 * 3)
+end
+
+Ω_effective = Ω_eff(Δ, A_hfs, Ω_π, Ω_σ)
+G_effective = G_eff(Δ, A_hfs, Ω_π, Ω_σ, Γ_3D1)
+
+P_theory   = @. 0.5 + 0.5 * cos(Ω_effective * tlist)       # ideal Raman oscillation
+P_th_leak  = @. η_leak * G_effective * tlist               # approximate leakage growth</code></pre><p>The plot shows the qubit populations, total leakage probability (scaled), and the simple effective-theory predictions for coherent oscillations and leakage versus time.</p><pre><code class="language-julia hljs">plot_data = [
+    out.detectors[&quot;pop_1&quot;],
+    out.detectors[&quot;pop_2&quot;],
+    100 * P_leak_total,
+    P_theory,
+    100 * P_th_leak,
+]
+
+plot_labels = [
+    &quot;Ground |↓⟩&quot;,
+    &quot;Ground |↑⟩&quot;,
+    &quot;Leakage ×100&quot;,
+    &quot;Ideal theory&quot;,
+    &quot;Leak theory&quot;,
+]
+
+plt = Plots.plot(
+    tlist * 1e6,
+    plot_data;
+    label     = reshape(plot_labels, 1, :),
+    xlabel    = &quot;Time (μs)&quot;,
+    ylabel    = &quot;Population&quot;,
+    title     = &quot;Yb-171 nuclear-spin Raman&quot;,
+    linewidth = 2,
+    legend    = :right,
+    grid      = true,
+)</code></pre><h2 id="Performance-analysis"><a class="docs-heading-anchor" href="#Performance-analysis">Performance analysis</a><a id="Performance-analysis-1"></a><a class="docs-heading-anchor-permalink" href="#Performance-analysis" title="Permalink"></a></h2><p>From the simulated dynamics we extract the optimal π-pulse time, the achieved population transfer, leakage probability, effective Rabi frequency, and the process fidelity.</p><pre><code class="language-julia hljs">P1_max, i_pi = findmax(out.detectors[&quot;pop_2&quot;])
+π_time       = 1e6 * tlist[i_pi]
+π_leak       = P_leak_total[i_pi]
+π_fidelity   = P1_max
+
+println(&quot;\nπ-pulse analysis:&quot;)
+println(&quot;  Time:           &quot; * @sprintf(&quot;%.2f&quot;, π_time) * &quot; μs&quot;)
+println(&quot;  Population:     &quot; * @sprintf(&quot;%.4f&quot;, π_fidelity))
+println(&quot;  Leakage:        &quot; * @sprintf(&quot;%.2f&quot;, 100 * π_leak) * &quot;%&quot;)
+println(&quot;  Eff. Ω/(2π):    &quot; * @sprintf(&quot;%.3f&quot;, Ω_effective / (2π) / 1e6) * &quot; MHz&quot;)
+println(&quot;  Fidelity:       &quot; * @sprintf(&quot;%.4f&quot;, fid))
+
+plt</code></pre><hr/><p><em>This page was generated using <a href="https://github.com/fredrikekre/Literate.jl">Literate.jl</a>.</em></p></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../eit_with_dissipation/">« EIT with dissipation</a><a class="docs-footer-nextpage" href="../k39_state_prep/">K-39 state preparation »</a><div class="flexbox-break"></div><p class="footer-message">Copyright 2025-2026 University of Strasbourg. All rights reserved.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.17.0 on <span class="colophon-date" title="Friday 3 April 2026 17:52">Friday 3 April 2026</span>. Using Julia version 1.11.9.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
