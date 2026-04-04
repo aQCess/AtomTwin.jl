@@ -1,6 +1,7 @@
 # Physics regression tests: Rabi, dissipation, selection rules, GaussianBeam, DAG parameters
 #
 # These tests fail when physics is wrong, not just when struct layout changes.
+# Also includes play() state-management regression tests.
 
 import AtomTwin.Dynamiq
 
@@ -249,3 +250,34 @@ end
     @test abs(mean(vs)) < 0.3 * σ_v      # mean ≈ 0
     @test isapprox(std(vs), σ_v, rtol = 0.15)  # std ≈ √(kB T/m)
 end
+
+# ── Z. play() state-management regression ────────────────────────────────────
+
+@testset "play: ME with initial_state then multi-shot MCWF on same sys does not crash" begin
+    # Regression: play(dm_job, sys; initial_state=..., density_matrix=true) sets
+    # sys.state[] to a Matrix.  A subsequent multi-shot WF play on the same sys
+    # would have crashed in recompile! (Vector .= Matrix DimensionMismatch).
+    g, e  = Level("g"), Level("e")
+    atom  = Atom(; levels=[g, e])
+    sys   = System(atom)
+    Ω     = 2π * 1e6
+    coup  = add_coupling!(sys, atom, g => e, Ω; active=false)
+    add_dephasing!(sys, atom, e, 2π * 0.1e6)
+    add_detector!(sys, PopulationDetectorSpec(atom, e; name="P_e"))
+    seq   = Sequence(1e-9)
+    @sequence seq begin Pulse(coup, 10e-9) end
+
+    # compile expects initial_state as a vector (high-level play calls _tovector)
+    job_me   = compile(sys, seq; density_matrix=true,  initial_state=[g])
+    job_mcwf = compile(sys, seq; density_matrix=false, initial_state=[g])
+
+    # play(job, sys; initial_state=g, density_matrix=true) sets sys.state[] to a Matrix
+    play(job_me, sys; initial_state=g, density_matrix=true)
+    @test sys.state[] isa Matrix
+
+    # Multi-shot WF play on the same sys must not crash
+    out = play(job_mcwf, sys; shots=5)
+    @test length(out.times) == 10
+    @test haskey(out.detectors, "P_e")
+end
+

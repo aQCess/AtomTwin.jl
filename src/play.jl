@@ -128,9 +128,13 @@ function play(job::SimulationJob, sys::System;
               rng = Random.default_rng(),
               kwargs...)
 
-    # Optional override: update sys.state[] so recompile! picks it up for all shots
+    # Update sys.state[] so recompile! picks it up for all shots.
+    # For multi-shot without an explicit initial_state, save job.state (the compile-time
+    # initial state, before _play mutates it) so recompile! always sees the right type.
     if initial_state !== nothing && !isempty(_tovector(initial_state)) && job.state !== nothing
         sys.state[] = getqstate(sys, _tovector(initial_state); density_matrix=density_matrix)
+    elseif shots > 1 && job.state !== nothing
+        sys.state[] = copy(job.state)
     end
 
     @assert shots > 0 "shots must be positive"
