@@ -213,8 +213,6 @@ Safe to call on thread-local job copies (`deepcopy(job)`). MUST NOT be called on
 shared job objects. The `sys` argument may be shared across threads.
 """
 function recompile!(job::SimulationJob, sys::System;
-                    initial_state = sys.initial_state,
-                    density_matrix=false,
                     rng = Random.MersenneTwister(),
                     kwargs...)
 
@@ -258,10 +256,9 @@ function recompile!(job::SimulationJob, sys::System;
         end
     end
     
-    # Reset quantum state
-    if job.state !== nothing
-        qstate = getqstate(sys, initial_state; density_matrix=density_matrix)
-        job.state .= qstate
+    # Reset quantum state from sys.state[] (set by compile or caller before recompile!)
+    if job.state !== nothing && sys.state[] !== nothing
+        job.state .= sys.state[]
     end
     
     # Zero detector outputs

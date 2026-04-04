@@ -72,14 +72,10 @@ function simulate_process(sys, seq, input_states; density_matrix=nothing, shots=
     end
 
     for (idx, stvec) in enumerate(input_states)
-        # Use play to handle all multi-shot logic
-        recompile!(job, sys;
-                    density_matrix=_density_matrix,
-                    initial_state=[stvec],
-                    kwargs...)
+        sys.state[] = getqstate(sys, [stvec]; density_matrix=_density_matrix)
+        recompile!(job, sys; kwargs...)
 
-        result = play(job, sys; savefinalstate=true, shots=shots,
-                     initial_state=[stvec], kwargs...)
+        result = play(job, sys; savefinalstate=true, shots=shots, kwargs...)
         states = result.final_states
 
         if _density_matrix

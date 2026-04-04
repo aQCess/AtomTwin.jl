@@ -123,10 +123,15 @@ function play(job::SimulationJob, sys::System;
               savefinalstate::Bool=false,
               shots::Int = 1,
               density_matrix = false,
-              initial_state = sys.initial_state,
+              initial_state = nothing,
               parallel_thresh = PARALLEL_THRESH,
               rng = Random.default_rng(),
               kwargs...)
+
+    # Optional override: update sys.state[] so recompile! picks it up for all shots
+    if initial_state !== nothing && !isempty(_tovector(initial_state)) && job.state !== nothing
+        sys.state[] = getqstate(sys, _tovector(initial_state); density_matrix=density_matrix)
+    end
 
     @assert shots > 0 "shots must be positive"
     
@@ -190,10 +195,8 @@ function play(job::SimulationJob, sys::System;
         Threads.@threads for shot in 1:shots
             tid = Threads.threadid()
             if shot != 1
-                recompile!(thread_jobs[tid], sys; 
-                                density_matrix=density_matrix, 
-                                initial_state=initial_state, 
-                                rng=shot_rngs[shot], 
+                recompile!(thread_jobs[tid], sys;
+                                rng=shot_rngs[shot],
                                 kwargs...)
             end
             _execute_shot!(shot, thread_jobs[tid], sys, shot_rngs[shot], initial_state, 
@@ -203,10 +206,8 @@ function play(job::SimulationJob, sys::System;
     else
         for shot in 1:shots
             if shot != 1
-                recompile!(job, sys; 
-                                density_matrix=density_matrix, 
-                                initial_state=initial_state, 
-                                rng=shot_rngs[shot], 
+                recompile!(job, sys;
+                                rng=shot_rngs[shot],
                                 kwargs...)
             end
             _execute_shot!(shot, job, sys, shot_rngs[shot], initial_state, 
