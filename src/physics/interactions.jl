@@ -45,3 +45,27 @@ function add_interaction!(
     push!(system, node)
     return node._field
 end
+
+
+"""
+    add_vdwinteraction!(system, atoms, transition, C6; active=true)
+
+Add a van der Waals interaction V(r) = C6 / r⁶ between two atoms.
+
+The interaction strength is recomputed from the instantaneous inter-atom
+distance at every solver timestep. `C6` has units rad/s·m⁶ (ħ = 1).
+
+Returns the compiled `VdWInteraction` field.
+"""
+function add_vdwinteraction!(
+    system,
+    atoms::Tuple{<:AbstractAtom,<:AbstractAtom},
+    transition::Pair,
+    C6;
+    active = true,
+)
+    node = VdWInteractionNode(C6, atoms, transition; active = active)
+    build_node!(node, system.basis)
+    push!(system, node)
+    return node._field
+end

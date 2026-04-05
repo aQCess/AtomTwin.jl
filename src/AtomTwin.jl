@@ -34,7 +34,7 @@ include("Dynamiq/Dynamiq.jl")
 # Import from Dynamiq submodule
 import .Dynamiq: GaussianBeam, GeneralGaussianBeam
 using .Dynamiq: PlanarBeam
-using .Dynamiq: GlobalCoupling, PlanarCoupling, Detuning, Interaction
+using .Dynamiq: GlobalCoupling, PlanarCoupling, Detuning, Interaction, VdWInteraction
 using .Dynamiq: Jump, AbstractAtom, NLevelAtom, Basis, Op
 using .Dynamiq: productstate, build_detector, evolve!
 using .Dynamiq: getposition, getwavelength, getbeams
@@ -75,7 +75,7 @@ include("tomography.jl")
 
 # Export beams and fields
 export GaussianBeam, GeneralGaussianBeam, PlanarBeam
-export GlobalCoupling, PlanarCoupling, Detuning, Interaction
+export GlobalCoupling, PlanarCoupling, Detuning, Interaction, VdWInteraction
 
 # Export quantum types
 export Jump, AbstractAtom, NLevelAtom, Basis
@@ -136,7 +136,7 @@ export play
 export add_zeeman_detunings!
 export add_coupling!, add_detuning!
 export add_decay!, add_dephasing!
-export add_interaction!
+export add_interaction!, add_vdwinteraction!
 
 # Export sequence instructions
 export Sequence, @sequence

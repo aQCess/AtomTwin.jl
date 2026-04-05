@@ -471,6 +471,78 @@ function recompile_node!(node::InteractionNode, inter::Interaction, rng, param_v
 end
 
 #=============================================================================
+VdW INTERACTION NODE  (distance-dependent C6/r^6 interaction)
+=============================================================================#
+
+"""
+    VdWInteractionNode
+
+DAG node for a van der Waals interaction V(r) = C6 / r⁶.
+
+`C6` may be a plain `Float64`, a `Parameter`, or a `ParametricExpression`.
+The compiled `VdWInteraction` field recomputes its `_coeff` from the
+instantaneous inter-atom distance at every solver timestep.
+"""
+mutable struct VdWInteractionNode <: AbstractNode
+    C6::Any
+    atoms::Tuple{<:AbstractAtom, <:AbstractAtom}
+    transition::Pair
+    active::Bool
+    _field::Union{Nothing, VdWInteraction}
+    _current_value::ComplexF64
+end
+
+VdWInteractionNode(C6, atoms, transition; active = true) =
+    VdWInteractionNode(C6, atoms, transition, active, nothing, zero(ComplexF64))
+
+node_output(n::VdWInteractionNode) = n._field
+
+function _vdw_transitions(node::VdWInteractionNode)
+    atom1, atom2 = node.atoms
+    from_tuple = node.transition.first
+    t1 = atom1.level_indices[from_tuple[1]] => atom1.level_indices[from_tuple[2]]
+    t2 = atom2.level_indices[from_tuple[1]] => atom2.level_indices[from_tuple[2]]
+    return t1, t2
+end
+
+function build_node!(node::VdWInteractionNode, basis::Basis)
+    node._field === nothing || return node._field
+    C6_val = Float64(real(ComplexF64(_resolve_node_default(node.C6))))
+    atom1, atom2 = node.atoms
+    t1, t2 = _vdw_transitions(node)
+    inter = VdWInteraction(basis, atom1.inner => atom2.inner, t1, t2, C6_val)
+    # _coeff is initialised to C6 by the constructor; zero it if inactive
+    inter._coeff[] = node.active ? ComplexF64(C6_val) : ComplexF64(0)
+    node._field = inter
+    node._current_value = ComplexF64(C6_val)
+    return inter
+end
+
+function compile_node!(node::VdWInteractionNode, basis::Basis, rng, param_values)
+    C6_val = Float64(real(ComplexF64(_resolve_node_value(node.C6, param_values, rng))))
+    if node._field === nothing
+        atom1, atom2 = node.atoms
+        t1, t2 = _vdw_transitions(node)
+        inter = VdWInteraction(basis, atom1.inner => atom2.inner, t1, t2, C6_val)
+        inter._coeff[] = node.active ? ComplexF64(C6_val) : ComplexF64(0)
+        node._field = inter
+    else
+        # Update the stored C6; _coeff will be recomputed by update! each step
+        node._field.C6 = C6_val
+        node._field._coeff[] = node.active ? ComplexF64(C6_val) : ComplexF64(0)
+    end
+    node._current_value = ComplexF64(C6_val)
+    return node._field
+end
+
+function recompile_node!(node::VdWInteractionNode, inter::VdWInteraction, rng, param_values)
+    C6_val = Float64(real(ComplexF64(_resolve_node_value(node.C6, param_values, rng))))
+    inter.C6 = C6_val
+    inter._coeff[] = node.active ? ComplexF64(C6_val) : ComplexF64(0)
+    node._current_value = ComplexF64(C6_val)
+end
+
+#=============================================================================
 BEAM NODE  (resolves ParametricBeam to a concrete AbstractBeam)
 =============================================================================#
 

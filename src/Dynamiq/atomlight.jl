@@ -288,6 +288,42 @@ and its coefficient is assumed constant unless modified externally.
 function update!(d::Interaction{A}, i::Int) where A
 end
 
+"""
+    VdWInteraction(b, atoms, transition1, transition2, C6)
+
+Distance-dependent van der Waals interaction V(r) = C6 / r⁶ between two atoms.
+
+The underlying `Op` is built with a unit coefficient (1.0); the scalar `_coeff`
+is updated every solver timestep from the instantaneous inter-atom separation.
+`C6` is in rad/s·m⁶ (ħ = 1 units).
+"""
+mutable struct VdWInteraction{A} <: AbstractField
+    atom1::A
+    atom2::A
+    H::Op               # unit projector |rr⟩⟨rr|; _coeff carries C6/r^6
+    _coeff::Base.RefValue{ComplexF64}
+    C6::Float64         # rad/s·m^6
+    function VdWInteraction(b, atoms::Pair, transition1, transition2, C6::Float64)
+        H = Op(b, atoms, transition1, transition2, 1.0)
+        return new{typeof(atoms[1])}(atoms[1], atoms[2], H, Ref(ComplexF64(C6)), C6)
+    end
+end
+
+"""
+    update!(d::VdWInteraction, ::Int)
+
+Recompute the van der Waals coefficient C6/r⁶ from the current inter-atom
+separation. Called each solver timestep after `fclassical!` has updated positions.
+"""
+function update!(d::VdWInteraction, ::Int)
+    x1 = d.atom1.x;  x2 = d.atom2.x
+    dx = x2[1] - x1[1];  dy = x2[2] - x1[2];  dz = x2[3] - x1[3]
+    r2 = dx*dx + dy*dy + dz*dz
+    r6 = r2 * r2 * r2
+    d._coeff[] = ComplexF64(d.C6 / r6)
+    return nothing
+end
+
 #------------------------------------------------------------------------------
 # N-level atom model
 #------------------------------------------------------------------------------
