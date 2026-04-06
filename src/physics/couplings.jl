@@ -26,6 +26,28 @@ function update!(c::GlobalCoupling, ::Val, val::Number)
 end
 
 """
+    update!(c::GaussianCoupling, ::Val, new_Ω0)
+
+Rescale the operator entries of `c.H` to reflect a new peak Rabi frequency `new_Ω0`.
+Called by `compile_node!` when the atom's position (and hence Ω₀) has changed between shots.
+"""
+function update!(c::GaussianCoupling, ::Val, new_Ω0::Number)
+    new_Ω0 = ComplexF64(new_Ω0)
+    if c.Ω0 != 0
+        scale = new_Ω0 / c.Ω0
+        for k in eachindex(c.H.forward)
+            i, j, v = c.H.forward[k]
+            c.H.forward[k] = (i, j, v * scale)
+        end
+        for k in eachindex(c.H.reverse)
+            i, j, v = c.H.reverse[k]
+            c.H.reverse[k] = (i, j, v * scale)
+        end
+    end
+    c.Ω0 = new_Ω0
+end
+
+"""
     _add_coupling!(system, atom, level::Pair{<:AbstractLevel,<:AbstractLevel}, Ω;
                    beam = nothing, noise = nothing, active = true)
 
@@ -133,19 +155,21 @@ function rabi_frequency(
 end
 
 """
-    rabi_frequencies(atom, beam; q_axis=[0,0,1], d_red::Float64)
+    rabi_frequencies(beam; q_axis=[0,0,1], r0=beam.r0, d_red::Float64)
 
 Polarization-resolved Rabi frequencies for an effective E1 operator,
 independent of J/F. Returns (Ω_π, Ω_σ⁺, Ω_σ⁻) computed from the
 spherical components of the beam E-field and a reduced dipole `d_red`.
+
+By default it returns the peak Rabi frequencies (at beam center).
 """
 function rabi_frequencies(
-    atom::AbstractAtom,
     beam;
     q_axis = [0.0, 0.0, 1.0],
+    r0 = beam.r0,
     d_red::Float64,
 )
-    E0, Eplus, Eminus = Efield_spherical(beam, atom.x; q_axis = q_axis)
+    E0, Eplus, Eminus = Efield_spherical(beam, r0; q_axis = q_axis)
 
     Ω_π  = -d_red * E0     / hbar
     Ω_σp = -d_red * Eplus  / hbar
@@ -499,6 +523,62 @@ function add_coupling!(
         push!(couplings, node._field)
     end
 
+    return couplings
+end
+
+"""
+    add_coupling!(system, atom, level::Pair{HyperfineManifold,HyperfineManifold},
+                  beam::Union{GaussianBeam,GeneralGaussianBeam};
+                  q_axis, d_red=nothing, Ω_π=nothing, Ω_p=nothing, Ω_m=nothing,
+                  active=true, tol=1e-10)
+
+Add position-dependent electric-dipole couplings driven by a Gaussian beam.
+
+`_coeff` is recomputed each solver timestep as `Ω₀ × efield_scalar(beam, atom.x) / E₀`,
+where Ω₀ and E₀ are evaluated at the atom's build-time position. This requires no
+CG-coefficient recalculation per step.
+
+If `Ω_π`, `Ω_p`, or `Ω_m` are provided they override the Ω₀ computed by
+`rabi_frequency()` for the π (Δm=0), σ⁺ (Δm=+1), and σ⁻ (Δm=-1) components
+respectively. Use this when E1 selection rules underestimate the effective coupling
+due to state mixing. When all three are overridden, `d_red` is not required.
+"""
+function add_coupling!(
+    system, atom::AbstractAtom,
+    level::Pair{HyperfineManifold, HyperfineManifold},
+    beam::Union{GaussianBeam, GeneralGaussianBeam};
+    q_axis::AbstractVector{<:Real} = [0.0, 0.0, 1.0],
+    d_red::Union{Float64, Nothing} = nothing,
+    Ω_π = nothing,
+    Ω_p = nothing,
+    Ω_m = nothing,
+    active = true,
+    tol = 1e-10,
+)
+    ground, excited = level
+    q_axis_vec = Vector{Float64}(q_axis)
+    couplings = Dynamiq.AbstractField[]
+    override_map = Dict{Int,Any}(0 => Ω_π, 1 => Ω_p, -1 => Ω_m)
+
+    for g in ground.levels, e in excited.levels
+        Δm = e.mF - g.mF
+        abs(Δm) > 1 && continue
+        override = override_map[Δm]
+        Ω0 = if override !== nothing
+            ComplexF64(override)
+        else
+            isnothing(d_red) && error("d_red is required when not providing a Ω override for Δm=$Δm")
+            ComplexF64(rabi_frequency(atom, g, e, beam, atom.x; q_axis = q_axis_vec, d_red = d_red))
+        end
+        abs(Ω0) < tol && continue
+        node = GaussianCouplingNode(atom, g => e, beam, q_axis_vec,
+                                    something(d_red, 0.0), g, e;
+                                    Ω0_override = override !== nothing ? Ω0 : nothing,
+                                    active = active)
+        build_node!(node, system.basis)
+        push!(system, node)
+        push!(couplings, node._field)
+    end
     return couplings
 end
 

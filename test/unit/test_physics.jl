@@ -251,6 +251,44 @@ end
     @test isapprox(std(vs), σ_v, rtol = 0.15)  # std ≈ √(kB T/m)
 end
 
+# ── F2. GaussianCoupling: position-dependent Rabi frequency ──────────────────
+
+@testset "GaussianCoupling: _coeff[] = _amplitude[] × spatial_envelope" begin
+    g, e = Level("g"), Level("e")
+    atom = Atom(; levels = [g, e])
+    sys  = System(atom)
+
+    λ  = 1e-6
+    w0 = 50e-6
+    P  = 1e-3
+    Ω0 = ComplexF64(2π * 1e6)
+    beam = GaussianBeam(λ, w0, P)
+
+    # Build GaussianCoupling directly (atom starts at origin)
+    idx_g = atom.level_indices[g]
+    idx_e = atom.level_indices[e]
+    gc = Dynamiq.GaussianCoupling(sys.basis, atom.inner, idx_g => idx_e, beam, Ω0)
+
+    # Set pulse amplitude to 0.5 (e.g. half-π) — verifies both factors compose
+    gc._amplitude[] = ComplexF64(0.5)
+
+    # At beam center: spatial scale = 1, so _coeff = 0.5
+    Dynamiq.update!(gc, 1)
+    @test isapprox(abs(gc._coeff[]), 0.5, rtol = 1e-8)
+
+    # Move atom to 1 waist off-axis; amplitude drops by exp(-1)
+    atom.inner.x .= [w0, 0.0, 0.0]
+    E0  = Dynamiq.efield_scalar(beam, [0.0, 0.0, 0.0])
+    E1  = Dynamiq.efield_scalar(beam, [w0,  0.0, 0.0])
+    Dynamiq.update!(gc, 2)
+    @test isapprox(abs(gc._coeff[]), 0.5 * abs(E1 / E0), rtol = 1e-6)
+
+    # Off → spatial scale irrelevant; _coeff must be zero
+    gc._amplitude[] = ComplexF64(0.0)
+    Dynamiq.update!(gc, 3)
+    @test gc._coeff[] == 0.0
+end
+
 # ── Z. play() state-management regression ────────────────────────────────────
 
 @testset "play: ME with initial_state then multi-shot MCWF on same sys does not crash" begin

@@ -72,7 +72,7 @@ export BlockadeCoupling
 export Detuning
 export StarkShiftAC
 export NLevelAtom
-export Interaction, VdWInteraction
+export Interaction, VdWInteraction, GaussianCoupling
 
 include("atomlight.jl")
 

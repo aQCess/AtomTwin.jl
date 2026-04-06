@@ -167,6 +167,58 @@ handled externally or remain constant in time.
 update!(d::GlobalCoupling, i::Int) = nothing
 
 """
+    GaussianCoupling
+
+Coupling with spatially-varying Rabi rate for a `GaussianBeam` or `GeneralGaussianBeam`.
+
+At build time, Ω₀ (peak Rabi frequency at the atom's position) and E₀ = `efield_scalar(beam, atom.x)`
+are computed once. Each solver timestep `update!` recomputes only the scalar field envelope
+(~5 FP ops) and scales: `_coeff[] = Ω₀ * efield_scalar(beam, atom.x) / E₀`.
+
+!!! note
+    Spatially dependent polarization is not supported. The polarization direction is
+    evaluated once at the atom's build-time position and held fixed. Effects such as
+    tight-focusing polarization gradients require a different approach.
+"""
+mutable struct GaussianCoupling{A,B<:AbstractBeam} <: AbstractField
+    atom::A
+    transition::Pair{Int,Int}
+    H::Op                                       # Ω0/2 baked in (same convention as GlobalCoupling)
+    _coeff::Base.RefValue{ComplexF64}           # = _amplitude[] × efield/E0 (written by update!)
+    _amplitude::Base.RefValue{ComplexF64}       # dimensionless pulse amplitude (written by AmplitudeModifier)
+    beam::B
+    Ω0::ComplexF64                              # peak Ω at reference position (baked into H)
+    E0::ComplexF64                              # efield scalar at reference position
+end
+
+function GaussianCoupling(b::Basis, atom, transition::Pair{Int,Int},
+                          beam::AbstractBeam, Ω0::ComplexF64)
+    E0 = ComplexF64(efield_scalar(beam, atom.x))
+    H  = Op(b, atom, transition, Ω0 / 2; jump = false)   # Ω0 baked in, like GlobalCoupling
+    GaussianCoupling{typeof(atom),typeof(beam)}(
+        atom, transition, H,
+        Ref(ComplexF64(1.0)),   # _coeff — overwritten by update! before first fquantum!
+        Ref(ComplexF64(1.0)),   # _amplitude — set by AmplitudeModifier each step
+        beam, Ω0, E0)
+end
+
+"""
+    update!(f::GaussianCoupling, step)
+
+Compute `_coeff[] = _amplitude[] × efield_scalar(beam, x) / E₀`.
+
+`_amplitude[]` is set by `AmplitudeModifier` (from a `Pulse`/`On`/`Off` instruction)
+before this method is called each timestep.  Multiplying by the spatial envelope ensures
+both the commanded pulse amplitude and the atom's position scale the instantaneous Ω.
+
+Cost: one `efield_scalar` evaluation + one complex multiply + one divide — no alloc.
+"""
+function update!(f::GaussianCoupling, ::Int)
+    f._coeff[] = f._amplitude[] * efield_scalar(f.beam, f.atom.x) / f.E0
+    return nothing
+end
+
+"""
     BlockadeCoupling(b, atom, transition, rate)
 
 Laser coupling that includes a Rydberg blockade shift on the excited state.

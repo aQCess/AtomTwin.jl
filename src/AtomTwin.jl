@@ -34,7 +34,7 @@ include("Dynamiq/Dynamiq.jl")
 # Import from Dynamiq submodule
 import .Dynamiq: GaussianBeam, GeneralGaussianBeam
 using .Dynamiq: PlanarBeam
-using .Dynamiq: GlobalCoupling, PlanarCoupling, Detuning, Interaction, VdWInteraction
+using .Dynamiq: GlobalCoupling, PlanarCoupling, Detuning, Interaction, VdWInteraction, GaussianCoupling
 using .Dynamiq: Jump, AbstractAtom, NLevelAtom, Basis, Op
 using .Dynamiq: productstate, build_detector, evolve!
 using .Dynamiq: getposition, getwavelength, getbeams
@@ -75,7 +75,7 @@ include("tomography.jl")
 
 # Export beams and fields
 export GaussianBeam, GeneralGaussianBeam, PlanarBeam
-export GlobalCoupling, PlanarCoupling, Detuning, Interaction, VdWInteraction
+export GlobalCoupling, PlanarCoupling, Detuning, Interaction, VdWInteraction, GaussianCoupling
 
 # Export quantum types
 export Jump, AbstractAtom, NLevelAtom, Basis
