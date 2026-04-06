@@ -210,8 +210,18 @@ function compile_node!(node::GaussianCouplingNode, basis::Basis, ::Any, ::Any)
     return c
 end
 
-recompile_node!(node::GaussianCouplingNode, ::GaussianCoupling, ::Any, ::Any) =
-    compile_node!(node, nothing, nothing, nothing)
+function recompile_node!(node::GaussianCouplingNode, ::GaussianCoupling, ::Any, ::Any)
+    c = node._field
+    c === nothing && error("GaussianCouplingNode not compiled before recompile!")
+    if node.Ω0_override === nothing
+        Ω0 = ComplexF64(rabi_frequency(node.atom, node.g, node.e, node.beam, node.atom.x;
+                                       q_axis = node.q_axis, d_red = node.d_red))
+        update!(c, Val(:_), Ω0)
+        c.E0 = ComplexF64(Dynamiq.efield_scalar(node.beam, node.atom.x))
+    end
+    c._amplitude[] = node.active ? ComplexF64(1.0) : ComplexF64(0.0)
+    return c
+end
 
 #=============================================================================
 NOISY COUPLING NODE  (NoisyField wrapping GlobalCoupling)

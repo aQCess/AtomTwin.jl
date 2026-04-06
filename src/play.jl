@@ -157,13 +157,12 @@ function play(job::SimulationJob, sys::System;
     n_detectors = length(job.detectors[1])
     det_names = [job.detectors[1][j].name for j in 1:n_detectors]
     
-    # Allocate output storage (use actual vals length to support downsampled detectors)
+    # Allocate output storage sized from the full detector_outputs (spans all instructions)
     all_outputs_vec = [
-        let single_shot_vals = job.detectors[1][j].vals
-            n = size(single_shot_vals, 1)
-            ndims(single_shot_vals) == 1 ?
-                zeros(eltype(single_shot_vals), n, shots) :
-                zeros(eltype(single_shot_vals), n, size(single_shot_vals, 2), shots)
+        let full_vals = job.detector_outputs[det_names[j]]
+            ndims(full_vals) == 1 ?
+                zeros(eltype(full_vals), length(full_vals), shots) :
+                zeros(eltype(full_vals), size(full_vals, 1), size(full_vals, 2), shots)
         end
         for j in 1:n_detectors
     ]

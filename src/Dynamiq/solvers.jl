@@ -556,7 +556,8 @@ function tdse_semiclassical(psi::Vector{ComplexF64},
         for m in modifiers
             update!(m, i)
         end
-        @batch for atom in atoms
+        for atom in atoms
+            updatepop!(atom, psi)
             fclassical!(dt, atom, beams)
         end
         for f in fields
@@ -601,7 +602,6 @@ where \\(\\alpha(\\lambda)\\) is the polarizability at wavelength \\(\\lambda\\)
 function force(atom::A, beams::Vector{<:AbstractBeam}) where {A}
     Fx, Fy, Fz = 0.0, 0.0, 0.0
     x_pos = atom.x  
-    
     @inbounds for i in 1:atom.n
         P_val = atom._P[i]  
         used_λ = Float64[]
