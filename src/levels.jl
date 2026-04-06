@@ -3,7 +3,7 @@ Specify internal levels and manifolds for simulations.
 """
 
 # Global physical constants
-const BOHR_MAGNETON_RAD_S_GAUSS = 2π * 1.39962e6  # ~1.4 MHz/Gauss in rad/s
+const BOHR_MAGNETON_RAD_S_TESLA = 2π * 1.39962e10  # ~1.4 MHz/Gauss in rad/s
 
 import Base: +, -, *
 

@@ -27,12 +27,12 @@ end         #src
 Δ = 2π * -6.7e6
 
 Gamma = 2π * 6.035e6          # Decay rate
-B = 2.0
+B = 2.0G
 
 pulse_duration = 0.5e-6        # seconds
 dt = 1e-9
 
-descriptor = "K-39 State Preparation: Ω/2π = $(Ω/2π/1e6) MHz, B = $(B) G" #src
+descriptor = "K-39 State Preparation: Ω/2π = $(Ω/2π/1e6) MHz, B = $(B*1e4) G" #src
 
 # ## System definition
 #
