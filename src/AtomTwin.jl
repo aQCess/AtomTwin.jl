@@ -134,7 +134,7 @@ export play
 
 # Export physics utilities
 export add_zeeman_detunings!
-export add_coupling!, add_detuning!
+export add_coupling!, add_detuning!, rabi_frequencies
 export add_decay!, add_dephasing!
 export add_interaction!, add_vdwinteraction!
 

@@ -105,6 +105,31 @@ function Base.push!(seq::Sequence, inst::AbstractInstruction)
 end
 
 """
+    Base.push!(seq::Sequence, instrs::AbstractVector{<:AbstractInstruction})
+
+Append all instructions in `instrs` to `seq` in order.
+
+Enables user-defined composite gate functions that return a vector of instructions
+to be used transparently inside [`@sequence`](@ref) blocks:
+
+```julia
+RZ(dets, φ; Δ=1.0) = [Pulse(dets, mod(φ, 2π) / Δ)]
+RX(sq, θ, T_pi) = [Pulse(sq, θ / π * T_pi / 2)]
+Hadamard(sq, det) = [RZ(det, π/2)..., RX(sq, π/2, T_pi)..., RZ(det, π/2)...]
+
+@sequence seq begin
+    Hadamard(sq, det)   # push!(seq, Hadamard(...)) appends 3 Pulses
+end
+```
+"""
+function Base.push!(seq::Sequence, instrs::AbstractVector{<:AbstractInstruction})
+    for inst in instrs
+        push!(seq.instructions, inst)
+    end
+    return seq
+end
+
+"""
     @sequence seq begin 
         ...
     end
