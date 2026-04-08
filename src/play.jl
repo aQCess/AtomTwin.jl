@@ -96,7 +96,7 @@ function play(sys::System, seq::Sequence;
     # Sanitize initial_state to a vector
     s = _tovector(initial_state)
     if isempty(s)
-        @warn "Initial state not specified. Defaulting to classical dynamics."
+        @warn "Initial state not specified. Defaulting to classical dynamics." maxlog=1
     end
     
     job = compile(sys, seq; initial_state = s, density_matrix=density_matrix, rng=rng, kwargs...)
@@ -251,6 +251,7 @@ function _play(job::SimulationJob;
                     beams=job.beams, modifiers=job.modifiers[i],
                     detectors=job.detectors[i], rng=rng, frozen=false,
                     downsample=ds)
+            for m in job.modifiers[i]; end_instruction!(m); end
         end
     else
         # Quantum/semiclassical evolution
@@ -263,6 +264,7 @@ function _play(job::SimulationJob;
                     fields=job.fields, beams=job.beams, jumps=job.jumps,
                     modifiers=job.modifiers[i], detectors=job.detectors[i],
                     rng=rng, frozen=frozen, downsample=ds)
+            for m in job.modifiers[i]; end_instruction!(m); end
         end
     end
     

@@ -310,17 +310,18 @@ end
 function compile(atoms, inst::Pulse, dt; resolve_target = identity)
     resolved_couplings = [resolve_target(c) for c in inst.couplings]
 
-    tsteps = Int(div(inst.duration,dt)+1)
+    tsteps = round(Int, inst.duration / dt)
     amplitude_vals = ComplexF64[]
 
     if isempty(inst.amplitudes)
         amplitude_vals = fill(inst.ampl, tsteps)
     else
-        # Interpolate shaped pulse on [0, duration]
+        # Interpolate shaped pulse on [0, duration]; sample at tsteps start-of-step times.
+        # Compute tsteps+1 points (grid [0, dt, ..., duration]) then drop the endpoint —
+        # end_instruction! zeros the field after the loop, so no trailing zero is needed.
         scaled = inst.ampl .* inst.amplitudes
-        amplitude_vals = interpolate(scaled, collect(0.0:dt:inst.duration))
+        amplitude_vals = interpolate(scaled, collect(0.0:dt:inst.duration))[1:tsteps]
     end
-    amplitude_vals[end] = 0.0 # turn off pulse
 
     modifiers = [AmplitudeModifier(c, amplitude_vals) for c in resolved_couplings]
     return modifiers, tsteps

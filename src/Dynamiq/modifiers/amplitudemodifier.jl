@@ -60,3 +60,19 @@ end
         m.field[] = m.vals[i]
     end
 end
+
+"""
+    end_instruction!(m::AbstractModifier)
+
+Called by the simulation engine once after an instruction's `evolve!` loop
+completes, before the next instruction begins.
+
+The default implementation is a no-op. Subtypes may override this to clean up
+any state that should not persist across instruction boundaries.
+
+For `AmplitudeModifier`, this zeros the field amplitude so that a coupling
+activated by a `Pulse` does not leak into the following instruction.
+"""
+end_instruction!(::AbstractModifier) = nothing
+end_instruction!(m::AmplitudeModifier) = (m.field._coeff[] = zero(ComplexF64))
+end_instruction!(m::AmplitudeModifier{<:Base.RefValue{ComplexF64}}) = (m.field[] = zero(ComplexF64))
