@@ -25,7 +25,9 @@ struct Pulse <: AbstractInstruction
     couplings::Vector{Switchable}
     duration::Float64
     ampl::ComplexF64
-    amplitudes::Vector{ComplexF64} 
+    amplitudes::Vector{ComplexF64}
+    dt::Union{Float64, Nothing}
+    downsample::Union{Int, Nothing}
 end
 
 """
@@ -41,8 +43,8 @@ Construct a `Pulse` acting on multiple couplings simultaneously, all with the sa
 
 See `Pulse(couplings, duration, ampl, amplitudes)` for details on how the shape is interpolated.
 """
-function Pulse(couplings::Vector, duration::Float64; ampl=1.0, amplitudes=ComplexF64[])
-    Pulse(couplings, duration, ampl, amplitudes)
+function Pulse(couplings::Vector, duration::Float64; ampl=1.0, amplitudes=ComplexF64[], dt=nothing, downsample=nothing)
+    Pulse(couplings, duration, ampl, amplitudes, dt, downsample)
 end
 
 """
@@ -52,7 +54,7 @@ Convenience constructor for a single‑coupling pulse. Equivalent to `Pulse([cou
 
 See `Pulse(couplings, duration, ampl, amplitudes)` for details on how the shape is interpolated.
 """
-Pulse(coupling::Switchable, duration::Float64; ampl=1.0, amplitudes=ComplexF64[]) = Pulse([coupling], duration, ampl, amplitudes)
+Pulse(coupling::Switchable, duration::Float64; ampl=1.0, amplitudes=ComplexF64[], dt=nothing, downsample=nothing) = Pulse([coupling], duration, ampl, amplitudes, dt, downsample)
 
 """
     On(couplings)
@@ -63,6 +65,8 @@ Turn on one or more couplings.
 """
 struct On <: AbstractInstruction
     couplings::Vector{Switchable}
+    dt::Union{Float64, Nothing}
+    downsample::Union{Int, Nothing}
 end
 
 """
@@ -70,7 +74,7 @@ end
 
 Convenience constructor for a single coupling. Equivalent to `On([coupling])`.
 """
-On(coupling::Switchable) = On([coupling])
+On(coupling::Switchable; dt=nothing, downsample=nothing) = On([coupling], dt, downsample)
 
 """
     Off(couplings)
@@ -81,6 +85,8 @@ Turn off one or more couplings.
 """
 struct Off <: AbstractInstruction
     couplings::Vector{Switchable}
+    dt::Union{Float64, Nothing}
+    downsample::Union{Int, Nothing}
 end
 
 """
@@ -88,7 +94,7 @@ end
 
 Convenience constructor for a single coupling. Equivalent to `Off([coupling])`.
 """
-Off(coupling::Switchable) = Off([coupling])
+Off(coupling::Switchable; dt=nothing, downsample=nothing) = Off([coupling], dt, downsample)
 
 """
     Wait(duration)
@@ -99,7 +105,16 @@ Idle period with no explicit control actions.
 """
 struct Wait <: AbstractInstruction
     duration::Float64
+    dt::Union{Float64, Nothing}
+    downsample::Union{Int, Nothing}
 end
+
+"""
+    Wait(duration; dt=nothing, downsample=nothing)
+
+Convenience constructor for Wait with optional per-instruction overrides.
+"""
+Wait(duration::Float64; dt=nothing, downsample=nothing) = Wait(duration, dt, downsample)
 
 """
     MoveCol(tweezers, cols, delta, duration; sweep = :min_jerk)
@@ -113,11 +128,13 @@ Move one or more columns of tweezers simultaneously.
   or custom function `s -> f(s)` mapping [0,1] → [0,1].
 """
 mutable struct MoveCol <: AbstractInstruction
-    tweezers::TweezerArray               
+    tweezers::TweezerArray
     cols::AbstractVector{Int}
-    delta::Union{Float64, Parameter, ParametricExpression} 
+    delta::Union{Float64, Parameter, ParametricExpression}
     duration::Float64
     sweep::Union{Symbol, Function}
+    dt::Union{Float64, Nothing}
+    downsample::Union{Int, Nothing}
 end
 
 """
@@ -126,8 +143,8 @@ end
 Convenience constructor for moving a single column. `col` can be an `Int`
 or a parametric expression; it is stored in the general `cols` field.
 """
-MoveCol(ta::TweezerArray, col, delta, duration; sweep=:min_jerk) = MoveCol(
-    ta, col isa Int ? [col] : col, delta, duration, sweep)
+MoveCol(ta::TweezerArray, col, delta, duration; sweep=:min_jerk, dt=nothing, downsample=nothing) = MoveCol(
+    ta, col isa Int ? [col] : col, delta, duration, sweep, dt, downsample)
 
 """
     MoveRow(tweezers, rows, delta, duration; sweep = :min_jerk)
@@ -143,9 +160,11 @@ Move one or more rows of tweezers simultaneously.
 struct MoveRow <: AbstractInstruction
     tweezers::TweezerArray
     rows::AbstractVector{Int}
-    delta::Union{Float64, Parameter, ParametricExpression} 
+    delta::Union{Float64, Parameter, ParametricExpression}
     duration::Float64
-    sweep::Union{Symbol, Function}   # Symbol or custom function
+    sweep::Union{Symbol, Function}
+    dt::Union{Float64, Nothing}
+    downsample::Union{Int, Nothing}
 end
 
 """
@@ -153,7 +172,7 @@ end
 
 Convenience constructor for moving a single row. Wraps `row` into a vector.
 """
-MoveRow(ta::TweezerArray, row::Int, delta::Float64, duration::Float64; sweep=:min_jerk) = MoveRow(ta, [row], delta, duration, sweep)
+MoveRow(ta::TweezerArray, row::Int, delta::Float64, duration::Float64; sweep=:min_jerk, dt=nothing, downsample=nothing) = MoveRow(ta, [row], delta, duration, sweep, dt, downsample)
 
 """
     RampRow(tweezers, rows, final_amplitude, ramp_time)
@@ -169,6 +188,8 @@ struct RampRow <: AbstractInstruction
     rows::AbstractVector{Int}
     final_amplitude::Union{Float64,AbstractVector{Float64}}
     ramp_time::Float64
+    dt::Union{Float64, Nothing}
+    downsample::Union{Int, Nothing}
 end
 
 """
@@ -176,8 +197,8 @@ end
 
 Convenience constructor for ramping a single row. Wraps `row` into a vector.
 """
-RampRow(ta::TweezerArray, row::Int, final_amplitude::Float64, ramp_time::Float64) =
-    RampRow(ta, [row], final_amplitude, ramp_time)
+RampRow(ta::TweezerArray, row::Int, final_amplitude::Float64, ramp_time::Float64; dt=nothing, downsample=nothing) =
+    RampRow(ta, [row], final_amplitude, ramp_time, dt, downsample)
 
 """
     RampCol(tweezers, cols, final_amplitude, ramp_time)
@@ -193,6 +214,8 @@ struct RampCol <: AbstractInstruction
     cols::AbstractVector{Int}
     final_amplitude::Union{Float64,AbstractVector{Float64}}
     ramp_time::Float64
+    dt::Union{Float64, Nothing}
+    downsample::Union{Int, Nothing}
 end
 
 """
@@ -200,8 +223,8 @@ end
 
 Convenience constructor for ramping a single column. Wraps `col` into a vector.
 """
-RampCol(ta::TweezerArray, col::Int, final_amplitude::Float64, ramp_time::Float64) =
-    RampCol(ta, [col], final_amplitude, ramp_time)
+RampCol(ta::TweezerArray, col::Int, final_amplitude::Float64, ramp_time::Float64; dt=nothing, downsample=nothing) =
+    RampCol(ta, [col], final_amplitude, ramp_time, dt, downsample)
 
 """
     AmplCol(tweezers, col, ampl)
@@ -215,7 +238,17 @@ struct AmplCol <: AbstractInstruction
     tweezers::TweezerArray
     col::Int
     ampl::Float64
+    dt::Union{Float64, Nothing}
+    downsample::Union{Int, Nothing}
 end
+
+"""
+    AmplCol(tweezers, col, ampl; dt=nothing, downsample=nothing)
+
+Convenience constructor for AmplCol with optional per-instruction overrides.
+"""
+AmplCol(tweezers::TweezerArray, col::Int, ampl::Real; dt=nothing, downsample=nothing) =
+    AmplCol(tweezers, col, Float64(ampl), dt, downsample)
 
 """
     AmplRow(tweezers, row, ampl)
@@ -229,7 +262,17 @@ struct AmplRow <: AbstractInstruction
     tweezers::TweezerArray
     row::Int
     ampl::Float64
+    dt::Union{Float64, Nothing}
+    downsample::Union{Int, Nothing}
 end
+
+"""
+    AmplRow(tweezers, row, ampl; dt=nothing, downsample=nothing)
+
+Convenience constructor for AmplRow with optional per-instruction overrides.
+"""
+AmplRow(tweezers::TweezerArray, row::Int, ampl::Real; dt=nothing, downsample=nothing) =
+    AmplRow(tweezers, row, Float64(ampl), dt, downsample)
 
 """
     FreqCol(tweezers, col, freq)
@@ -243,7 +286,17 @@ struct FreqCol <: AbstractInstruction
     tweezers::TweezerArray
     col::Int
     freq::Float64
+    dt::Union{Float64, Nothing}
+    downsample::Union{Int, Nothing}
 end
+
+"""
+    FreqCol(tweezers, col, freq; dt=nothing, downsample=nothing)
+
+Convenience constructor for FreqCol with optional per-instruction overrides.
+"""
+FreqCol(tweezers::TweezerArray, col::Int, freq::Real; dt=nothing, downsample=nothing) =
+    FreqCol(tweezers, col, Float64(freq), dt, downsample)
 
 """
     FreqRow(tweezers, row, freq)
@@ -257,7 +310,17 @@ struct FreqRow <: AbstractInstruction
     tweezers::TweezerArray
     row::Int
     freq::Float64
+    dt::Union{Float64, Nothing}
+    downsample::Union{Int, Nothing}
 end
+
+"""
+    FreqRow(tweezers, row, freq; dt=nothing, downsample=nothing)
+
+Convenience constructor for FreqRow with optional per-instruction overrides.
+"""
+FreqRow(tweezers::TweezerArray, row::Int, freq::Real; dt=nothing, downsample=nothing) =
+    FreqRow(tweezers, row, Float64(freq), dt, downsample)
 
 """
     Parallel(parts::Vector{<:AbstractInstruction})
@@ -280,4 +343,14 @@ instruction without modifying the modifiers themselves.
 """
 struct Parallel <: AbstractInstruction
     parts::Vector{AbstractInstruction}
+    dt::Union{Float64, Nothing}
+    downsample::Union{Int, Nothing}
 end
+
+"""
+    Parallel(parts; dt=nothing, downsample=nothing)
+
+Convenience constructor for Parallel with optional per-instruction overrides.
+"""
+Parallel(parts::AbstractVector{<:AbstractInstruction}; dt=nothing, downsample=nothing) =
+    Parallel(AbstractInstruction[parts...], dt, downsample)

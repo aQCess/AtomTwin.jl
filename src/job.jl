@@ -3,21 +3,29 @@
 
 Compiled simulation execution structure containing all runtime state and operators.
 
-This object should not be constructed directly by users. Instead, use 
+This object should not be constructed directly by users. Instead, use
 `compile(system, sequence; shots=1)` which handles optimization and memory preallocation.
 
 # Structure
 - **Runtime state** (reset between shots): `state`, `atoms`, `beams`
 - **Execution structures** (shared across shots): `fields`, `jumps`, `modifiers`
 - **Detectors**: `detectors` (per-instruction), `detector_outputs` (views to results)
-- **Time grids**: `times` (global), `local_tspans` (per-instruction views)
-- **Storage**: `_output_storage` (preallocated vectors or matrices)
-- **Configuration**: `shots` (number of Monte Carlo runs)
+- **Time grids**: `times` (global downsampled), `local_tspans` (per-instruction solver time grids)
+- **Configuration**: `downsamples` (per-instruction downsample factors)
+
+# Per-Instruction Customization
+
+When the `Sequence` has per-instruction overrides (e.g., `push!(seq, Pulse(...); dt=1e-9)`),
+the `SimulationJob` builds heterogeneous time grids:
+- Each instruction gets its own `local_tspans[i]` with the appropriate timestep
+- Downsampling is applied per-instruction via `downsamples[i]`
+- The returned `times` array is non-uniform (concatenation of per-instruction downsampled grids)
 
 # Performance Notes
 - Detector types are automatically concretized for optimal performance
 - Multiple shots write directly to preallocated matrix columns (zero-copy)
 - Output views avoid allocations when accessing results
+- Per-instruction customization has negligible overhead (computed at compile time)
 """
 struct SimulationJob{S}
     state::S
@@ -29,8 +37,8 @@ struct SimulationJob{S}
     detectors::Vector{Any}   # Vector{Vector{<:AbstractDetector}} — element type varies per instruction
     local_tspans::Vector     # Vector of SubArray views into full time grid, one per instruction
     detector_outputs::Dict{String, Any}
-    times::Vector{Float64}   # downsampled time grid (length = t_steps ÷ downsample)
-    downsample::Int
+    times::Vector{Float64}   # downsampled time grid (length = sum(t_steps[i] ÷ downsamples[i]))
+    downsamples::Vector{Int} # per-instruction downsample factors
 end
 
 
@@ -44,9 +52,13 @@ _tovector(state) = [state]
 
 Compile a System and Sequence into an executable SimulationJob with preallocated single-shot storage.
 
+Builds heterogeneous time grids when the Sequence has per-instruction `dt` or `downsample`
+overrides, enabling cost optimization across protocol phases.
+
 # Arguments
 - `system`: System specification (atoms, beams, nodes, detectors)
-- `sequence`: Pulse sequence to execute (instruction list with timestep `dt`)
+- `sequence`: Pulse sequence to execute (instruction list with base timestep `dt`).
+  Individual instructions can override `dt` and `downsample` via `push!` keyword arguments.
 - `initial_state`: Initial quantum state (required for quantum systems)
 - `density_matrix`: Use density matrix formalism if `true` (default: `false`)
 - Additional keyword arguments are treated as parameter overrides (e.g. `Ω = 2π*1e6`)
@@ -54,10 +66,20 @@ Compile a System and Sequence into an executable SimulationJob with preallocated
 # Returns
 - `SimulationJob` ready for execution, containing single-shot detector output buffers
 
+# Per-Instruction Customization
+
+```julia
+seq = Sequence(1e-8; downsample=1)
+push!(seq, Pulse(...); dt=1e-9)      # fine timestep for accuracy
+push!(seq, Wait(1e-6); downsample=10) # coarse output for efficiency
+job = compile(sys, seq)  # builds per-instruction time grids automatically
+```
+
 # Notes
 - Compiles all DAG nodes: samples parameter values and updates fields in-place
 - Detectors are automatically type-specialized to avoid dynamic dispatch
 - Detector outputs are preallocated views into storage, avoiding allocations during simulation
+- Time grids are heterogeneous when per-instruction overrides are present
 - Each call to `compile()` creates a single-shot job. Multi-shot execution in `play()`
   uses thread-local copies of this job, with results aggregated into output matrices.
 """
@@ -125,21 +147,22 @@ function compile(sys::System, seq::Sequence;
         qstate = nothing
     end
 
-    dt = seq.dt
-
     # === PHASE 4: COMPILE INSTRUCTIONS WITH RESOLVED SYSTEM ===
-    
+
     n_instructions = length(seq)
     modifiers = Vector{Any}(undef, n_instructions)
     step_counts = Vector{Int}(undef, n_instructions)
     total_tspan_size = 0
-    
+
     for (i, inst) in enumerate(seq)
         # Resolve instruction if it contains deferred objects (using same cache)
         resolved_inst = resolve(inst, param_values; cache=cache)
-        
+
+        # Resolve per-instruction dt: use instruction's dt if specified, else sequence default
+        dt_i = something(resolved_inst.dt, seq.dt)
+
         # Compile and resolve_target (which uses same cache)
-        mods, n_steps = compile(atoms, resolved_inst, dt; resolve_target=resolve_target)
+        mods, n_steps = compile(atoms, resolved_inst, dt_i; resolve_target=resolve_target)
         modifiers[i] = mods
         step_counts[i] = n_steps
         total_tspan_size += n_steps
@@ -148,17 +171,40 @@ function compile(sys::System, seq::Sequence;
     # === PHASE 5: BUILD DETECTORS AND OUTPUT STORAGE ===
 
     offsets  = cumsum([0; step_counts])
-    ds       = seq.downsample
-    ds_counts  = [step_counts[i] ÷ ds for i in 1:n_instructions]
+
+    # Resolve per-instruction dt and downsample from instructions, with sequence defaults
+    inst_dts = [something(seq[i].dt, seq.dt) for i in 1:n_instructions]
+    inst_ds  = [something(seq[i].downsample, seq.downsample) for i in 1:n_instructions]
+
+    ds_counts  = [step_counts[i] ÷ inst_ds[i] for i in 1:n_instructions]
     ds_offsets = cumsum([0; ds_counts])
     ds_total   = ds_offsets[end]
 
-    # Full time grid for solvers (views held in local_tspans keep it alive)
-    full_times   = collect(range(dt, step=dt, length=total_tspan_size))
+    # Full solver-level time grid (heterogeneous: each instruction may have different dt)
+    full_times = Vector{Float64}(undef, total_tspan_size)
+    abs_start  = 0.0
+    for i in 1:n_instructions
+        dt_i = inst_dts[i]
+        base = offsets[i]
+        for k in 1:step_counts[i]
+            full_times[base + k] = abs_start + k * dt_i
+        end
+        abs_start += step_counts[i] * dt_i
+    end
     local_tspans = [view(full_times, offsets[i]+1:offsets[i+1]) for i in 1:n_instructions]
 
-    # Downsampled time grid returned to the user
-    times = collect(range(dt * ds, step=dt * ds, length=ds_total))
+    # Downsampled time grid for user output (heterogeneous: each instruction may have different dt and ds)
+    times = Vector{Float64}(undef, ds_total)
+    abs_start = 0.0
+    for i in 1:n_instructions
+        dt_i = inst_dts[i]
+        ds_i = inst_ds[i]
+        base = ds_offsets[i]
+        for k in 1:ds_counts[i]
+            times[base + k] = abs_start + k * ds_i * dt_i
+        end
+        abs_start += step_counts[i] * dt_i
+    end
 
     n_detectors = length(sys.detector_specs)
 
@@ -194,7 +240,7 @@ function compile(sys::System, seq::Sequence;
 
     return SimulationJob(qstate, atoms, resolved_beams, resolved_fields, resolved_jumps,
                         modifiers, detectors, local_tspans,
-                        detector_outputs, times, ds)
+                        detector_outputs, times, inst_ds)
 end
 
 

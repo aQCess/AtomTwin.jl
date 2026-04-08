@@ -238,19 +238,18 @@ Returns a NamedTuple with:
 - `times`: Vector{Float64} of time points
 - `final_state`: Copy of final quantum state (only if savefinalstate=true)
 """
-function _play(job::SimulationJob; 
+function _play(job::SimulationJob;
                 savefinalstate::Bool=false,
                 rng=Random.MersenneTwister())
 
     n_instructions = length(job.modifiers)
-    ds = job.downsample
     if job.state === nothing
         # Classical evolution
         @inbounds for i in 1:n_instructions
             evolve!(job.atoms, job.local_tspans[i];
                     beams=job.beams, modifiers=job.modifiers[i],
                     detectors=job.detectors[i], rng=rng, frozen=false,
-                    downsample=ds)
+                    downsample=job.downsamples[i])
             for m in job.modifiers[i]; end_instruction!(m); end
         end
     else
@@ -263,11 +262,11 @@ function _play(job::SimulationJob;
             evolve!((job.state, job.atoms), job.local_tspans[i];
                     fields=job.fields, beams=job.beams, jumps=job.jumps,
                     modifiers=job.modifiers[i], detectors=job.detectors[i],
-                    rng=rng, frozen=frozen, downsample=ds)
+                    rng=rng, frozen=frozen, downsample=job.downsamples[i])
             for m in job.modifiers[i]; end_instruction!(m); end
         end
     end
-    
+
     final_state = savefinalstate ? copy(job.state) : nothing
     return (detectors = job.detector_outputs, times = job.times, final_state = final_state)
 end

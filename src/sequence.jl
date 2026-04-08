@@ -1,50 +1,86 @@
 """
     Sequence
 
-Container for a time-ordered list of low-level control
-instructions with a fixed time step `dt`.
+Container for a time-ordered list of low-level control instructions
+with sequence-level defaults for time step `dt` and downsampling.
 
 A `Sequence` behaves like a vector of `AbstractInstruction` objects:
 it supports indexing, iteration, `length`, and `push!`, and is the
-primary container passed to `play` when simulating instruction-level
-dynamics.
+primary container passed to `play` when simulating instruction-level dynamics.
 
 # Fields
 
-- `instructions::Vector{AbstractInstruction}` – ordered list of
-  instructions in the sequence
-- `dt` – base time step used to interpret instruction durations
-  (typically a `Float64` in seconds or an application-specific time unit)
-- `downsample::Int` – record detector output every nth solver step (default 1)
+- `instructions::Vector{AbstractInstruction}` – ordered list of instructions
+- `dt::Float64` – default time step for instructions (seconds)
+- `downsample::Int` – default output downsampling factor (default 1 = every step)
 
-Sequences are usually constructed via the convenience constructor
+# Per-Instruction Customization
+
+Individual instructions can override `dt` and `downsample` by specifying them
+in their constructors. If not specified, the sequence-level defaults are used:
+
+```julia
+seq = Sequence(1e-8; downsample=1)
+push!(seq, Pulse(c, 500e-9))                          # uses seq.dt and seq.downsample
+push!(seq, Pulse(c, 100e-9; dt=1e-9))                 # fine dt for accuracy
+push!(seq, Wait(1e-6; downsample=10))                 # coarse output
+push!(seq, MoveRow(tw, r, d, t; dt=5e-9, downsample=3)) # both customized
+```
+
+This enables optimizing simulation cost by using fine `dt` during fast dynamics
+and coarse `dt` during slow phases.
+
+Sequences are usually constructed via the convenience constructor:
 
 `Sequence(dt::Float64)`
 
-which creates an empty sequence with the given time step.
+which creates an empty sequence with the given default time step.
 """
 struct Sequence
     instructions::Vector{AbstractInstruction}
     dt::Float64
-    downsample::Int  # record every nth step (1 = every step)
+    downsample::Int
 end
 
 """
     Sequence(dt::Float64; downsample::Int = 1)
 
-Create an empty `Sequence` with time step `dt` and no instructions.
+Create an empty `Sequence` with default time step `dt` and downsampling.
 
-`downsample` controls how often detector output is recorded: every `downsample`-th
-solver step is written, so all detector arrays and `job.times` have length
-`t_steps ÷ downsample` instead of `t_steps`. The quantum integrator still runs
-at full `dt`; only the output is thinned. Applies uniformly to all detector types
-(`PopulationDetector`, `CoherenceDetector`, `MotionDetector`, `FieldDetector`).
-
-Use when a small `dt` is required for accuracy but full-resolution output is not
-needed, e.g. when the interaction frequency greatly exceeds the observable bandwidth:
+These parameters serve as defaults for all instructions. Individual instructions
+can override them by specifying `dt` and `downsample` in their constructors:
 
 ```julia
-seq = Sequence(dt; downsample=100)  # record every 100th step
+seq = Sequence(1e-8; downsample=1)
+push!(seq, Pulse(c, t; dt=1e-9))           # overrides dt for this instruction
+push!(seq, Wait(1e-6; downsample=10))      # overrides downsample
+```
+
+# Parameters
+
+- `dt::Float64`: Default time step for all instructions (seconds). Must be positive.
+  Each instruction uses this unless it specifies its own.
+- `downsample::Int`: Default output downsampling factor (default 1 = record every step).
+  Controls how often detector output is recorded: every `downsample`-th solver step
+  is written to output. The quantum integrator still runs at full `dt`; only output
+  is thinned. Applies uniformly to all detector types.
+
+# Use Cases
+
+Use global downsampling when a small `dt` is required for accuracy but
+full-resolution output is not needed:
+
+```julia
+seq = Sequence(1e-9; downsample=100)  # fine integration, sparse output
+```
+
+Use per-instruction overrides to optimize across protocol phases:
+
+```julia
+seq = Sequence(1e-8)
+push!(seq, Pulse(c, t; dt=1e-9))      # fine dt for fast Rabi dynamics
+push!(seq, Wait(1e-6))                # coarse dt (default) for slow evolution
+push!(seq, Ramp(tw, r, a, t; downsample=10))  # sparse output for slow ramp
 ```
 """
 function Sequence(dt::Float64; downsample::Int = 1)
@@ -92,11 +128,15 @@ Base.eltype(::Type{Sequence}) = AbstractInstruction
 
 Append an instruction `inst` to the end of `seq`.
 
+Instructions can specify their own `dt` and `downsample` via their constructors.
+If not specified, the sequence-level defaults are used during compilation.
+
 Returns the modified `Sequence`, allowing idioms such as
 
-```
+```julia
 push!(seq, Wait(10e-9))
-push!(seq, Pulse(global_coupling, t))
+push!(seq, Pulse(coupling, t; dt=1e-9))         # fine dt for this instruction
+push!(seq, Wait(1e-6; downsample=10))           # coarse output for this instruction
 ```
 """
 function Base.push!(seq::Sequence, inst::AbstractInstruction)
@@ -118,13 +158,13 @@ RX(sq, θ, T_pi) = [Pulse(sq, θ / π * T_pi / 2)]
 Hadamard(sq, det) = [RZ(det, π/2)..., RX(sq, π/2, T_pi)..., RZ(det, π/2)...]
 
 @sequence seq begin
-    Hadamard(sq, det)   # push!(seq, Hadamard(...)) appends 3 Pulses
+    Hadamard(sq, det)  # appends all sub-instructions
 end
 ```
 """
 function Base.push!(seq::Sequence, instrs::AbstractVector{<:AbstractInstruction})
     for inst in instrs
-        push!(seq.instructions, inst)
+        push!(seq, inst)
     end
     return seq
 end
@@ -160,7 +200,7 @@ macro sequence(seq, block)
         # Remove line numbers (more robustly)
         if expr isa LineNumberNode || (expr isa Expr && expr.head == :line)
             return nothing
-        end 
+        end
 
         # For `begin` blocks and code blocks
         if expr isa Expr && expr.head == :block

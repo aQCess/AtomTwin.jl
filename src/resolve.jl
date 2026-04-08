@@ -91,7 +91,26 @@ function _resolve(mc::MoveCol, param_values, cache::IdDict)
         _resolve(mc.cols, param_values, cache),
         _resolve(mc.delta, param_values, cache),
         _resolve(mc.duration, param_values, cache),
-        _resolve(mc.sweep, param_values, cache)
+        _resolve(mc.sweep, param_values, cache),
+        mc.dt,
+        mc.downsample
+    )
+end
+
+"""
+    _resolve(mr::MoveRow, param_values, cache::IdDict)
+
+Resolve parametric fields in a `MoveRow` instruction (delta may be a Parameter or ParametricExpression).
+"""
+function _resolve(mr::MoveRow, param_values, cache::IdDict)
+    MoveRow(
+        mr.tweezers,
+        _resolve(mr.rows, param_values, cache),
+        _resolve(mr.delta, param_values, cache),
+        _resolve(mr.duration, param_values, cache),
+        _resolve(mr.sweep, param_values, cache),
+        mr.dt,
+        mr.downsample
     )
 end
 
@@ -100,16 +119,31 @@ function _resolve(inst::Pulse, param_values, cache::IdDict)
         _resolve(inst.couplings, param_values, cache),
         _resolve(inst.duration, param_values, cache),
         _resolve(inst.ampl, param_values, cache),
-        inst.amplitudes
+        inst.amplitudes,
+        inst.dt,
+        inst.downsample
     )
 end
 
 function _resolve(inst::On, param_values, cache::IdDict)
-    On(_resolve(inst.couplings, param_values, cache))
+    On(_resolve(inst.couplings, param_values, cache), inst.dt, inst.downsample)
 end
 
 function _resolve(inst::Off, param_values, cache::IdDict)
-    Off(_resolve(inst.couplings, param_values, cache))
+    Off(_resolve(inst.couplings, param_values, cache), inst.dt, inst.downsample)
+end
+
+"""
+    _resolve(p::Parallel, param_values, cache::IdDict)
+
+Resolve each part of a `Parallel` instruction, preserving dt and downsample.
+"""
+function _resolve(p::Parallel, param_values, cache::IdDict)
+    Parallel(
+        [_resolve(part, param_values, cache) for part in p.parts],
+        p.dt,
+        p.downsample
+    )
 end
 
 """
