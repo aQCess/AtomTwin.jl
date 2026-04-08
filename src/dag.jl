@@ -28,14 +28,31 @@ compile time should implement:
 
 This protocol is used by node lifecycle methods and by value types stored
 inside nodes (e.g. `BeamRabiFrequency`, `GaussianPosition`, `MaxwellBoltzmann`).
-Nodes appear in `sys.nodes` and are compiled in insertion order, so
-dependencies (e.g. `BeamNode`) must be added before dependents (`CouplingNode`).
+Nodes appear in `sys.nodes` and are topologically sorted by `compile` before
+each simulation; insertion order is preserved for independent nodes.
 """
 
 abstract type AbstractNode end
 
 """Return the compiled output of a node (nothing if not yet built)."""
 node_output(::AbstractNode) = nothing
+
+"""
+    node_dependencies(node::AbstractNode) -> Vector{AbstractNode}
+
+Return nodes that must be compiled before `node`. The default returns no
+dependencies. Override for nodes whose value fields reference other nodes
+(e.g. `CouplingNode` with a `BeamRabiFrequency` Ω).
+"""
+node_dependencies(::AbstractNode) = AbstractNode[]
+
+"""
+    _extract_beam_node_deps(val) -> Vector{AbstractNode}
+
+Return any `BeamNode` that `val` depends on. The default returns nothing.
+Overridden for value types such as `BeamRabiFrequency` in `physics/couplings.jl`.
+"""
+_extract_beam_node_deps(::Any) = AbstractNode[]
 
 #=============================================================================
 SCALAR RESOLUTION HELPERS
@@ -627,10 +644,10 @@ BEAM NODE  (resolves ParametricBeam to a concrete AbstractBeam)
 DAG node that resolves a `ParametricBeam` (or concrete beam) to a concrete
 `AbstractBeam` at compile/recompile time.
 
-Add a `BeamNode` to `sys.nodes` before any `CouplingNode` that depends on it.
 `BeamRabiFrequency` holds a reference to a `BeamNode` and reads
-`beam_node._compiled[]` when computing Rabi frequencies, so ordering is
-guaranteed by insertion order in `sys.nodes`.
+`beam_node._compiled[]` when computing Rabi frequencies. Compilation order
+is resolved automatically via topological sort; `BeamNode` does not need to
+be pushed before its dependents.
 
 `_resolve_beam_default`, `_resolve_beam`, `build_node!`, `compile_node!`, and
 `recompile_node!` for `BeamNode` are defined in `physics/beams.jl` (after
@@ -649,3 +666,63 @@ FALLBACK RECOMPILE (non-parametric nodes need no update)
 =============================================================================#
 
 recompile_node!(::AbstractNode, ::Any, ::Any, ::Any) = nothing
+
+#=============================================================================
+NODE DEPENDENCY OVERRIDES  (CouplingNode, NoisyCouplingNode, PlanarCouplingNode)
+=============================================================================#
+
+# These node types store Ω::Any which may be a BeamRabiFrequency (defined in
+# physics/couplings.jl). _extract_beam_node_deps is overridden there.
+node_dependencies(n::CouplingNode)       = _extract_beam_node_deps(n.Ω)
+node_dependencies(n::NoisyCouplingNode)  = _extract_beam_node_deps(n.Ω)
+node_dependencies(n::PlanarCouplingNode) = _extract_beam_node_deps(n.Ω)
+
+#=============================================================================
+TOPOLOGICAL SORT
+=============================================================================#
+
+"""
+    _topological_sort(nodes::Vector{AbstractNode}) -> Vector{AbstractNode}
+
+Return a topologically sorted copy of `nodes` using stable Kahn's algorithm.
+Nodes with no dependency relationship are emitted in their original insertion
+order. Does not mutate `nodes`.
+
+Throws if a cycle is detected or if `node_dependencies` returns a node not
+present in `nodes`.
+"""
+function _topological_sort(nodes::Vector{AbstractNode})
+    index = IdDict{AbstractNode, Int}(n => i for (i, n) in enumerate(nodes))
+    n = length(nodes)
+    in_degree = zeros(Int, n)
+    adj = [Int[] for _ in 1:n]
+    for (i, node) in enumerate(nodes)
+        for dep in node_dependencies(node)
+            j = get(index, dep, nothing)
+            j === nothing && error(
+                "node_dependencies returned a node not present in sys.nodes. " *
+                "Dependent: $(typeof(node)), missing dependency: $(typeof(dep)).")
+            push!(adj[j], i)
+            in_degree[i] += 1
+        end
+    end
+    # Start with all zero-in-degree nodes in insertion order
+    queue = Int[i for i in 1:n if in_degree[i] == 0]
+    result = AbstractNode[]
+    sizehint!(result, n)
+    while !isempty(queue)
+        i = popfirst!(queue)
+        push!(result, nodes[i])
+        for j in adj[i]
+            in_degree[j] -= 1
+            if in_degree[j] == 0
+                insert!(queue, searchsortedfirst(queue, j), j)
+            end
+        end
+    end
+    if length(result) < n
+        cycle_nodes = join([string(typeof(nodes[i])) for i in 1:n if in_degree[i] > 0], ", ")
+        error("Cycle detected in DAG node dependencies. Nodes involved: $cycle_nodes.")
+    end
+    return result
+end

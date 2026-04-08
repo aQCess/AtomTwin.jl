@@ -458,6 +458,8 @@ struct BeamRabiFrequency
     d_red::Float64
 end
 
+_extract_beam_node_deps(f::BeamRabiFrequency) = AbstractNode[f.beam_node]
+
 function _resolve_node_default(f::BeamRabiFrequency)
     ComplexF64(rabi_frequency(f.atom, f.g, f.e, f.beam_node._compiled[], f.atom.x;
                               q_axis=f.q_axis, d_red=f.d_red))

@@ -71,16 +71,18 @@ function compile(sys::System, seq::Sequence;
 
     cache = IdDict{Any, Any}()
 
+    sorted_nodes = _topological_sort(sys.nodes)
+
     # === PHASE 1: COMPILE BEAM NODES FIRST ===
     # BeamNodes must be compiled before CouplingNodes (which read beam_node._compiled[])
     # and before atom initialization (which uses beams for polarizability computation).
-    for node in sys.nodes
+    for node in sorted_nodes
         node isa BeamNode && compile_node!(node, sys.basis, rng, param_values)
     end
 
     # Collect all beams: trapping beams from sys.beams + coupling beams from BeamNodes
     resolved_trapping = AbstractBeam[resolve(b, param_values; cache=cache) for b in sys.beams]
-    resolved_coupling = AbstractBeam[n._compiled[] for n in sys.nodes if n isa BeamNode]
+    resolved_coupling = AbstractBeam[n._compiled[] for n in sorted_nodes if n isa BeamNode]
     resolved_beams    = vcat(resolved_trapping, resolved_coupling)
 
     # === PHASE 2: INITIALIZE ATOMS (uses resolved beams, may sample positions/velocities) ===
@@ -93,7 +95,7 @@ function compile(sys::System, seq::Sequence;
     resolved_fields = AtomTwin.Dynamiq.AbstractField[]
     resolved_jumps  = Jump[]
 
-    for node in sys.nodes
+    for node in sorted_nodes
         node isa BeamNode && continue  # already compiled
         obj = compile_node!(node, sys.basis, rng, param_values)
         if obj isa AtomTwin.Dynamiq.AbstractField
@@ -216,13 +218,15 @@ function recompile!(job::SimulationJob, sys::System;
 
     param_values = Dict{Symbol, Any}(kwargs)
 
+    sorted_nodes = _topological_sort(sys.nodes)
+
     # Phase 1: recompile BeamNodes first
-    for node in sys.nodes
+    for node in sorted_nodes
         node isa BeamNode && recompile_node!(node, nothing, rng, param_values)
     end
 
     # Collect beams for atom reinitialization
-    resolved_coupling = AbstractBeam[n._compiled[] for n in sys.nodes if n isa BeamNode]
+    resolved_coupling = AbstractBeam[n._compiled[] for n in sorted_nodes if n isa BeamNode]
     all_beams = vcat(job.beams, resolved_coupling)  # job.beams holds trapping beams
 
     # Phase 2: reinitialize atoms
@@ -234,7 +238,7 @@ function recompile!(job::SimulationJob, sys::System;
     field_counter = 0
     jump_counter  = 0
 
-    for node in sys.nodes
+    for node in sorted_nodes
         node isa BeamNode && continue  # already recompiled
         obj = node_output(node)
         if obj isa AtomTwin.Dynamiq.AbstractField
