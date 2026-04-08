@@ -83,6 +83,7 @@ include("atomlight.jl")
 export PositionModifier
 export MoveModifier
 export AmplitudeModifier
+export ResetModifier
 export end_instruction!
 
 include("./modifiers/positionmodifier.jl")

@@ -307,6 +307,11 @@ end
 #-----------------------------------------------------------------------------
 # Compile: pulse and simple on/off
 #-----------------------------------------------------------------------------
+
+# Build a ResetModifier targeting the same coefficient reference as an AmplitudeModifier would.
+_reset_modifier(c::GaussianCoupling) = ResetModifier(c._amplitude)
+_reset_modifier(c) = ResetModifier(c)
+
 function compile(atoms, inst::Pulse, dt; resolve_target = identity)
     resolved_couplings = [resolve_target(c) for c in inst.couplings]
 
@@ -323,7 +328,8 @@ function compile(atoms, inst::Pulse, dt; resolve_target = identity)
         amplitude_vals = interpolate(scaled, collect(0.0:dt:inst.duration))[1:tsteps]
     end
 
-    modifiers = [AmplitudeModifier(c, amplitude_vals) for c in resolved_couplings]
+    modifiers = AbstractModifier[AmplitudeModifier(c, amplitude_vals) for c in resolved_couplings]
+    append!(modifiers, [_reset_modifier(c) for c in resolved_couplings])
     return modifiers, tsteps
 end
 
