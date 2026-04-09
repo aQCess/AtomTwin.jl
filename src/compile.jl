@@ -97,27 +97,16 @@ end
 #-----------------------------------------------------------------------------
 
 """
-    compile(atoms, inst, dt; resolve_target = identity) -> (modifiers, tspan)
+    compile(atoms, inst, dt; resolve_target = identity) -> (modifiers, boundary_modifiers, n_steps)
 
-Lower an inert instruction spec `inst` into concrete modifiers and time spans
-for a single instruction.
+Lower an inert instruction spec `inst` into concrete modifiers and a step count.
 
-Common contract:
+- `modifiers`: `Vector{AbstractModifier}` — passed to `evolve!`, called every solver timestep
+- `boundary_modifiers`: `Vector{AbstractBoundaryModifier}` — called once before/after `evolve!`
+- `n_steps`: number of solver timesteps for this instruction
 
-- Inputs:
-  - `atoms`: current atom state (vector or model-specific container)
-  - `inst`: instruction spec (e.g. `MoveCol`, `Wait`, `RampCol`, `Pulse`, …)
-  - `dt`: time step (seconds, `Float64`)
-  - `resolve_target`: function that binds objects captured by specs to runtime instances
-- Output:
-  - `(modifiers, tspan)` where `modifiers` is a vector of per-segment modifiers
-    and `tspan` is the segment time vector
-- Time convention:
-  - `tspan` is local to the segment, typically `collect(dt:dt:duration)`
-  - Downstream code accumulates absolute time across segments
-
-- Notes:
-  - `Off`, `Pulse` instructions set the amplitude of the target coupling to 0.0 at the end of the instruction
+`begin_instruction!(m)` fires on each boundary modifier before `evolve!`;
+`end_instruction!(m)` fires after. This keeps coupling set/reset out of the inner loop.
 """
 function compile(atoms, inst, dt; resolve_target = identity)
     throw(ArgumentError(
@@ -126,6 +115,8 @@ function compile(atoms, inst, dt; resolve_target = identity)
         "RampRow, RampCol, AmplRow, AmplCol, FreqRow, FreqCol."
     ))
 end
+
+const _NO_BMODS = AbstractBoundaryModifier[]
 
 #-----------------------------------------------------------------------------
 # Compile: motion and waits
@@ -141,7 +132,8 @@ function compile(atoms, inst::MoveRow, dt; resolve_target = identity)
     ta = resolve_target(inst.tweezers)
     Δy = ta.dy * inst.delta
     displacement = [0.0, Δy, 0.0]
-    return move(atoms, tweezers_in_row(ta, inst.rows), displacement, inst.duration, inst.sweep, dt)
+    mods, n = move(atoms, tweezers_in_row(ta, inst.rows), displacement, inst.duration, inst.sweep, dt)
+    return mods, _NO_BMODS, n
 end
 
 """
@@ -154,7 +146,8 @@ function compile(atoms, inst::MoveCol, dt; resolve_target = identity)
     ta = resolve_target(inst.tweezers)
     Δx = ta.dx * inst.delta
     displacement = [Δx, 0.0, 0.0]
-    return move(atoms, tweezers_in_col(ta, inst.cols), displacement, inst.duration, inst.sweep, dt)
+    mods, n = move(atoms, tweezers_in_col(ta, inst.cols), displacement, inst.duration, inst.sweep, dt)
+    return mods, _NO_BMODS, n
 end
 
 """
@@ -164,10 +157,8 @@ Lower a `Wait` instruction into an idle time segment. No modifiers are
 produced.
 """
 function compile(atoms, inst::Wait, dt; resolve_target=identity)
-
-    tsteps = Int(div(inst.duration,dt)+1)
-
-    return AbstractModifier[], tsteps
+    tsteps = Int(div(inst.duration, dt) + 1)
+    return AbstractModifier[], _NO_BMODS, tsteps
 end
 
 #-----------------------------------------------------------------------------
@@ -184,11 +175,9 @@ function compile(atoms, inst::RampRow, dt; resolve_target = identity)
     ta = resolve_target(inst.tweezers)
     beams = tweezers_in_row(ta, inst.rows)
     nbeams = length(beams)
-
-    # If a single amplitude is specified, use it for all; if a vector, use as-is
     amplitudes_final = inst.final_amplitude isa Number ? fill(inst.final_amplitude, nbeams) : inst.final_amplitude
-    ramp_time = inst.ramp_time
-    return ramp(beams, amplitudes_final, ramp_time, dt)
+    mods, n = ramp(beams, amplitudes_final, inst.ramp_time, dt)
+    return mods, _NO_BMODS, n
 end
 
 """
@@ -201,11 +190,9 @@ function compile(atoms, inst::RampCol, dt; resolve_target = identity)
     ta = resolve_target(inst.tweezers)
     beams = tweezers_in_col(ta, inst.cols)
     nbeams = length(beams)
-
-    # If a single amplitude is specified, use it for all; if a vector, use as-is
     amplitudes_final = inst.final_amplitude isa Number ? fill(inst.final_amplitude, nbeams) : inst.final_amplitude
-    ramp_time = inst.ramp_time
-    return ramp(beams, amplitudes_final, ramp_time, dt)
+    mods, n = ramp(beams, amplitudes_final, inst.ramp_time, dt)
+    return mods, _NO_BMODS, n
 end
 
 """
@@ -216,20 +203,15 @@ all tweezers in the given column, enforcing row–column factorization.
 """
 function compile(atoms, inst::AmplCol, dt; resolve_target = identity)
     ta = resolve_target(inst.tweezers)
-
     ta.col_amplitudes[inst.col] = inst.ampl
-
     col = inst.col
     modifiers = AmplitudeModifier[]
-
-    # Loop over all rows for this column
     for row in eachindex(ta.row_amplitudes)
         beam = ta[row, col]
         ampl = ta.row_amplitudes[row] * ta.col_amplitudes[col]
         push!(modifiers, AmplitudeModifier(beam, [ampl, ampl]))
     end
-
-    return modifiers, 2
+    return modifiers, _NO_BMODS, 2
 end
 
 """
@@ -240,20 +222,15 @@ all tweezers in the given row, enforcing row–column factorization.
 """
 function compile(atoms, inst::AmplRow, dt; resolve_target = identity)
     ta = resolve_target(inst.tweezers)
-
     ta.row_amplitudes[inst.row] = inst.ampl
-
     row = inst.row
     modifiers = AmplitudeModifier[]
-
-    # Loop over all columns for this row
     for col in eachindex(ta.col_amplitudes)
         beam = ta[row, col]
         ampl = ta.row_amplitudes[row] * ta.col_amplitudes[col]
         push!(modifiers, AmplitudeModifier(beam, [ampl, ampl]))
     end
-
-    return modifiers, 2
+    return modifiers, _NO_BMODS, 2
 end
 
 """
@@ -265,19 +242,17 @@ effective position (e.g. optical frequency) of all beams in the given column.
 function compile(atoms, inst::FreqCol, dt; resolve_target = identity)
     ta = resolve_target(inst.tweezers)
     tweezers = tweezers_in_col(ta, inst.col)
-    
     modifiers = [
         PositionModifier(
             beam,
-            [[ta.dx * inst.freq, beam.r0[2], beam.r0[3]],  # New position
-             [ta.dx * inst.freq, beam.r0[2], beam.r0[3]]],  # Same (instantaneous)
+            [[ta.dx * inst.freq, beam.r0[2], beam.r0[3]],
+             [ta.dx * inst.freq, beam.r0[2], beam.r0[3]]],
             [0.0, dt];
-            dims = [1]  # Only update x-coordinate
+            dims = [1]
         )
         for beam in tweezers
     ]
-    
-    return modifiers, 2
+    return modifiers, _NO_BMODS, 2
 end
 
 """
@@ -289,82 +264,77 @@ effective position (e.g. optical frequency) of all beams in the given row.
 function compile(atoms, inst::FreqRow, dt; resolve_target = identity)
     ta = resolve_target(inst.tweezers)
     tweezers = tweezers_in_row(ta, inst.row)
-    
     modifiers = [
         PositionModifier(
             beam,
-            [[beam.r0[1], ta.dy * inst.freq, beam.r0[3]],  # New position
-             [beam.r0[1], ta.dy * inst.freq, beam.r0[3]]],  # Same (instantaneous)
+            [[beam.r0[1], ta.dy * inst.freq, beam.r0[3]],
+             [beam.r0[1], ta.dy * inst.freq, beam.r0[3]]],
             [0.0, dt];
-            dims = [2]  # Only update y-coordinate
+            dims = [2]
         )
         for beam in tweezers
     ]
-    
-    return modifiers, 2
+    return modifiers, _NO_BMODS, 2
 end
 
 #-----------------------------------------------------------------------------
 # Compile: pulse and simple on/off
 #-----------------------------------------------------------------------------
 
-# Build a ResetModifier targeting the same coefficient reference as an AmplitudeModifier would.
+# Helpers: build boundary modifier targeting the same coefficient reference
 _reset_modifier(c::GaussianCoupling) = ResetModifier(c._amplitude)
 _reset_modifier(c) = ResetModifier(c)
+_set_modifier(c::GaussianCoupling, val) = SetModifier(c._amplitude, ComplexF64(val))
+_set_modifier(c, val) = SetModifier(c, ComplexF64(val))
 
+"""
+    compile(atoms, inst::Pulse, dt; resolve_target = identity)
+
+Constant-amplitude pulse: no inner-loop modifiers; boundary SetModifier turns on
+the coupling before `evolve!` and ResetModifier zeros it after.
+
+Shaped-amplitude pulse: AmplitudeModifiers run in the solver loop; a ResetModifier
+at the boundary zeros the field after the instruction completes.
+"""
 function compile(atoms, inst::Pulse, dt; resolve_target = identity)
     resolved_couplings = [resolve_target(c) for c in inst.couplings]
-
     tsteps = round(Int, inst.duration / dt)
-    amplitude_vals = ComplexF64[]
+    bmods = AbstractBoundaryModifier[_reset_modifier(c) for c in resolved_couplings]
 
     if isempty(inst.amplitudes)
-        amplitude_vals = fill(inst.ampl, tsteps)
+        # Constant pulse: set amplitude at boundary, no per-step modifiers
+        prepend!(bmods, [_set_modifier(c, inst.ampl) for c in resolved_couplings])
+        return AbstractModifier[], bmods, tsteps
     else
-        # Interpolate shaped pulse on [0, duration]; sample at tsteps start-of-step times.
-        # Compute tsteps+1 points (grid [0, dt, ..., duration]) then drop the endpoint —
-        # end_instruction! zeros the field after the loop, so no trailing zero is needed.
+        # Shaped pulse: interpolate amplitude envelope over tsteps points
         scaled = inst.ampl .* inst.amplitudes
         amplitude_vals = interpolate(scaled, collect(0.0:dt:inst.duration))[1:tsteps]
+        modifiers = AbstractModifier[AmplitudeModifier(c, amplitude_vals) for c in resolved_couplings]
+        return modifiers, bmods, tsteps
     end
-
-    modifiers = AbstractModifier[AmplitudeModifier(c, amplitude_vals) for c in resolved_couplings]
-    append!(modifiers, [_reset_modifier(c) for c in resolved_couplings])
-    return modifiers, tsteps
 end
 
 """
     compile(atoms, inst::On, dt; resolve_target = identity)
 
-Lower an `On` instruction into a single-step amplitude modifier that
-sets the amplitude of the given couplings to 1 at `t = 0`.
+Turn on couplings at instruction boundary (SetModifier). No inner-loop modifiers.
+Amplitude persists until explicitly turned off.
 """
 function compile(atoms, inst::On, dt; resolve_target = identity)
-   
-    # compile should only act on already resolved targets
-    resolved_couplings = [resolve_target(coupling) for coupling in inst.couplings]
-
-    # Create amplitude modifier at t=0
-    modifiers = AmplitudeModifier[AmplitudeModifier(coupling, [1.0,1.0]) for coupling in resolved_couplings]
-
-    return modifiers, 2
+    resolved_couplings = [resolve_target(c) for c in inst.couplings]
+    bmods = AbstractBoundaryModifier[_set_modifier(c, 1.0) for c in resolved_couplings]
+    return AbstractModifier[], bmods, 2
 end
 
 """
     compile(atoms, inst::Off, dt; resolve_target = identity)
 
-Lower an `Off` instruction into a single-step amplitude modifier that
-sets the amplitude of the given couplings to 0 at `t = 0`.
+Zero coupling amplitudes at instruction boundary (ResetModifier). No inner-loop modifiers.
 """
 function compile(atoms, inst::Off, dt; resolve_target = identity)
-    
-    # Apply resolve_target to each coupling individually  
-    resolved_couplings = [resolve_target(coupling) for coupling in inst.couplings]
-    
-    # Create amplitude modifier at t=0
-    modifiers = AmplitudeModifier[AmplitudeModifier(coupling, [0.0,0.0]) for coupling in resolved_couplings]
-    
-    return modifiers, 2
+    resolved_couplings = [resolve_target(c) for c in inst.couplings]
+    bmods = AbstractBoundaryModifier[_reset_modifier(c) for c in resolved_couplings]
+    return AbstractModifier[], bmods, 2
 end
 
 """
@@ -375,16 +345,11 @@ interval equal to the longest internal instruction. Updates that exceed
 `length(m.vals)` for modifier `m` are effectively ignored by the modifier.
 """
 function compile(atoms, inst::Parallel, dt; resolve_target = identity)
-    # Compile all child instructions
     compiled = map(inst.parts) do subinst
         compile(atoms, subinst, dt; resolve_target = resolve_target)
     end
-
-    mods_list  = first.(compiled)
-    n_steps = maximum(last.(compiled))
-
-    # Just concatenate all modifiers; shorter ones naturally stop updating
-    all_mods = reduce(vcat, mods_list)
-
-    return all_mods, n_steps
+    all_mods  = reduce(vcat, getindex.(compiled, 1))
+    all_bmods = reduce(vcat, getindex.(compiled, 2))
+    n_steps   = maximum(getindex.(compiled, 3))
+    return all_mods, all_bmods, n_steps
 end

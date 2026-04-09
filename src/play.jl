@@ -246,11 +246,12 @@ function _play(job::SimulationJob;
     if job.state === nothing
         # Classical evolution
         @inbounds for i in 1:n_instructions
+            for m in job.boundary_modifiers[i]; begin_instruction!(m); end
             evolve!(job.atoms, job.local_tspans[i];
                     beams=job.beams, modifiers=job.modifiers[i],
                     detectors=job.detectors[i], rng=rng, frozen=false,
                     downsample=job.downsamples[i])
-            for m in job.modifiers[i]; end_instruction!(m); end
+            for m in job.boundary_modifiers[i]; end_instruction!(m); end
         end
     else
         # Quantum/semiclassical evolution
@@ -259,11 +260,12 @@ function _play(job::SimulationJob;
             for atom in job.atoms
         )
         @inbounds for i in 1:n_instructions
+            for m in job.boundary_modifiers[i]; begin_instruction!(m); end
             evolve!((job.state, job.atoms), job.local_tspans[i];
                     fields=job.fields, beams=job.beams, jumps=job.jumps,
                     modifiers=job.modifiers[i], detectors=job.detectors[i],
                     rng=rng, frozen=frozen, downsample=job.downsamples[i])
-            for m in job.modifiers[i]; end_instruction!(m); end
+            for m in job.boundary_modifiers[i]; end_instruction!(m); end
         end
     end
 

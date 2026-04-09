@@ -41,7 +41,7 @@ using .Dynamiq: getposition, getwavelength, getbeams
 using .Dynamiq: AbstractModifier, AbstractBeam
 using .Dynamiq: DetectorSpec, AbstractDetector
 using .Dynamiq: PopulationDetector, CoherenceDetector
-using .Dynamiq: MoveModifier, AmplitudeModifier, ResetModifier, PositionModifier, end_instruction!
+using .Dynamiq: MoveModifier, AmplitudeModifier, AbstractBoundaryModifier, SetModifier, ResetModifier, PositionModifier, begin_instruction!, end_instruction!
 using .Dynamiq: Units; export Units
 
 import Base: copy
@@ -87,7 +87,7 @@ export Units
 
 # Export modifiers
 export AbstractModifier, AbstractBeam
-export MoveModifier, AmplitudeModifier, ResetModifier, PositionModifier
+export MoveModifier, AmplitudeModifier, AbstractBoundaryModifier, SetModifier, ResetModifier, PositionModifier
 
 # Export detectors
 export DetectorSpec, AbstractDetector

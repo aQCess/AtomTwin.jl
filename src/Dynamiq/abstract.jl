@@ -70,8 +70,27 @@ AbstractModifier
 
 Abstract supertype for modifiers that transform fields, beams, or atom
 trajectories in time (e.g. motion, amplitude, or phase modifiers).
+
+`update!(m, i)` is called at every solver timestep `i`.
 """
 abstract type AbstractModifier end
+
+"""
+AbstractBoundaryModifier
+
+Abstract supertype for modifiers that are called once at instruction
+boundaries — never inside the solver loop.
+
+`begin_instruction!(m)` is called once before `evolve!` starts.
+`end_instruction!(m)` is called once after `evolve!` completes.
+
+This allows coupling amplitudes to be set/reset at instruction boundaries
+without incurring per-timestep dispatch overhead.
+"""
+abstract type AbstractBoundaryModifier end
+
+begin_instruction!(::AbstractBoundaryModifier) = nothing
+end_instruction!(::AbstractBoundaryModifier) = nothing
 
 """
 AbstractDetector{A}

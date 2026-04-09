@@ -62,25 +62,29 @@ end
 end
 
 """
-    end_instruction!(m::AbstractModifier)
+    SetModifier{F} <: AbstractBoundaryModifier
 
-Called by the simulation engine once after an instruction's `evolve!` loop
-completes, before the next instruction begins. Default is a no-op.
+Sets a coupling/field amplitude to a fixed value at the start of an instruction
+(`begin_instruction!`). Used by `compile(::Pulse)` for constant-amplitude pulses
+and by `compile(::On)`.
 """
-end_instruction!(::AbstractModifier) = nothing
+struct SetModifier{F} <: AbstractBoundaryModifier
+    field::F
+    val::ComplexF64
+end
+
+begin_instruction!(m::SetModifier) = (m.field._coeff[] = m.val)
+begin_instruction!(m::SetModifier{<:Base.RefValue{ComplexF64}}) = (m.field[] = m.val)
 
 """
-    ResetModifier{F} <: AbstractModifier
+    ResetModifier{F} <: AbstractBoundaryModifier
 
-Zero-timestep modifier appended by `compile(::Pulse)` and `compile(::On/Off)`
-to reset a coupling amplitude to zero after the instruction completes.
-
-`update!` is a no-op (empty `vals`); only `end_instruction!` acts.
+Zeros a coupling/field amplitude at the end of an instruction (`end_instruction!`).
+Used by `compile(::Pulse)` and `compile(::Off)`. Never appears in the solver loop.
 """
-struct ResetModifier{F} <: AbstractModifier
+struct ResetModifier{F} <: AbstractBoundaryModifier
     field::F
 end
 
-update!(::ResetModifier, ::Int) = nothing
 end_instruction!(m::ResetModifier) = (m.field._coeff[] = zero(ComplexF64))
 end_instruction!(m::ResetModifier{<:Base.RefValue{ComplexF64}}) = (m.field[] = zero(ComplexF64))

@@ -33,8 +33,9 @@ struct SimulationJob{S}
     beams::Vector{AbstractBeam}
     fields::Vector{<:Dynamiq.AbstractField}
     jumps::Vector{Jump}
-    modifiers::Vector{Any}   # Vector{Vector{AbstractModifier}} — element type varies per instruction
-    detectors::Vector{Any}   # Vector{Vector{<:AbstractDetector}} — element type varies per instruction
+    modifiers::Vector{Any}          # Vector{Vector{AbstractModifier}} — inner-loop, passed to evolve!
+    boundary_modifiers::Vector{Any} # Vector{Vector{AbstractBoundaryModifier}} — called at instruction boundaries only
+    detectors::Vector{Any}          # Vector{Vector{<:AbstractDetector}} — element type varies per instruction
     local_tspans::Vector     # Vector of SubArray views into full time grid, one per instruction
     detector_outputs::Dict{String, Any}
     times::Vector{Float64}   # downsampled time grid (length = sum(t_steps[i] ÷ downsamples[i]))
@@ -151,6 +152,7 @@ function compile(sys::System, seq::Sequence;
 
     n_instructions = length(seq)
     modifiers = Vector{Any}(undef, n_instructions)
+    boundary_modifiers = Vector{Any}(undef, n_instructions)
     step_counts = Vector{Int}(undef, n_instructions)
     total_tspan_size = 0
 
@@ -162,8 +164,9 @@ function compile(sys::System, seq::Sequence;
         dt_i = something(resolved_inst.dt, seq.dt)
 
         # Compile and resolve_target (which uses same cache)
-        mods, n_steps = compile(atoms, resolved_inst, dt_i; resolve_target=resolve_target)
+        mods, bmods, n_steps = compile(atoms, resolved_inst, dt_i; resolve_target=resolve_target)
         modifiers[i] = mods
+        boundary_modifiers[i] = bmods
         step_counts[i] = n_steps
         total_tspan_size += n_steps
     end
@@ -239,7 +242,7 @@ function compile(sys::System, seq::Sequence;
     )
 
     return SimulationJob(qstate, atoms, resolved_beams, resolved_fields, resolved_jumps,
-                        modifiers, detectors, local_tspans,
+                        modifiers, boundary_modifiers, detectors, local_tspans,
                         detector_outputs, times, inst_ds)
 end
 
