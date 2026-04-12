@@ -850,7 +850,7 @@ function wfmc_semiclassical(psi::Vector{ComplexF64},
         n = norm(psi)
         if n^2 < rand(rng)
             jump = jump!(psi, jumps, _prob, _q1, _q2, rng)
-            recoil!(jump, rng)
+            #recoil!(jump, rng)
             for d in jump.detectors
                 write!(d, i)  # photo events are not downsampled
             end

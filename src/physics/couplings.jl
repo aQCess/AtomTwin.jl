@@ -155,18 +155,19 @@ function rabi_frequency(
 end
 
 """
-    rabi_frequencies(beam; q_axis=[0,0,1], r0=beam.r0, d_red::Float64)
+    rabi_frequencies(beam; q_axis=[0,0,1], r0=nothing, d_red::Float64)
 
 Polarization-resolved Rabi frequencies for an effective E1 operator,
 independent of J/F. Returns (Ω_π, Ω_σ⁺, Ω_σ⁻) computed from the
 spherical components of the beam E-field and a reduced dipole `d_red`.
 
-By default it returns the peak Rabi frequencies (at beam center).
+By default evaluates at `beam.r0` (Gaussian beams) or the origin
+(`PlanarBeam`, which is spatially uniform).
 """
 function rabi_frequencies(
     beam;
     q_axis = [0.0, 0.0, 1.0],
-    r0 = beam.r0,
+    r0 = hasproperty(beam, :r0) ? beam.r0 : zeros(3),
     d_red::Float64,
 )
     E0, Eplus, Eminus = Efield_spherical(beam, r0; q_axis = q_axis)
@@ -548,7 +549,7 @@ Add electric-dipole couplings between hyperfine manifolds.
 function add_coupling!(
     system, atom::AbstractAtom,
     level::Pair{HyperfineManifold, HyperfineManifold};
-    beam::Union{GaussianBeam, GeneralGaussianBeam, Nothing} = nothing,
+    beam::Union{AbstractBeam, Nothing} = nothing,
     Ω_π = nothing,
     Ω_p  = nothing,
     Ω_m  = nothing,

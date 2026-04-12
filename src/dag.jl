@@ -582,10 +582,11 @@ mutable struct VdWInteractionNode <: AbstractNode
     active::Bool
     _field::Union{Nothing, VdWInteraction}
     _current_value::ComplexF64
+    V_cap::Float64
 end
 
-VdWInteractionNode(C6, atoms, transition; active = true) =
-    VdWInteractionNode(C6, atoms, transition, active, nothing, zero(ComplexF64))
+VdWInteractionNode(C6, atoms, transition; active = true, V_cap = Inf) =
+    VdWInteractionNode(C6, atoms, transition, active, nothing, zero(ComplexF64), Float64(V_cap))
 
 node_output(n::VdWInteractionNode) = n._field
 
@@ -602,8 +603,8 @@ function build_node!(node::VdWInteractionNode, basis::Basis)
     C6_val = Float64(real(ComplexF64(_resolve_node_default(node.C6))))
     atom1, atom2 = node.atoms
     t1, t2 = _vdw_transitions(node)
-    inter = VdWInteraction(basis, atom1.inner => atom2.inner, t1, t2, C6_val)
-    # _coeff is initialised to C6 by the constructor; zero it if inactive
+    inter = VdWInteraction(basis, atom1.inner => atom2.inner, t1, t2, C6_val;
+                           V_cap = node.V_cap)
     inter._coeff[] = node.active ? ComplexF64(C6_val) : ComplexF64(0)
     node._field = inter
     node._current_value = ComplexF64(C6_val)
@@ -615,12 +616,13 @@ function compile_node!(node::VdWInteractionNode, basis::Basis, rng, param_values
     if node._field === nothing
         atom1, atom2 = node.atoms
         t1, t2 = _vdw_transitions(node)
-        inter = VdWInteraction(basis, atom1.inner => atom2.inner, t1, t2, C6_val)
+        inter = VdWInteraction(basis, atom1.inner => atom2.inner, t1, t2, C6_val;
+                               V_cap = node.V_cap)
         inter._coeff[] = node.active ? ComplexF64(C6_val) : ComplexF64(0)
         node._field = inter
     else
-        # Update the stored C6; _coeff will be recomputed by update! each step
-        node._field.C6 = C6_val
+        node._field.C6    = C6_val
+        node._field.V_cap = node.V_cap
         node._field._coeff[] = node.active ? ComplexF64(C6_val) : ComplexF64(0)
     end
     node._current_value = ComplexF64(C6_val)
@@ -629,7 +631,8 @@ end
 
 function recompile_node!(node::VdWInteractionNode, inter::VdWInteraction, rng, param_values)
     C6_val = Float64(real(ComplexF64(_resolve_node_value(node.C6, param_values, rng))))
-    inter.C6 = C6_val
+    inter.C6    = C6_val
+    inter.V_cap = node.V_cap
     inter._coeff[] = node.active ? ComplexF64(C6_val) : ComplexF64(0)
     node._current_value = ComplexF64(C6_val)
 end

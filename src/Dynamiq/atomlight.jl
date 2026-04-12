@@ -341,13 +341,15 @@ function update!(d::Interaction{A}, i::Int) where A
 end
 
 """
-    VdWInteraction(b, atoms, transition1, transition2, C6)
+    VdWInteraction(b, atoms, transition1, transition2, C6; V_cap=Inf)
 
 Distance-dependent van der Waals interaction V(r) = C6 / r⁶ between two atoms.
 
 The underlying `Op` is built with a unit coefficient (1.0); the scalar `_coeff`
 is updated every solver timestep from the instantaneous inter-atom separation.
 `C6` is in rad/s·m⁶ (ħ = 1 units).
+
+If `V_cap` is finite, the interaction is clamped: `V = min(C6/r⁶, V_cap)`.
 """
 mutable struct VdWInteraction{A} <: AbstractField
     atom1::A
@@ -355,24 +357,31 @@ mutable struct VdWInteraction{A} <: AbstractField
     H::Op               # unit projector |rr⟩⟨rr|; _coeff carries C6/r^6
     _coeff::Base.RefValue{ComplexF64}
     C6::Float64         # rad/s·m^6
-    function VdWInteraction(b, atoms::Pair, transition1, transition2, C6::Float64)
+    V_cap::Float64      # maximum interaction strength (rad/s); Inf = no cap
+    function VdWInteraction(b, atoms::Pair, transition1, transition2, C6::Float64;
+                            V_cap::Float64 = Inf)
         H = Op(b, atoms, transition1, transition2, 1.0)
-        return new{typeof(atoms[1])}(atoms[1], atoms[2], H, Ref(ComplexF64(C6)), C6)
+        return new{typeof(atoms[1])}(atoms[1], atoms[2], H, Ref(ComplexF64(C6)), C6, V_cap)
     end
 end
 
 """
     update!(d::VdWInteraction, ::Int)
 
-Recompute the van der Waals coefficient C6/r⁶ from the current inter-atom
-separation. Called each solver timestep after `fclassical!` has updated positions.
+Recompute the van der Waals coefficient from the current inter-atom separation:
+
+    V = C6 / r⁶
+
+clamped to `V_cap` when finite. Called each solver timestep after `fclassical!`
+has updated positions.
 """
 function update!(d::VdWInteraction, ::Int)
     x1 = d.atom1.x;  x2 = d.atom2.x
     dx = x2[1] - x1[1];  dy = x2[2] - x1[2];  dz = x2[3] - x1[3]
     r2 = dx*dx + dy*dy + dz*dz
     r6 = r2 * r2 * r2
-    d._coeff[] = ComplexF64(d.C6 / r6)
+    V  = d.C6 / r6
+    d._coeff[] = ComplexF64(isfinite(d.V_cap) ? min(V, d.V_cap) : V)
     return nothing
 end
 
