@@ -29,6 +29,7 @@ the `SimulationJob` builds heterogeneous time grids:
 """
 struct SimulationJob{S}
     state::S
+    initial_state::S            # copy of state at compile time; used by recompile! to reset
     atoms::Vector{NLevelAtom}
     beams::Vector{AbstractBeam}
     fields::Vector{<:Dynamiq.AbstractField}
@@ -223,17 +224,13 @@ function compile(sys::System, seq::Sequence;
     detectors = Vector{Any}(undef, n_instructions)
     for i in 1:n_instructions
         ds_tspan = view(times, ds_offsets[i]+1:ds_offsets[i+1])
-        _detectors = [
-            begin
-                vals_slice = ds_offsets[i]+1:ds_offsets[i+1]
-                vals_view  = ndims(detector_vals[j]) == 1 ?
-                    view(detector_vals[j], vals_slice) :
-                    view(detector_vals[j], vals_slice, :)
-                build_detector(sys.detector_specs[j], ds_tspan, vals_view, resolve_target, sys)
-            end
-            for j in 1:n_detectors
-        ]
-        detectors[i] = _detectors
+        detectors[i] = Vector{AbstractDetector}(map(1:n_detectors) do j
+            vals_slice = ds_offsets[i]+1:ds_offsets[i+1]
+            vals_view  = ndims(detector_vals[j]) == 1 ?
+                view(detector_vals[j], vals_slice) :
+                view(detector_vals[j], vals_slice, :)
+            build_detector(sys.detector_specs[j], ds_tspan, vals_view, resolve_target, sys)
+        end)
     end
 
     detector_outputs = Dict{String, Any}(
@@ -241,7 +238,8 @@ function compile(sys::System, seq::Sequence;
         for j in 1:n_detectors
     )
 
-    return SimulationJob(qstate, atoms, resolved_beams, resolved_fields, resolved_jumps,
+    return SimulationJob(qstate, qstate === nothing ? nothing : copy(qstate),
+                        atoms, resolved_beams, resolved_fields, resolved_jumps,
                         modifiers, boundary_modifiers, detectors, local_tspans,
                         detector_outputs, times, inst_ds)
 end
@@ -310,9 +308,9 @@ function recompile!(job::SimulationJob, sys::System;
         end
     end
     
-    # Reset quantum state from sys.state[] (set by compile or caller before recompile!)
-    if job.state !== nothing && sys.state[] !== nothing
-        job.state .= sys.state[]
+    # Reset quantum state from the compile-time copy
+    if job.state !== nothing && job.initial_state !== nothing
+        job.state .= job.initial_state
     end
     
     # Zero detector outputs

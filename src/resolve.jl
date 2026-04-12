@@ -121,7 +121,8 @@ function _resolve(inst::Pulse, param_values, cache::IdDict)
         _resolve(inst.ampl, param_values, cache),
         inst.amplitudes,
         inst.dt,
-        inst.downsample
+        inst.downsample,
+        inst.interp,
     )
 end
 

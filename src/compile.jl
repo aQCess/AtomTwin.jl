@@ -306,9 +306,13 @@ function compile(atoms, inst::Pulse, dt; resolve_target = identity)
         prepend!(bmods, [_set_modifier(c, inst.ampl) for c in resolved_couplings])
         return AbstractModifier[], bmods, tsteps
     else
-        # Shaped pulse: interpolate amplitude envelope over tsteps points
+        # Shaped pulse: resample amplitude envelope onto tsteps points
         scaled = inst.ampl .* inst.amplitudes
-        amplitude_vals = interpolate(scaled, collect(0.0:dt:inst.duration))[1:tsteps]
+        amplitude_vals = if inst.interp == :piecewise_constant
+            interpolate_piecewise_constant(scaled, tsteps)
+        else
+            interpolate(scaled, collect(0.0:dt:inst.duration))[1:tsteps]
+        end
         modifiers = AbstractModifier[AmplitudeModifier(c, amplitude_vals) for c in resolved_couplings]
         return modifiers, bmods, tsteps
     end

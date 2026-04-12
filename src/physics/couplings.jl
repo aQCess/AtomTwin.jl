@@ -529,57 +529,69 @@ function add_coupling!(
 end
 
 """
-    add_coupling!(system, atom, level::Pair{HyperfineManifold,HyperfineManifold},
-                  beam::Union{GaussianBeam,GeneralGaussianBeam};
-                  q_axis, d_red=nothing, Ω_π=nothing, Ω_p=nothing, Ω_m=nothing,
-                  active=true, tol=1e-10)
+    add_coupling!(system, atom, level::Pair{HyperfineManifold,HyperfineManifold};
+                  beam=nothing, Ω_π=nothing, Ω_p=nothing, Ω_m=nothing,
+                  d_red=nothing, q_axis=[0,0,1], active=true, tol=1e-10)
 
-Add position-dependent electric-dipole couplings driven by a Gaussian beam.
+Add electric-dipole couplings between hyperfine manifolds.
 
-`_coeff` is recomputed each solver timestep as `Ω₀ × efield_scalar(beam, atom.x) / E₀`,
-where Ω₀ and E₀ are evaluated at the atom's build-time position. This requires no
-CG-coefficient recalculation per step.
-
-If `Ω_π`, `Ω_p`, or `Ω_m` are provided they override the Ω₀ computed by
-`rabi_frequency()` for the π (Δm=0), σ⁺ (Δm=+1), and σ⁻ (Δm=-1) components
-respectively. Use this when E1 selection rules underestimate the effective coupling
-due to state mixing. When all three are overridden, `d_red` is not required.
+- If only `beam` is given: Rabi frequencies are derived from the beam E-field
+  at the atom's position via `d_red` (required in this case).
+- If `Ω_π`/`Ω_p`/`Ω_m` are given without `beam`: uniform `GlobalCoupling`s
+  are created with those fixed amplitudes.
+- If both `beam` and `Ω_π`/`Ω_p`/`Ω_m` are given: position-dependent
+  `GaussianCouplingNode`s are created, with the explicit values overriding
+  the beam-derived Rabi frequencies (useful when selection rules underestimate
+  the effective coupling).
+- If neither `beam` nor any Ω is provided: an error is raised.
 """
 function add_coupling!(
     system, atom::AbstractAtom,
-    level::Pair{HyperfineManifold, HyperfineManifold},
-    beam::Union{GaussianBeam, GeneralGaussianBeam};
+    level::Pair{HyperfineManifold, HyperfineManifold};
+    beam::Union{GaussianBeam, GeneralGaussianBeam, Nothing} = nothing,
+    Ω_π = nothing,
+    Ω_p  = nothing,
+    Ω_m  = nothing,
     q_axis::AbstractVector{<:Real} = [0.0, 0.0, 1.0],
     d_red::Union{Float64, Nothing} = nothing,
-    Ω_π = nothing,
-    Ω_p = nothing,
-    Ω_m = nothing,
     active = true,
     tol = 1e-10,
 )
+    beam === nothing && Ω_π === nothing && Ω_p === nothing && Ω_m === nothing &&
+        error("add_coupling!: provide at least one of `beam` or `Ω_π`/`Ω_p`/`Ω_m`")
+
     ground, excited = level
     q_axis_vec = Vector{Float64}(q_axis)
-    couplings = Dynamiq.AbstractField[]
     override_map = Dict{Int,Any}(0 => Ω_π, 1 => Ω_p, -1 => Ω_m)
+    couplings = Dynamiq.AbstractField[]
 
     for g in ground.levels, e in excited.levels
         Δm = e.mF - g.mF
         abs(Δm) > 1 && continue
         override = override_map[Δm]
+
         Ω0 = if override !== nothing
             ComplexF64(override)
         else
-            isnothing(d_red) && error("d_red is required when not providing a Ω override for Δm=$Δm")
+            # beam only — derive from beam E-field
+            isnothing(d_red) && error("d_red is required when Ω_π/Ω_p/Ω_m are not provided (Δm=$Δm)")
             ComplexF64(rabi_frequency(atom, g, e, beam, atom.x; q_axis = q_axis_vec, d_red = d_red))
         end
+
         abs(Ω0) < tol && continue
-        node = GaussianCouplingNode(atom, g => e, beam, q_axis_vec,
-                                    something(d_red, 0.0), g, e;
-                                    Ω0_override = override !== nothing ? Ω0 : nothing,
-                                    active = active)
-        build_node!(node, system.basis)
-        push!(system, node)
-        push!(couplings, node._field)
+
+        if beam !== nothing
+            node = GaussianCouplingNode(atom, g => e, beam, q_axis_vec,
+                                        something(d_red, 0.0), g, e;
+                                        Ω0_override = override !== nothing ? Ω0 : nothing,
+                                        active = active)
+            build_node!(node, system.basis)
+            push!(system, node)
+            push!(couplings, node._field)
+        else
+            _add_coupling!(system, atom, g => e, Ω0; active = active)
+            push!(couplings, system.nodes[end]._field)
+        end
     end
     return couplings
 end
