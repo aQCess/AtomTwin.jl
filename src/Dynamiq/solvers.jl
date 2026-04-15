@@ -901,20 +901,32 @@ function qme(rho::Matrix{ComplexF64},
     steps = length(tspan)
     dt    = tspan[2] - tspan[1]
 
-    for i in 1:steps
-        for m in modifiers
-            update!(m, i)
+    has_modifiers  = !isempty(modifiers)
+    has_fields     = !isempty(fields)
+    has_detectors  = !isempty(detectors)
+    prep_detectors = [d for d in detectors if d isa PopulationDetector]
+    has_prep       = !isempty(prep_detectors)
+
+    @inbounds for i in 1:steps
+        if has_modifiers
+            for m in modifiers
+                update!(m, i)
+            end
         end
-        for f in fields
-            update!(f, i)
+        if has_fields
+            for f in fields
+                update!(f, i)
+            end
         end
         fquantum!(dt, rho, L, J, _q1, _q2; order = order)
-        if i % downsample == 0
+        if has_detectors && i % downsample == 0
             i_out = i ÷ downsample
-            for d in detectors
-                if d isa PopulationDetector
+            if has_prep
+                for d in prep_detectors
                     prep!(d)
                 end
+            end
+            for d in detectors
                 write!(d, i_out)
             end
         end

@@ -27,8 +27,12 @@ workflows with repeated executions, consider using [`compile`](@ref) followed by
 - `shots::Int = 1`: Number of Monte Carlo trajectory shots to execute
 - `density_matrix::Bool = false`: Use density matrix formalism if `true`, statevector if `false`
 - `savefinalstate::Bool = false`: Include final quantum states in output (increases memory usage)
-- `rng::AbstractRNG = Random.default_rng()`: Random number generator for reproducible simulations 
-- Additional `kwargs` are treated as parameter values for resolving `Deferred` objects and 
+- `rng::AbstractRNG = Random.default_rng()`: Random number generator for reproducible simulations
+- `shot_callback::Union{Nothing,Function} = nothing`: Optional callback invoked after each completed
+  trajectory as `shot_callback(shot, shots)`, where `shot` is the 1-based index and `shots` is the
+  total. Useful for progress reporting (e.g. `shot_callback = (s,n) -> @printf "shot %d/%d\\n" s n`).
+  In multithreaded runs the callback is still called per shot but invocation order is non-deterministic.
+- Additional `kwargs` are treated as parameter values for resolving `Deferred` objects and
   other parametric components in the system and sequence
 
 # Returns
@@ -87,10 +91,11 @@ pulse = Pulse(RabiField(amplitude=Ω_param, detuning=0.0), duration=1.0)
 # Run with specific parameter value
 result = play(sys, seq; initial_state=g, amplitude=2π*2.0)
 """
-function play(sys::System, seq::Sequence; 
+function play(sys::System, seq::Sequence;
                 initial_state=sys.initial_state,
                 density_matrix=false,
                 rng=Random.default_rng(),
+                shot_callback::Union{Nothing,Function}=nothing,
                 kwargs...)
 
     # Sanitize initial_state to a vector
@@ -98,9 +103,10 @@ function play(sys::System, seq::Sequence;
     if isempty(s)
         @warn "Initial state not specified. Defaulting to classical dynamics." maxlog=1
     end
-    
+
     job = compile(sys, seq; initial_state = s, density_matrix=density_matrix, rng=rng, kwargs...)
-    return play(job, sys; initial_state = s, density_matrix=density_matrix, rng=rng, kwargs...)
+    return play(job, sys; initial_state = s, density_matrix=density_matrix, rng=rng,
+                shot_callback=shot_callback, kwargs...)
 end
 
 function _execute_shot!(shot, local_job, sys, shot_rng, initial_state, all_outputs_vec, 
@@ -126,6 +132,7 @@ function play(job::SimulationJob, sys::System;
               initial_state = nothing,
               parallel_thresh = PARALLEL_THRESH,
               rng = Random.default_rng(),
+              shot_callback::Union{Nothing,Function}=nothing,
               kwargs...)
 
     # Update sys.state[] so recompile! picks it up for all shots.
@@ -203,9 +210,10 @@ function play(job::SimulationJob, sys::System;
                                 rng=shot_rngs[shot],
                                 kwargs...)
             end
-            _execute_shot!(shot, thread_jobs[tid], sys, shot_rngs[shot], initial_state, 
-                        all_outputs_vec, det_names, n_detectors, final_states, 
+            _execute_shot!(shot, thread_jobs[tid], sys, shot_rngs[shot], initial_state,
+                        all_outputs_vec, det_names, n_detectors, final_states,
                         savefinalstate; kwargs...)
+            shot_callback !== nothing && shot_callback(shot, shots)
         end
     else
         for shot in 1:shots
@@ -214,9 +222,10 @@ function play(job::SimulationJob, sys::System;
                                 rng=shot_rngs[shot],
                                 kwargs...)
             end
-            _execute_shot!(shot, job, sys, shot_rngs[shot], initial_state, 
-                        all_outputs_vec, det_names, n_detectors, final_states, 
+            _execute_shot!(shot, job, sys, shot_rngs[shot], initial_state,
+                        all_outputs_vec, det_names, n_detectors, final_states,
                         savefinalstate; kwargs...)
+            shot_callback !== nothing && shot_callback(shot, shots)
         end
     end
 
