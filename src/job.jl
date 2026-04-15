@@ -189,10 +189,8 @@ function compile(sys::System, seq::Sequence;
     abs_start  = 0.0
     for i in 1:n_instructions
         dt_i = inst_dts[i]
-        base = offsets[i]
-        for k in 1:step_counts[i]
-            full_times[base + k] = abs_start + k * dt_i
-        end
+        seg  = offsets[i]+1:offsets[i+1]
+        full_times[seg] .= range(abs_start + dt_i, step=dt_i, length=step_counts[i])
         abs_start += step_counts[i] * dt_i
     end
     local_tspans = [view(full_times, offsets[i]+1:offsets[i+1]) for i in 1:n_instructions]
@@ -201,12 +199,11 @@ function compile(sys::System, seq::Sequence;
     times = Vector{Float64}(undef, ds_total)
     abs_start = 0.0
     for i in 1:n_instructions
-        dt_i = inst_dts[i]
-        ds_i = inst_ds[i]
-        base = ds_offsets[i]
-        for k in 1:ds_counts[i]
-            times[base + k] = abs_start + k * ds_i * dt_i
-        end
+        dt_i  = inst_dts[i]
+        ds_i  = inst_ds[i]
+        step  = ds_i * dt_i
+        seg   = ds_offsets[i]+1:ds_offsets[i+1]
+        times[seg] .= range(abs_start + step, step=step, length=ds_counts[i])
         abs_start += step_counts[i] * dt_i
     end
 
