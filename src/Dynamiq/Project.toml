@@ -1,6 +1,6 @@
 name = "Dynamiq"
 uuid = "6d2e425c-eb71-47d1-bf4d-0d2921b4d126"
-version = "1.0.0-DEV"
+version = "0.1.1"
 authors = ["Shannon Whitlock"]
 
 [deps]
