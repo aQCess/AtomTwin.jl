@@ -190,7 +190,7 @@ Resolve a scalar `Parameter` to a concrete numeric value.
 
 If `param_values` contains an entry for `p.name`, that value (or
 parameter) overrides the default `p.default` / `p.std`. A nonzero
-`std` leads to a random draw `mean + randn()*std`, enabling static
+`std` leads to a random draw `mean + randn(rng)*std`, enabling static
 noise sampling; otherwise the mean value is returned.
 """
 function _resolve(p::Parameter, param_values, cache::IdDict)

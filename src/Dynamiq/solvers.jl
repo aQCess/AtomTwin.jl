@@ -472,7 +472,7 @@ function evolve!(state::Tuple{Vector{ComplexF64},Vector{<:NLevelAtom}},
         Hnh = Tuple{Base.RefValue{ComplexF64},Op}[(j._coeff, j.Hnh) for j in jumps]
 
         if frozen
-            wfmc(psi, H, Hnh, jumps, tspan; beams = beams, rng=rng, kwargs...)
+            wfmc(psi, H, Hnh, jumps, tspan; fields = fields, beams = beams, rng=rng, kwargs...)
             return
         else
             wfmc_semiclassical(psi, atoms, H, Hnh, jumps, tspan; fields = fields, beams = beams, rng=rng, kwargs...)

@@ -88,7 +88,7 @@ job = compile(sys, seq)  # builds per-instruction time grids automatically
 function compile(sys::System, seq::Sequence;
     initial_state = sys.initial_state,
     density_matrix = false,
-    rng = Random.MersenneTwister(),
+    rng = Random.default_rng(),
     kwargs...)
       
     param_values = Dict{Symbol,Any}(kwargs)
@@ -257,7 +257,7 @@ Safe to call on thread-local job copies (`deepcopy(job)`). MUST NOT be called on
 shared job objects. The `sys` argument may be shared across threads.
 """
 function recompile!(job::SimulationJob, sys::System;
-                    rng = Random.MersenneTwister(),
+                    rng = Random.default_rng(),
                     kwargs...)
 
     param_values = Dict{Symbol, Any}(kwargs)

@@ -249,6 +249,7 @@ Returns a NamedTuple with:
 """
 function _play(job::SimulationJob;
                 savefinalstate::Bool=false,
+                frozen::Union{Nothing,Bool}=nothing,
                 rng=Random.MersenneTwister())
 
     n_instructions = length(job.modifiers)
@@ -264,10 +265,13 @@ function _play(job::SimulationJob;
         end
     else
         # Quantum/semiclassical evolution
-        frozen = isempty(job.beams) && all(
-            isapprox(sum(abs2, atom.v), 0.0; atol=1e-14)
-            for atom in job.atoms
-        )
+        # Semi-classical (frozen=false) only when atoms are moving AND beams have
+        # wavelengths matching atom polarizabilities; otherwise atoms stay fixed.
+        # `frozen` kwarg overrides the automatic detection when provided.
+        frozen = something(frozen, !(
+            any(a -> !isapprox(sum(abs2, a.v), 0.0; atol=1e-14), job.atoms) &&
+            any(b -> any(a -> haskey(a.alpha, getwavelength(b)), job.atoms), job.beams)
+        ))
         @inbounds for i in 1:n_instructions
             for m in job.boundary_modifiers[i]; begin_instruction!(m); end
             evolve!((job.state, job.atoms), job.local_tspans[i];
