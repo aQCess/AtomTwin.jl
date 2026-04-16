@@ -39,6 +39,12 @@ configurations built from multiple beams or modes.
 """
 abstract type AbstractField end  # can be static or time-dependent
 
+# Default no-op: subtypes that don't need per-step updates inherit this.
+# Explicit return Nothing ensures a uniform inferred return type across all
+# AbstractField subtypes, preventing boxing when dispatching through the
+# abstract type (e.g. in `for f in fields; update!(f, i); end`).
+update!(::AbstractField, ::Int) = nothing
+
 """
 base_coupling(coupling::AbstractField)
 
@@ -64,8 +70,27 @@ AbstractModifier
 
 Abstract supertype for modifiers that transform fields, beams, or atom
 trajectories in time (e.g. motion, amplitude, or phase modifiers).
+
+`update!(m, i)` is called at every solver timestep `i`.
 """
 abstract type AbstractModifier end
+
+"""
+AbstractBoundaryModifier
+
+Abstract supertype for modifiers that are called once at instruction
+boundaries — never inside the solver loop.
+
+`begin_instruction!(m)` is called once before `evolve!` starts.
+`end_instruction!(m)` is called once after `evolve!` completes.
+
+This allows coupling amplitudes to be set/reset at instruction boundaries
+without incurring per-timestep dispatch overhead.
+"""
+abstract type AbstractBoundaryModifier end
+
+begin_instruction!(::AbstractBoundaryModifier) = nothing
+end_instruction!(::AbstractBoundaryModifier) = nothing
 
 """
 AbstractDetector{A}

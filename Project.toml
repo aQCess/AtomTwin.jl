@@ -1,6 +1,6 @@
 name = "AtomTwin"
 uuid = "4fbb9974-894c-4a41-a014-437e511f5eec"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["Shannon Whitlock <whitlock@unistra.fr>"]
 
 [deps]

@@ -85,3 +85,23 @@ function interpolate(y_vals::Vector{ComplexF64}, t_out::AbstractVector{<:Real})
     return y_out
 end
 
+"""
+    interpolate_piecewise_constant(y_vals, tsteps)
+
+Map `N` samples uniformly onto `tsteps` output points using nearest-lower
+(piecewise-constant / zero-order hold) interpolation.
+
+Sample `k` (1-based) is held for output steps where
+`floor((i-1)*N/tsteps) + 1 == k`.  This matches the convention used by
+pulse-shape optimisers that treat each sample as a constant segment.
+"""
+function interpolate_piecewise_constant(y_vals::AbstractVector, tsteps::Int)
+    N = length(y_vals)
+    y_out = similar(y_vals, tsteps)
+    @inbounds for i in 1:tsteps
+        k = floor(Int, (i - 1) * N / tsteps) + 1
+        y_out[i] = y_vals[k]
+    end
+    return y_out
+end
+

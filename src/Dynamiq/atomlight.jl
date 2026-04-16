@@ -127,6 +127,7 @@ function update!(drive::PlanarCoupling{A}, i::Int) where A
     k = drive.beam.k
     r = drive.atom.x
     drive._coeff[] = cis(k[1] * r[1] + k[2] * r[2] + k[3] * r[3])
+    return nothing
 end
 
 """
@@ -164,6 +165,58 @@ No-op update for global couplings. The coefficient is assumed to be
 handled externally or remain constant in time.
 """
 update!(d::GlobalCoupling, i::Int) = nothing
+
+"""
+    GaussianCoupling
+
+Coupling with spatially-varying Rabi rate for a `GaussianBeam` or `GeneralGaussianBeam`.
+
+At build time, Ω₀ (peak Rabi frequency at the atom's position) and E₀ = `efield_scalar(beam, atom.x)`
+are computed once. Each solver timestep `update!` recomputes only the scalar field envelope
+(~5 FP ops) and scales: `_coeff[] = Ω₀ * efield_scalar(beam, atom.x) / E₀`.
+
+!!! note
+    Spatially dependent polarization is not supported. The polarization direction is
+    evaluated once at the atom's build-time position and held fixed. Effects such as
+    tight-focusing polarization gradients require a different approach.
+"""
+mutable struct GaussianCoupling{A,B<:AbstractBeam} <: AbstractField
+    atom::A
+    transition::Pair{Int,Int}
+    H::Op                                       # Ω0/2 baked in (same convention as GlobalCoupling)
+    _coeff::Base.RefValue{ComplexF64}           # = _amplitude[] × efield/E0 (written by update!)
+    _amplitude::Base.RefValue{ComplexF64}       # dimensionless pulse amplitude (written by AmplitudeModifier)
+    beam::B
+    Ω0::ComplexF64                              # peak Ω at reference position (baked into H)
+    E0::ComplexF64                              # efield scalar at reference position
+end
+
+function GaussianCoupling(b::Basis, atom, transition::Pair{Int,Int},
+                          beam::AbstractBeam, Ω0::ComplexF64)
+    E0 = ComplexF64(efield_scalar(beam, atom.x))
+    H  = Op(b, atom, transition, Ω0 / 2; jump = false)   # Ω0 baked in, like GlobalCoupling
+    GaussianCoupling{typeof(atom),typeof(beam)}(
+        atom, transition, H,
+        Ref(ComplexF64(1.0)),   # _coeff — overwritten by update! before first fquantum!
+        Ref(ComplexF64(1.0)),   # _amplitude — set by AmplitudeModifier each step
+        beam, Ω0, E0)
+end
+
+"""
+    update!(f::GaussianCoupling, step)
+
+Compute `_coeff[] = _amplitude[] × efield_scalar(beam, x) / E₀`.
+
+`_amplitude[]` is set by `AmplitudeModifier` (from a `Pulse`/`On`/`Off` instruction)
+before this method is called each timestep.  Multiplying by the spatial envelope ensures
+both the commanded pulse amplitude and the atom's position scale the instantaneous Ω.
+
+Cost: one `efield_scalar` evaluation + one complex multiply + one divide — no alloc.
+"""
+function update!(f::GaussianCoupling, ::Int)
+    f._coeff[] = f._amplitude[] * efield_scalar(f.beam, f.atom.x) / f.E0
+    return nothing
+end
 
 """
     BlockadeCoupling(b, atom, transition, rate)
@@ -255,6 +308,7 @@ intensity at the atomic position. The stored coefficient is
 """
 function update!(f::StarkShiftAC{A}, i::Int) where A
     f._coeff[] = 1 / hbar * f.alpha * intensity(f.beam, f.atom.x)
+    return nothing
 end
 
 """
@@ -284,6 +338,51 @@ No-op update for static pairwise interactions. The operator is fixed
 and its coefficient is assumed constant unless modified externally.
 """
 function update!(d::Interaction{A}, i::Int) where A
+end
+
+"""
+    VdWInteraction(b, atoms, transition1, transition2, C6; V_cap=Inf)
+
+Distance-dependent van der Waals interaction V(r) = C6 / r⁶ between two atoms.
+
+The underlying `Op` is built with a unit coefficient (1.0); the scalar `_coeff`
+is updated every solver timestep from the instantaneous inter-atom separation.
+`C6` is in rad/s·m⁶ (ħ = 1 units).
+
+If `V_cap` is finite, the interaction is clamped: `V = min(C6/r⁶, V_cap)`.
+"""
+mutable struct VdWInteraction{A} <: AbstractField
+    atom1::A
+    atom2::A
+    H::Op               # unit projector |rr⟩⟨rr|; _coeff carries C6/r^6
+    _coeff::Base.RefValue{ComplexF64}
+    C6::Float64         # rad/s·m^6
+    V_cap::Float64      # maximum interaction strength (rad/s); Inf = no cap
+    function VdWInteraction(b, atoms::Pair, transition1, transition2, C6::Float64;
+                            V_cap::Float64 = Inf)
+        H = Op(b, atoms, transition1, transition2, 1.0)
+        return new{typeof(atoms[1])}(atoms[1], atoms[2], H, Ref(ComplexF64(C6)), C6, V_cap)
+    end
+end
+
+"""
+    update!(d::VdWInteraction, ::Int)
+
+Recompute the van der Waals coefficient from the current inter-atom separation:
+
+    V = C6 / r⁶
+
+clamped to `V_cap` when finite. Called each solver timestep after `fclassical!`
+has updated positions.
+"""
+function update!(d::VdWInteraction, ::Int)
+    x1 = d.atom1.x;  x2 = d.atom2.x
+    dx = x2[1] - x1[1];  dy = x2[2] - x1[2];  dz = x2[3] - x1[3]
+    r2 = dx*dx + dy*dy + dz*dz
+    r6 = r2 * r2 * r2
+    V  = d.C6 / r6
+    d._coeff[] = ComplexF64(isfinite(d.V_cap) ? min(V, d.V_cap) : V)
+    return nothing
 end
 
 #------------------------------------------------------------------------------

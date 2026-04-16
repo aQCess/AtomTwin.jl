@@ -43,7 +43,7 @@ mutable struct PopulationDetector{S,V,T} <: AbstractDetector
             tspan, O, name)
     end
 
-    # Constructor with preallocated views)
+    # Constructor with preallocated views
     function PopulationDetector(qstate::Array{ComplexF64},
                                 basis::Basis,
                                 atom::NLevelAtom,
@@ -87,7 +87,7 @@ PopulationDetectorSpec(atom::AbstractAtom;
     DetectorSpec{typeof(PopulationDetector)}(
         PopulationDetector,
         atom,                                # atom goes in obj (will be resolved)
-        (level = level, name = name),        # detector-specific parameters
+        (level = level, name = name),
         tspan,
         Float64,
         1

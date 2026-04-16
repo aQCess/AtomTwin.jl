@@ -28,14 +28,31 @@ compile time should implement:
 
 This protocol is used by node lifecycle methods and by value types stored
 inside nodes (e.g. `BeamRabiFrequency`, `GaussianPosition`, `MaxwellBoltzmann`).
-Nodes appear in `sys.nodes` and are compiled in insertion order, so
-dependencies (e.g. `BeamNode`) must be added before dependents (`CouplingNode`).
+Nodes appear in `sys.nodes` and are topologically sorted by `compile` before
+each simulation; insertion order is preserved for independent nodes.
 """
 
 abstract type AbstractNode end
 
 """Return the compiled output of a node (nothing if not yet built)."""
 node_output(::AbstractNode) = nothing
+
+"""
+    node_dependencies(node::AbstractNode) -> Vector{AbstractNode}
+
+Return nodes that must be compiled before `node`. The default returns no
+dependencies. Override for nodes whose value fields reference other nodes
+(e.g. `CouplingNode` with a `BeamRabiFrequency` Ω).
+"""
+node_dependencies(::AbstractNode) = AbstractNode[]
+
+"""
+    _extract_beam_node_deps(val) -> Vector{AbstractNode}
+
+Return any `BeamNode` that `val` depends on. The default returns nothing.
+Overridden for value types such as `BeamRabiFrequency` in `physics/couplings.jl`.
+"""
+_extract_beam_node_deps(::Any) = AbstractNode[]
 
 #=============================================================================
 SCALAR RESOLUTION HELPERS
@@ -146,6 +163,81 @@ function recompile_node!(node::CouplingNode, c::GlobalCoupling, rng, param_value
     else
         update!(c, Val(:_), Ω_val)
     end
+end
+
+#=============================================================================
+GAUSSIAN COUPLING NODE  (position-dependent Rabi frequency)
+=============================================================================#
+
+"""
+    GaussianCouplingNode
+
+Node for a spatially-varying coupling driven by a `GaussianBeam` or `GeneralGaussianBeam`.
+
+Peak Rabi frequency Ω₀ is computed at build time from `rabi_frequency(...)` unless
+`Ω0_override` is provided (useful when E1 selection rules underestimate the effective
+coupling due to state mixing). Each solver timestep `update!` rescales `_coeff` by the
+ratio of the current to build-time field scalar.
+"""
+mutable struct GaussianCouplingNode <: AbstractNode
+    atom::AbstractAtom
+    transition::Pair{<:AbstractLevel, <:AbstractLevel}
+    beam::AbstractBeam
+    q_axis::Vector{Float64}
+    d_red::Float64
+    g::Any
+    e::Any
+    Ω0_override::Union{Nothing, ComplexF64}
+    active::Bool
+    _field::Union{Nothing, GaussianCoupling}
+end
+
+GaussianCouplingNode(atom, transition, beam, q_axis, d_red, g, e;
+                     Ω0_override = nothing, active = true) =
+    GaussianCouplingNode(atom, transition, beam, q_axis, d_red, g, e,
+                         Ω0_override, active, nothing)
+
+node_output(n::GaussianCouplingNode) = n._field
+
+function build_node!(node::GaussianCouplingNode, basis::Basis)
+    node._field === nothing || return node._field
+    idx1 = node.atom.level_indices[node.transition[1]]
+    idx2 = node.atom.level_indices[node.transition[2]]
+    Ω0 = node.Ω0_override !== nothing ? node.Ω0_override :
+         ComplexF64(rabi_frequency(node.atom, node.g, node.e, node.beam, node.atom.x;
+                                   q_axis = node.q_axis, d_red = node.d_red))
+    c = GaussianCoupling(basis, node.atom.inner, idx1 => idx2, node.beam, Ω0)
+    c._amplitude[] = node.active ? ComplexF64(1.0) : ComplexF64(0.0)
+    node._field = c
+    return c
+end
+
+function compile_node!(node::GaussianCouplingNode, basis::Basis, ::Any, ::Any)
+    c = node._field
+    c === nothing && return build_node!(node, basis)
+    if node.Ω0_override === nothing
+        # Recompute Ω₀ and E₀ at current atom position (may differ between shots)
+        Ω0 = ComplexF64(rabi_frequency(node.atom, node.g, node.e, node.beam, node.atom.x;
+                                       q_axis = node.q_axis, d_red = node.d_red))
+        update!(c, Val(:_), Ω0)   # rescale H entries in-place
+        c.E0 = ComplexF64(Dynamiq.efield_scalar(node.beam, node.atom.x))
+    end
+    # Override: Ω0/E0 ratio fixed at build time; only reset amplitude
+    c._amplitude[] = node.active ? ComplexF64(1.0) : ComplexF64(0.0)
+    return c
+end
+
+function recompile_node!(node::GaussianCouplingNode, ::GaussianCoupling, ::Any, ::Any)
+    c = node._field
+    c === nothing && error("GaussianCouplingNode not compiled before recompile!")
+    if node.Ω0_override === nothing
+        Ω0 = ComplexF64(rabi_frequency(node.atom, node.g, node.e, node.beam, node.atom.x;
+                                       q_axis = node.q_axis, d_red = node.d_red))
+        update!(c, Val(:_), Ω0)
+        c.E0 = ComplexF64(Dynamiq.efield_scalar(node.beam, node.atom.x))
+    end
+    c._amplitude[] = node.active ? ComplexF64(1.0) : ComplexF64(0.0)
+    return c
 end
 
 #=============================================================================
@@ -471,6 +563,81 @@ function recompile_node!(node::InteractionNode, inter::Interaction, rng, param_v
 end
 
 #=============================================================================
+VdW INTERACTION NODE  (distance-dependent C6/r^6 interaction)
+=============================================================================#
+
+"""
+    VdWInteractionNode
+
+DAG node for a van der Waals interaction V(r) = C6 / r⁶.
+
+`C6` may be a plain `Float64`, a `Parameter`, or a `ParametricExpression`.
+The compiled `VdWInteraction` field recomputes its `_coeff` from the
+instantaneous inter-atom distance at every solver timestep.
+"""
+mutable struct VdWInteractionNode <: AbstractNode
+    C6::Any
+    atoms::Tuple{<:AbstractAtom, <:AbstractAtom}
+    transition::Pair
+    active::Bool
+    _field::Union{Nothing, VdWInteraction}
+    _current_value::ComplexF64
+    V_cap::Float64
+end
+
+VdWInteractionNode(C6, atoms, transition; active = true, V_cap = Inf) =
+    VdWInteractionNode(C6, atoms, transition, active, nothing, zero(ComplexF64), Float64(V_cap))
+
+node_output(n::VdWInteractionNode) = n._field
+
+function _vdw_transitions(node::VdWInteractionNode)
+    atom1, atom2 = node.atoms
+    from_tuple = node.transition.first
+    t1 = atom1.level_indices[from_tuple[1]] => atom1.level_indices[from_tuple[2]]
+    t2 = atom2.level_indices[from_tuple[1]] => atom2.level_indices[from_tuple[2]]
+    return t1, t2
+end
+
+function build_node!(node::VdWInteractionNode, basis::Basis)
+    node._field === nothing || return node._field
+    C6_val = Float64(real(ComplexF64(_resolve_node_default(node.C6))))
+    atom1, atom2 = node.atoms
+    t1, t2 = _vdw_transitions(node)
+    inter = VdWInteraction(basis, atom1.inner => atom2.inner, t1, t2, C6_val;
+                           V_cap = node.V_cap)
+    inter._coeff[] = node.active ? ComplexF64(C6_val) : ComplexF64(0)
+    node._field = inter
+    node._current_value = ComplexF64(C6_val)
+    return inter
+end
+
+function compile_node!(node::VdWInteractionNode, basis::Basis, rng, param_values)
+    C6_val = Float64(real(ComplexF64(_resolve_node_value(node.C6, param_values, rng))))
+    if node._field === nothing
+        atom1, atom2 = node.atoms
+        t1, t2 = _vdw_transitions(node)
+        inter = VdWInteraction(basis, atom1.inner => atom2.inner, t1, t2, C6_val;
+                               V_cap = node.V_cap)
+        inter._coeff[] = node.active ? ComplexF64(C6_val) : ComplexF64(0)
+        node._field = inter
+    else
+        node._field.C6    = C6_val
+        node._field.V_cap = node.V_cap
+        node._field._coeff[] = node.active ? ComplexF64(C6_val) : ComplexF64(0)
+    end
+    node._current_value = ComplexF64(C6_val)
+    return node._field
+end
+
+function recompile_node!(node::VdWInteractionNode, inter::VdWInteraction, rng, param_values)
+    C6_val = Float64(real(ComplexF64(_resolve_node_value(node.C6, param_values, rng))))
+    inter.C6    = C6_val
+    inter.V_cap = node.V_cap
+    inter._coeff[] = node.active ? ComplexF64(C6_val) : ComplexF64(0)
+    node._current_value = ComplexF64(C6_val)
+end
+
+#=============================================================================
 BEAM NODE  (resolves ParametricBeam to a concrete AbstractBeam)
 =============================================================================#
 
@@ -480,10 +647,10 @@ BEAM NODE  (resolves ParametricBeam to a concrete AbstractBeam)
 DAG node that resolves a `ParametricBeam` (or concrete beam) to a concrete
 `AbstractBeam` at compile/recompile time.
 
-Add a `BeamNode` to `sys.nodes` before any `CouplingNode` that depends on it.
 `BeamRabiFrequency` holds a reference to a `BeamNode` and reads
-`beam_node._compiled[]` when computing Rabi frequencies, so ordering is
-guaranteed by insertion order in `sys.nodes`.
+`beam_node._compiled[]` when computing Rabi frequencies. Compilation order
+is resolved automatically via topological sort; `BeamNode` does not need to
+be pushed before its dependents.
 
 `_resolve_beam_default`, `_resolve_beam`, `build_node!`, `compile_node!`, and
 `recompile_node!` for `BeamNode` are defined in `physics/beams.jl` (after
@@ -502,3 +669,63 @@ FALLBACK RECOMPILE (non-parametric nodes need no update)
 =============================================================================#
 
 recompile_node!(::AbstractNode, ::Any, ::Any, ::Any) = nothing
+
+#=============================================================================
+NODE DEPENDENCY OVERRIDES  (CouplingNode, NoisyCouplingNode, PlanarCouplingNode)
+=============================================================================#
+
+# These node types store Ω::Any which may be a BeamRabiFrequency (defined in
+# physics/couplings.jl). _extract_beam_node_deps is overridden there.
+node_dependencies(n::CouplingNode)       = _extract_beam_node_deps(n.Ω)
+node_dependencies(n::NoisyCouplingNode)  = _extract_beam_node_deps(n.Ω)
+node_dependencies(n::PlanarCouplingNode) = _extract_beam_node_deps(n.Ω)
+
+#=============================================================================
+TOPOLOGICAL SORT
+=============================================================================#
+
+"""
+    _topological_sort(nodes::Vector{AbstractNode}) -> Vector{AbstractNode}
+
+Return a topologically sorted copy of `nodes` using stable Kahn's algorithm.
+Nodes with no dependency relationship are emitted in their original insertion
+order. Does not mutate `nodes`.
+
+Throws if a cycle is detected or if `node_dependencies` returns a node not
+present in `nodes`.
+"""
+function _topological_sort(nodes::Vector{AbstractNode})
+    index = IdDict{AbstractNode, Int}(n => i for (i, n) in enumerate(nodes))
+    n = length(nodes)
+    in_degree = zeros(Int, n)
+    adj = [Int[] for _ in 1:n]
+    for (i, node) in enumerate(nodes)
+        for dep in node_dependencies(node)
+            j = get(index, dep, nothing)
+            j === nothing && error(
+                "node_dependencies returned a node not present in sys.nodes. " *
+                "Dependent: $(typeof(node)), missing dependency: $(typeof(dep)).")
+            push!(adj[j], i)
+            in_degree[i] += 1
+        end
+    end
+    # Start with all zero-in-degree nodes in insertion order
+    queue = Int[i for i in 1:n if in_degree[i] == 0]
+    result = AbstractNode[]
+    sizehint!(result, n)
+    while !isempty(queue)
+        i = popfirst!(queue)
+        push!(result, nodes[i])
+        for j in adj[i]
+            in_degree[j] -= 1
+            if in_degree[j] == 0
+                insert!(queue, searchsortedfirst(queue, j), j)
+            end
+        end
+    end
+    if length(result) < n
+        cycle_nodes = join([string(typeof(nodes[i])) for i in 1:n if in_degree[i] > 0], ", ")
+        error("Cycle detected in DAG node dependencies. Nodes involved: $cycle_nodes.")
+    end
+    return result
+end

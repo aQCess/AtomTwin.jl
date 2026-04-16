@@ -27,8 +27,12 @@ workflows with repeated executions, consider using [`compile`](@ref) followed by
 - `shots::Int = 1`: Number of Monte Carlo trajectory shots to execute
 - `density_matrix::Bool = false`: Use density matrix formalism if `true`, statevector if `false`
 - `savefinalstate::Bool = false`: Include final quantum states in output (increases memory usage)
-- `rng::AbstractRNG = Random.default_rng()`: Random number generator for reproducible simulations 
-- Additional `kwargs` are treated as parameter values for resolving `Deferred` objects and 
+- `rng::AbstractRNG = Random.default_rng()`: Random number generator for reproducible simulations
+- `shot_callback::Union{Nothing,Function} = nothing`: Optional callback invoked after each completed
+  trajectory as `shot_callback(shot, shots)`, where `shot` is the 1-based index and `shots` is the
+  total. Useful for progress reporting (e.g. `shot_callback = (s,n) -> @printf "shot %d/%d\\n" s n`).
+  In multithreaded runs the callback is still called per shot but invocation order is non-deterministic.
+- Additional `kwargs` are treated as parameter values for resolving `Deferred` objects and
   other parametric components in the system and sequence
 
 # Returns
@@ -87,20 +91,22 @@ pulse = Pulse(RabiField(amplitude=Ω_param, detuning=0.0), duration=1.0)
 # Run with specific parameter value
 result = play(sys, seq; initial_state=g, amplitude=2π*2.0)
 """
-function play(sys::System, seq::Sequence; 
+function play(sys::System, seq::Sequence;
                 initial_state=sys.initial_state,
                 density_matrix=false,
                 rng=Random.default_rng(),
+                shot_callback::Union{Nothing,Function}=nothing,
                 kwargs...)
 
     # Sanitize initial_state to a vector
     s = _tovector(initial_state)
     if isempty(s)
-        @warn "Initial state not specified. Defaulting to classical dynamics."
+        @warn "Initial state not specified. Defaulting to classical dynamics." maxlog=1
     end
-    
+
     job = compile(sys, seq; initial_state = s, density_matrix=density_matrix, rng=rng, kwargs...)
-    return play(job, sys; initial_state = s, density_matrix=density_matrix, rng=rng, kwargs...)
+    return play(job, sys; initial_state = s, density_matrix=density_matrix, rng=rng,
+                shot_callback=shot_callback, kwargs...)
 end
 
 function _execute_shot!(shot, local_job, sys, shot_rng, initial_state, all_outputs_vec, 
@@ -123,10 +129,20 @@ function play(job::SimulationJob, sys::System;
               savefinalstate::Bool=false,
               shots::Int = 1,
               density_matrix = false,
-              initial_state = sys.initial_state,
+              initial_state = nothing,
               parallel_thresh = PARALLEL_THRESH,
               rng = Random.default_rng(),
+              shot_callback::Union{Nothing,Function}=nothing,
               kwargs...)
+
+    # Update sys.state[] so recompile! picks it up for all shots.
+    # For multi-shot without an explicit initial_state, save job.state (the compile-time
+    # initial state, before _play mutates it) so recompile! always sees the right type.
+    if initial_state !== nothing && !isempty(_tovector(initial_state)) && job.state !== nothing
+        sys.state[] = getqstate(sys, _tovector(initial_state); density_matrix=density_matrix)
+    elseif shots > 1 && job.state !== nothing
+        sys.state[] = copy(job.state)
+    end
 
     @assert shots > 0 "shots must be positive"
     
@@ -148,12 +164,12 @@ function play(job::SimulationJob, sys::System;
     n_detectors = length(job.detectors[1])
     det_names = [job.detectors[1][j].name for j in 1:n_detectors]
     
-    # Allocate output storage
+    # Allocate output storage sized from the full detector_outputs (spans all instructions)
     all_outputs_vec = [
-        let single_shot_vals = job.detectors[1][j].vals
-            ndims(single_shot_vals) == 1 ?
-                zeros(eltype(single_shot_vals), n_times, shots) :
-                zeros(eltype(single_shot_vals), n_times, size(single_shot_vals, 2), shots)
+        let full_vals = job.detector_outputs[det_names[j]]
+            ndims(full_vals) == 1 ?
+                zeros(eltype(full_vals), length(full_vals), shots) :
+                zeros(eltype(full_vals), size(full_vals, 1), size(full_vals, 2), shots)
         end
         for j in 1:n_detectors
     ]
@@ -190,28 +206,26 @@ function play(job::SimulationJob, sys::System;
         Threads.@threads for shot in 1:shots
             tid = Threads.threadid()
             if shot != 1
-                recompile!(thread_jobs[tid], sys; 
-                                density_matrix=density_matrix, 
-                                initial_state=initial_state, 
-                                rng=shot_rngs[shot], 
+                recompile!(thread_jobs[tid], sys;
+                                rng=shot_rngs[shot],
                                 kwargs...)
             end
-            _execute_shot!(shot, thread_jobs[tid], sys, shot_rngs[shot], initial_state, 
-                        all_outputs_vec, det_names, n_detectors, final_states, 
+            _execute_shot!(shot, thread_jobs[tid], sys, shot_rngs[shot], initial_state,
+                        all_outputs_vec, det_names, n_detectors, final_states,
                         savefinalstate; kwargs...)
+            shot_callback !== nothing && shot_callback(shot, shots)
         end
     else
         for shot in 1:shots
             if shot != 1
-                recompile!(job, sys; 
-                                density_matrix=density_matrix, 
-                                initial_state=initial_state, 
-                                rng=shot_rngs[shot], 
+                recompile!(job, sys;
+                                rng=shot_rngs[shot],
                                 kwargs...)
             end
-            _execute_shot!(shot, job, sys, shot_rngs[shot], initial_state, 
-                        all_outputs_vec, det_names, n_detectors, final_states, 
+            _execute_shot!(shot, job, sys, shot_rngs[shot], initial_state,
+                        all_outputs_vec, det_names, n_detectors, final_states,
                         savefinalstate; kwargs...)
+            shot_callback !== nothing && shot_callback(shot, shots)
         end
     end
 
@@ -233,32 +247,41 @@ Returns a NamedTuple with:
 - `times`: Vector{Float64} of time points
 - `final_state`: Copy of final quantum state (only if savefinalstate=true)
 """
-function _play(job::SimulationJob; 
+function _play(job::SimulationJob;
                 savefinalstate::Bool=false,
+                frozen::Union{Nothing,Bool}=nothing,
                 rng=Random.MersenneTwister())
 
     n_instructions = length(job.modifiers)
     if job.state === nothing
         # Classical evolution
         @inbounds for i in 1:n_instructions
+            for m in job.boundary_modifiers[i]; begin_instruction!(m); end
             evolve!(job.atoms, job.local_tspans[i];
-                    beams=job.beams, modifiers=job.modifiers[i], 
-                    detectors=job.detectors[i], rng=rng, frozen=false)
+                    beams=job.beams, modifiers=job.modifiers[i],
+                    detectors=job.detectors[i], rng=rng, frozen=false,
+                    downsample=job.downsamples[i])
+            for m in job.boundary_modifiers[i]; end_instruction!(m); end
         end
     else
         # Quantum/semiclassical evolution
-        frozen = isempty(job.beams) && all(
-            isapprox(sum(abs2, atom.v), 0.0; atol=1e-14)
-            for atom in job.atoms
-        )
+        # Semi-classical (frozen=false) only when atoms are moving AND beams have
+        # wavelengths matching atom polarizabilities; otherwise atoms stay fixed.
+        # `frozen` kwarg overrides the automatic detection when provided.
+        frozen = something(frozen, !(
+            any(a -> !isapprox(sum(abs2, a.v), 0.0; atol=1e-14), job.atoms) &&
+            any(b -> any(a -> haskey(a.alpha, getwavelength(b)), job.atoms), job.beams)
+        ))
         @inbounds for i in 1:n_instructions
+            for m in job.boundary_modifiers[i]; begin_instruction!(m); end
             evolve!((job.state, job.atoms), job.local_tspans[i];
                     fields=job.fields, beams=job.beams, jumps=job.jumps,
-                    modifiers=job.modifiers[i], detectors=job.detectors[i], 
-                    rng=rng, frozen=frozen)
+                    modifiers=job.modifiers[i], detectors=job.detectors[i],
+                    rng=rng, frozen=frozen, downsample=job.downsamples[i])
+            for m in job.boundary_modifiers[i]; end_instruction!(m); end
         end
     end
-    
+
     final_state = savefinalstate ? copy(job.state) : nothing
     return (detectors = job.detector_outputs, times = job.times, final_state = final_state)
 end

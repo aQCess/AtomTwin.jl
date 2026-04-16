@@ -34,14 +34,14 @@ include("Dynamiq/Dynamiq.jl")
 # Import from Dynamiq submodule
 import .Dynamiq: GaussianBeam, GeneralGaussianBeam
 using .Dynamiq: PlanarBeam
-using .Dynamiq: GlobalCoupling, PlanarCoupling, Detuning, Interaction
+using .Dynamiq: GlobalCoupling, PlanarCoupling, Detuning, Interaction, VdWInteraction, GaussianCoupling
 using .Dynamiq: Jump, AbstractAtom, NLevelAtom, Basis, Op
 using .Dynamiq: productstate, build_detector, evolve!
 using .Dynamiq: getposition, getwavelength, getbeams
 using .Dynamiq: AbstractModifier, AbstractBeam
 using .Dynamiq: DetectorSpec, AbstractDetector
 using .Dynamiq: PopulationDetector, CoherenceDetector
-using .Dynamiq: MoveModifier, AmplitudeModifier, PositionModifier
+using .Dynamiq: MoveModifier, AmplitudeModifier, AbstractBoundaryModifier, SetModifier, ResetModifier, PositionModifier, begin_instruction!, end_instruction!
 using .Dynamiq: Units; export Units
 
 import Base: copy
@@ -75,7 +75,7 @@ include("tomography.jl")
 
 # Export beams and fields
 export GaussianBeam, GeneralGaussianBeam, PlanarBeam
-export GlobalCoupling, PlanarCoupling, Detuning, Interaction
+export GlobalCoupling, PlanarCoupling, Detuning, Interaction, VdWInteraction, GaussianCoupling
 
 # Export quantum types
 export Jump, AbstractAtom, NLevelAtom, Basis
@@ -87,7 +87,7 @@ export Units
 
 # Export modifiers
 export AbstractModifier, AbstractBeam
-export MoveModifier, AmplitudeModifier, PositionModifier
+export MoveModifier, AmplitudeModifier, AbstractBoundaryModifier, SetModifier, ResetModifier, PositionModifier
 
 # Export detectors
 export DetectorSpec, AbstractDetector
@@ -134,9 +134,9 @@ export play
 
 # Export physics utilities
 export add_zeeman_detunings!
-export add_coupling!, add_detuning!
+export add_coupling!, add_detuning!, rabi_frequencies
 export add_decay!, add_dephasing!
-export add_interaction!
+export add_interaction!, add_vdwinteraction!
 
 # Export sequence instructions
 export Sequence, @sequence

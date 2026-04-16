@@ -6,7 +6,8 @@ export Hz, kHz, MHz, GHz, THz,
        kg, g, mg,
        W, mW, µW,
        J, mJ, µJ,
-       K, mK, µK, nK
+       K, mK, µK, nK,
+       G
 export hbar, h, c, kb, ε0, μ0, e,
        amu, a0, m_e, m_p, µB
 
@@ -229,6 +230,16 @@ Energy unit: microjoule.
 - Definition: \\(1\\,\\text{µJ} = 10^{-6}\\,\\text{J}\\).
 """
 const µJ = 1.0e-6
+
+
+"""
+    G
+
+Energy unit: Gauss.
+
+- Definition: \\(1\\,\\text{G} = 10^{-4}\\,\\text{T}\\).
+"""
+const G = 1.0e-4
 
 """
     K

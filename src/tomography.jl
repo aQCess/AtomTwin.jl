@@ -53,7 +53,7 @@ Returns a vector of estimated output density matrices (one per input state).
 
 All additional keyword arguments are forwarded to `play`.
 """
-function simulate_process(sys, seq, input_states; density_matrix=nothing, shots=1, kwargs...)
+function simulate_process(sys, seq, input_states; density_matrix=nothing, shots=1, rng=nothing, kwargs...)
     # Set default for density_matrix if not provided
     _density_matrix = isnothing(density_matrix) ? (shots == 1) : density_matrix
 
@@ -63,23 +63,26 @@ function simulate_process(sys, seq, input_states; density_matrix=nothing, shots=
     # Save sys.state[] so process_tomography does not leave sys mutated.
     saved_state = sys.state[]
 
+    # Use an explicit MersenneTwister (not the task-local default_rng) so that
+    # Threads.@threads task-spawning inside play cannot perturb the RNG state
+    # between the four sequential play calls. Without this, the variable number
+    # of RNG draws consumed by @threads would make recompile! see a different
+    # Ω draw before each play call, breaking determinism across test runs.
+    sim_rng = something(rng, Random.MersenneTwister(rand(Random.default_rng(), UInt)))
+
     # Compile once with first state
     job = compile(sys, seq; initial_state=[input_states[1]],
-                  density_matrix=_density_matrix, kwargs...)
+                  density_matrix=_density_matrix, rng=sim_rng, kwargs...)
     # Warn once if needed
     if !_density_matrix && shots == 1
         @warn "Too few shots to construct density matrix" maxlog=1
     end
 
     for (idx, stvec) in enumerate(input_states)
-        # Use play to handle all multi-shot logic
-        recompile!(job, sys;
-                    density_matrix=_density_matrix,
-                    initial_state=[stvec],
-                    kwargs...)
+        sys.state[] = getqstate(sys, [stvec]; density_matrix=_density_matrix)
+        recompile!(job, sys; rng=sim_rng, kwargs...)
 
-        result = play(job, sys; savefinalstate=true, shots=shots,
-                     initial_state=[stvec], kwargs...)
+        result = play(job, sys; savefinalstate=true, shots=shots, rng=sim_rng, kwargs...)
         states = result.final_states
 
         if _density_matrix

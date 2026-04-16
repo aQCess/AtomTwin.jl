@@ -72,7 +72,7 @@ export BlockadeCoupling
 export Detuning
 export StarkShiftAC
 export NLevelAtom
-export Interaction
+export Interaction, VdWInteraction, GaussianCoupling
 
 include("atomlight.jl")
 
@@ -83,6 +83,11 @@ include("atomlight.jl")
 export PositionModifier
 export MoveModifier
 export AmplitudeModifier
+export AbstractBoundaryModifier
+export SetModifier
+export ResetModifier
+export begin_instruction!
+export end_instruction!
 
 include("./modifiers/positionmodifier.jl")
 include("./modifiers/movemodifier.jl")

@@ -19,6 +19,10 @@ end
     include(joinpath(unit_dir, "test_system.jl"))
 end
 
+@testset "DAG" begin
+    include(joinpath(unit_dir, "test_dag.jl"))
+end
+
 @testset "Physics" begin
     include(joinpath(unit_dir, "test_physics.jl"))
 end

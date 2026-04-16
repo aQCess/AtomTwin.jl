@@ -26,6 +26,28 @@ function update!(c::GlobalCoupling, ::Val, val::Number)
 end
 
 """
+    update!(c::GaussianCoupling, ::Val, new_Ω0)
+
+Rescale the operator entries of `c.H` to reflect a new peak Rabi frequency `new_Ω0`.
+Called by `compile_node!` when the atom's position (and hence Ω₀) has changed between shots.
+"""
+function update!(c::GaussianCoupling, ::Val, new_Ω0::Number)
+    new_Ω0 = ComplexF64(new_Ω0)
+    if c.Ω0 != 0
+        scale = new_Ω0 / c.Ω0
+        for k in eachindex(c.H.forward)
+            i, j, v = c.H.forward[k]
+            c.H.forward[k] = (i, j, v * scale)
+        end
+        for k in eachindex(c.H.reverse)
+            i, j, v = c.H.reverse[k]
+            c.H.reverse[k] = (i, j, v * scale)
+        end
+    end
+    c.Ω0 = new_Ω0
+end
+
+"""
     _add_coupling!(system, atom, level::Pair{<:AbstractLevel,<:AbstractLevel}, Ω;
                    beam = nothing, noise = nothing, active = true)
 
@@ -133,19 +155,22 @@ function rabi_frequency(
 end
 
 """
-    rabi_frequencies(atom, beam; q_axis=[0,0,1], d_red::Float64)
+    rabi_frequencies(beam; q_axis=[0,0,1], r0=nothing, d_red::Float64)
 
 Polarization-resolved Rabi frequencies for an effective E1 operator,
 independent of J/F. Returns (Ω_π, Ω_σ⁺, Ω_σ⁻) computed from the
 spherical components of the beam E-field and a reduced dipole `d_red`.
+
+By default evaluates at `beam.r0` (Gaussian beams) or the origin
+(`PlanarBeam`, which is spatially uniform).
 """
 function rabi_frequencies(
-    atom::AbstractAtom,
     beam;
     q_axis = [0.0, 0.0, 1.0],
+    r0 = hasproperty(beam, :r0) ? beam.r0 : zeros(3),
     d_red::Float64,
 )
-    E0, Eplus, Eminus = Efield_spherical(beam, atom.x; q_axis = q_axis)
+    E0, Eplus, Eminus = Efield_spherical(beam, r0; q_axis = q_axis)
 
     Ω_π  = -d_red * E0     / hbar
     Ω_σp = -d_red * Eplus  / hbar
@@ -434,6 +459,8 @@ struct BeamRabiFrequency
     d_red::Float64
 end
 
+_extract_beam_node_deps(f::BeamRabiFrequency) = AbstractNode[f.beam_node]
+
 function _resolve_node_default(f::BeamRabiFrequency)
     ComplexF64(rabi_frequency(f.atom, f.g, f.e, f.beam_node._compiled[], f.atom.x;
                               q_axis=f.q_axis, d_red=f.d_red))
@@ -499,6 +526,74 @@ function add_coupling!(
         push!(couplings, node._field)
     end
 
+    return couplings
+end
+
+"""
+    add_coupling!(system, atom, level::Pair{HyperfineManifold,HyperfineManifold};
+                  beam=nothing, Ω_π=nothing, Ω_p=nothing, Ω_m=nothing,
+                  d_red=nothing, q_axis=[0,0,1], active=true, tol=1e-10)
+
+Add electric-dipole couplings between hyperfine manifolds.
+
+- If only `beam` is given: Rabi frequencies are derived from the beam E-field
+  at the atom's position via `d_red` (required in this case).
+- If `Ω_π`/`Ω_p`/`Ω_m` are given without `beam`: uniform `GlobalCoupling`s
+  are created with those fixed amplitudes.
+- If both `beam` and `Ω_π`/`Ω_p`/`Ω_m` are given: position-dependent
+  `GaussianCouplingNode`s are created, with the explicit values overriding
+  the beam-derived Rabi frequencies (useful when selection rules underestimate
+  the effective coupling).
+- If neither `beam` nor any Ω is provided: an error is raised.
+"""
+function add_coupling!(
+    system, atom::AbstractAtom,
+    level::Pair{HyperfineManifold, HyperfineManifold};
+    beam::Union{AbstractBeam, Nothing} = nothing,
+    Ω_π = nothing,
+    Ω_p  = nothing,
+    Ω_m  = nothing,
+    q_axis::AbstractVector{<:Real} = [0.0, 0.0, 1.0],
+    d_red::Union{Float64, Nothing} = nothing,
+    active = true,
+    tol = 1e-10,
+)
+    beam === nothing && Ω_π === nothing && Ω_p === nothing && Ω_m === nothing &&
+        error("add_coupling!: provide at least one of `beam` or `Ω_π`/`Ω_p`/`Ω_m`")
+
+    ground, excited = level
+    q_axis_vec = Vector{Float64}(q_axis)
+    override_map = Dict{Int,Any}(0 => Ω_π, 1 => Ω_p, -1 => Ω_m)
+    couplings = Dynamiq.AbstractField[]
+
+    for g in ground.levels, e in excited.levels
+        Δm = e.mF - g.mF
+        abs(Δm) > 1 && continue
+        override = override_map[Δm]
+
+        Ω0 = if override !== nothing
+            ComplexF64(override)
+        else
+            # beam only — derive from beam E-field
+            isnothing(d_red) && error("d_red is required when Ω_π/Ω_p/Ω_m are not provided (Δm=$Δm)")
+            ComplexF64(rabi_frequency(atom, g, e, beam, atom.x; q_axis = q_axis_vec, d_red = d_red))
+        end
+
+        abs(Ω0) < tol && continue
+
+        if beam !== nothing
+            node = GaussianCouplingNode(atom, g => e, beam, q_axis_vec,
+                                        something(d_red, 0.0), g, e;
+                                        Ω0_override = override !== nothing ? Ω0 : nothing,
+                                        active = active)
+            build_node!(node, system.basis)
+            push!(system, node)
+            push!(couplings, node._field)
+        else
+            _add_coupling!(system, atom, g => e, Ω0; active = active)
+            push!(couplings, system.nodes[end]._field)
+        end
+    end
     return couplings
 end
 

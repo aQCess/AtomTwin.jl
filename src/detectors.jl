@@ -24,10 +24,7 @@ This converts `level` to its integer index via `atom.level_indices` and
 constructs a `Dynamiq.PopulationDetectorSpec` with that index.
 """
 function PopulationDetectorSpec(atom::AbstractAtom, level::AbstractLevel; name::String="")
-    # Convert Level to integer index
     level_idx = atom.level_indices[level]
-    
-    # Call Dynamiq's constructor with integer level
     return Dynamiq.PopulationDetectorSpec(atom; level=level_idx, name=name)
 end
 
