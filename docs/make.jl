@@ -92,4 +92,5 @@ deploydocs(
     repo = "github.com/aQCess/AtomTwin.jl.git",
     devbranch = "main",
     push_preview = false,
+    forcepush = true,
 )
