@@ -256,6 +256,7 @@ function _play(job::SimulationJob;
     if job.state === nothing
         # Classical evolution
         @inbounds for i in 1:n_instructions
+            isempty(job.local_tspans[i]) && continue
             for m in job.boundary_modifiers[i]; begin_instruction!(m); end
             evolve!(job.atoms, job.local_tspans[i];
                     beams=job.beams, modifiers=job.modifiers[i],
@@ -273,6 +274,7 @@ function _play(job::SimulationJob;
             any(b -> any(a -> haskey(a.alpha, getwavelength(b)), job.atoms), job.beams)
         ))
         @inbounds for i in 1:n_instructions
+            isempty(job.local_tspans[i]) && continue
             for m in job.boundary_modifiers[i]; begin_instruction!(m); end
             evolve!((job.state, job.atoms), job.local_tspans[i];
                     fields=job.fields, beams=job.beams, jumps=job.jumps,

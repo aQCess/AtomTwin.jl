@@ -27,7 +27,7 @@ per-step increments that are added to the beam position.
 """
 struct MoveModifier <: AbstractModifier
     beam::AbstractBeam
-    vals::Vector{Vector{Float64}}
+    vals::Matrix{Float64}   # 3 × n_steps, contiguous increments
     tspan::Vector{Float64}
     dims::Vector{Int}
 
@@ -37,30 +37,26 @@ struct MoveModifier <: AbstractModifier
                           dims = [1:3...],
                           schedule = s -> s)
 
-        # Guard against empty or single-point tspan
         length(tspan) ≥ 2 ||
             error("MoveModifier: tspan must contain at least two time points")
 
-        # Total duration (might be small)
-        T = tspan[end] - tspan[1]
-        @assert T>0 "Move interval cannot be zero"
+        T  = tspan[end] - tspan[1]
+        @assert T > 0 "Move interval cannot be zero"
 
-        # Build route with normalized time s ∈ [0,1]
-        # s_k = (t_k - t_0) / T, so s_1 = 0, s_end = 1
-        route = Vector{Vector{Float64}}(undef, length(tspan))
-        t0    = tspan[1]
-        for (i, t) in enumerate(tspan)
-            s = (t - t0) / T
-            route[i] = schedule(s) * displacement
+        n  = length(tspan) - 1
+        t0 = tspan[1]
+        vals = Matrix{Float64}(undef, 3, n)
+        s_prev = schedule(0.0)
+        for i in 1:n
+            s_next = schedule((tspan[i + 1] - t0) / T)
+            Δs = s_next - s_prev
+            @inbounds for d in 1:3
+                vals[d, i] = Δs * displacement[d]
+            end
+            s_prev = s_next
         end
 
-        # Increments between successive route points
-        vals = diff(route)  # length = length(tspan) - 1
-
-        # Use the left edges of each increment as internal tspan
-        internal_tspan = tspan[1:end-1]
-
-        return new(beam, vals, internal_tspan, dims)
+        return new(beam, vals, tspan[1:end-1], dims)
     end
 end
 
@@ -68,12 +64,12 @@ end
     update!(m::MoveModifier, i)
 
 Increment the beam position `r0` at time step `i` by the stored displacement
-`m.vals[i]` on the components listed in `m.dims`, if `i` is within bounds.
+increment on the components listed in `m.dims`, if `i` is within bounds.
 """
 function update!(m::MoveModifier, i::Int)
-    if i <= length(m.vals)
-        for d in m.dims
-            m.beam.r0[d] += m.vals[i][d]
+    if i <= size(m.vals, 2)
+        @inbounds for d in m.dims
+            m.beam.r0[d] += m.vals[d, i]
         end
     end
 end
