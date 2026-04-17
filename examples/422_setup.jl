@@ -104,13 +104,13 @@ const ryd_amplitudes = cis.(-[
 const temperature = 3µK
 const xsep        = 10µm
 const ysep        = 10µm   # storage row separation (initial geometry)
-const ysep_gate   = 3µm    # gate separation (blockade regime)
+const ysep_gate   = 2µm    # gate separation (blockade regime)
 const P_ryd       = 20mW
 const w_ryd       = 12µm
 const Γ_ryd       = 1/(2π * 56µs)
 const pol_ryd     = [0.0, 1.0, 0.0]   # y-linear: equal σ⁺/σ⁻
 const B_vec       = [4.88G, 0.0, 0.0]
-const dt          = 0.05e-9            # simulation timestep
+const dt          = 0.005e-9            # simulation timestep
 
 # ── Derived quantities ────────────────────────────────────────────────────────
 

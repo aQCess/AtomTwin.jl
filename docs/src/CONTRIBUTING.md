@@ -59,7 +59,7 @@ This installs dependencies for AtomTwin, Dynamiq, and the documentation/examples
 To run the tests:
 
 ```bash
-julia --project=. -e 'using Pkg; Pkg.test("AtomTwin")'
+ATOMTWIN_RUN_EXAMPLES=true julia --project=. -e 'using Pkg; Pkg.test("AtomTwin")'
 ```
 
 This should exercise AtomTwin’s tests, including checks tied to `test/examples_src`.

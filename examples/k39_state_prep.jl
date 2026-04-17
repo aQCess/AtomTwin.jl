@@ -14,7 +14,7 @@ using Plots
 Δ = 2π * -6.7e6
 
 Gamma = 2π * 6.035e6          # Decay rate
-B = 2.0
+B = 2.0G
 
 pulse_duration = 0.5e-6        # seconds
 dt = 1e-9
