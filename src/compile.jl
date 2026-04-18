@@ -43,8 +43,9 @@ Returns a tuple `(moves, nsteps)` where `moves` is a vector of `MoveModifier`
 objects and `nsteps` is the number of steps for the move segment.
 """
 function move(atoms, beams, displacement, duration, sweep, dt)
-    @assert duration > 0 "duration must be positive, got $duration"
+    @assert duration ≥ 0 "duration must be non-negative, got $duration"
     @assert length(displacement) == 3 "displacement must be 3D vector"
+    duration == 0.0 && return (MoveModifier[], 0)
 
     # Resolve user input:
     if sweep isa Symbol && haskey(BUILTIN_SWEEPS, sweep)

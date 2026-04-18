@@ -31,6 +31,10 @@ end
     include(joinpath(unit_dir, "test_motion.jl"))
 end
 
+@testset "Paper listings" begin
+    include(joinpath(unit_dir, "test_paper.jl"))
+end
+
 checksum(vec::AbstractVector{<:Number}) = begin
     h = UInt(0)
     @inbounds for (i, x) in pairs(vec)

@@ -26,7 +26,7 @@ using Plots
 A_hfs  = 2π * 4.5e9    # Hyperfine splitting between excited manifolds
 Γ_3D1  = 2π * 6.9e6    # ³D₁ natural linewidth (~23 ns lifetime)
 η_leak = 0.36          # Branching to ³P₁,₂ (leakage fraction)
-B      = 0.0           # Magnetic field in Gauss
+B      = 0.0G          # Magnetic field in Gauss
 
 dt      = 0.005e-9
 T_total = 1.31e-6    # Total evolution time (s)

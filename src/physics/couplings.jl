@@ -79,8 +79,18 @@ function _add_coupling!(
         return nothing
     end
 
-    node = if beam isa PlanarBeam
-        PlanarCouplingNode(Ω, atom, level, beam; active=active)
+    node = if beam isa AbstractBeam
+        # Scale Ω by beam amplitude at the atom's initial position relative to the
+        # beam reference point.  GaussianCouplingNode then tracks amplitude changes
+        # as the atom moves within a shot via efield_scalar(beam, atom.x) / E0.
+        # For PlanarBeam, efield_scalar = E_field * cis(k·r), so this correctly
+        # captures the Doppler phase cis(k·Δx) as the atom moves.
+        r0    = hasproperty(beam, :r0) ? beam.r0 : zeros(3)
+        E_ref = Dynamiq.efield_scalar(beam, r0)
+        Ω_eff = iszero(abs(E_ref)) ? ComplexF64(Ω) :
+                ComplexF64(Ω) * Dynamiq.efield_scalar(beam, atom.x) / E_ref
+        GaussianCouplingNode(atom, level, beam, [0.0, 0.0, 1.0], 0.0, level[1], level[2];
+                             Ω0_override = Ω_eff, active = active)
     elseif noise isa AbstractNoiseModel
         NoisyCouplingNode(Ω, atom, level, noise; active=active)
     else
