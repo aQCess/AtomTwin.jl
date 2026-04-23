@@ -3,7 +3,7 @@
 [![CI](https://github.com/aQCess/AtomTwin.jl/actions/workflows/CI.yml/badge.svg)](https://github.com/aQCess/AtomTwin.jl/actions/workflows/CI.yml)
 [![Docs](https://img.shields.io/badge/docs-stable-blue.svg)](https://aQCess.github.io/AtomTwin.jl/stable/)
 
-AtomTwin is an open‑source **quantum EDA and physics level digital‑twin for neutral‑atom quantum processors**, focused on realistic, physics‑first simulation of atoms, tweezers, and laser control, including atomic motion, realistic level structures, laser noise, and more. While the primary focus is on neutral‑atom arrays, AtomTwin can model a broad class of atomic quantum systems driven by laser fields, including trapped ions, atomic clocks, quantum memories, interfaces, and sensors. It enables hardware and firmware developers to design, test, and validate low‑level, firmware‑like instructions without manually specifying Hamiltonians, bridging ideas to hardware‑realistic control sequences in a single environment. **AtomTwin sits between textbook models and lab hardware, providing vendor‑agnostic, physics‑level digital twins of atomic quantum devices rather than a generic circuit‑level or Hamiltonian‑only simulator.**
+AtomTwin is an open‑source **quantum EDA and physics level digital‑twin framework for neutral‑atom quantum processors**, focused on realistic, physics‑first simulation of atoms, tweezers, and laser control, including atomic motion, realistic level structures, laser noise, and more. While the primary focus is on neutral‑atom arrays, AtomTwin can model a broad class of atomic quantum systems driven by laser fields, including trapped ions, atomic clocks, quantum memories, interfaces, and sensors. It enables hardware and firmware developers to design, test, and validate low‑level, firmware‑like instructions without manually specifying Hamiltonians, bridging ideas to hardware‑realistic control sequences in a single environment. **AtomTwin sits between textbook models and lab hardware, providing vendor‑agnostic, physics‑level digital twins of atomic quantum devices rather than a generic circuit‑level or Hamiltonian‑only simulator.**
 
 > **Status:** beta
 > **Homepage / Docs:** https://aQCess.github.io/AtomTwin.jl/stable/
@@ -195,8 +195,17 @@ AtomTwin has received support from:
 
 If you use AtomTwin in research or teaching, please cite the software directly:
 
-> AtomTwin.jl, version X.Y.Z, University of Strasbourg, 2026.
-> URL: https://github.com/aQCess/AtomTwin.jl
+```
+@misc{whitlock2026atomtwinjlphysicsnativedigitaltwin,
+      title={AtomTwin.jl: a physics-native digital twin framework for neutral-atom quantum processors}, 
+      author={Shannon Whitlock},
+      year={2026},
+      eprint={2604.18531},
+      archivePrefix={arXiv},
+      primaryClass={quant-ph},
+      url={https://arxiv.org/abs/2604.18531}, 
+}
+```
 
 ## License
 
@@ -207,5 +216,4 @@ AtomTwin is released under the Apache-2.0 license; see `LICENSE` for details.
 ## Contact
 
 - Lead maintainer: Shannon Whitlock, University of Strasbourg 
-- Lab / group: https://whitlockscientific.com
 - Project website: https://github.com/aQCess/AtomTwin.jl
