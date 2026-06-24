@@ -7,7 +7,8 @@ This object should not be constructed directly by users. Instead, use
 `compile(system, sequence; shots=1)` which handles optimization and memory preallocation.
 
 # Structure
-- **Runtime state** (reset between shots): `state`, `atoms`, `beams`
+- **Runtime state** (reset between shots): `state`, `atoms`, `beams` (restored from
+  `initial_state` / `initial_beams`)
 - **Execution structures** (shared across shots): `fields`, `jumps`, `modifiers`
 - **Detectors**: `detectors` (per-instruction), `detector_outputs` (views to results)
 - **Time grids**: `times` (global downsampled), `local_tspans` (per-instruction solver time grids)
@@ -32,6 +33,7 @@ struct SimulationJob{S}
     initial_state::S            # copy of state at compile time; used by recompile! to reset
     atoms::Vector{NLevelAtom}
     beams::Vector{AbstractBeam}
+    initial_beams::Vector{AbstractBeam}  # copies of trapping beams at compile time; restore moved/ramped beam state between shots
     fields::Vector{<:Dynamiq.AbstractField}
     jumps::Vector{Jump}
     modifiers::Vector{Any}          # Vector{Vector{AbstractModifier}} — inner-loop, passed to evolve!
@@ -235,8 +237,14 @@ function compile(sys::System, seq::Sequence;
         for j in 1:n_detectors
     )
 
+    # Snapshot the trapping beams' compile-time state (positions/amplitudes) so
+    # recompile! can restore them between shots: modifiers (Move/Position/Amplitude)
+    # mutate beam.r0 / beam._coeff in place, which would otherwise accumulate across
+    # trajectories. Coupling beams are rebuilt fresh by recompile! and need no snapshot.
+    initial_beams = AbstractBeam[copy(b) for b in resolved_trapping]
+
     return SimulationJob(qstate, qstate === nothing ? nothing : copy(qstate),
-                        atoms, resolved_beams, resolved_fields, resolved_jumps,
+                        atoms, resolved_beams, initial_beams, resolved_fields, resolved_jumps,
                         modifiers, boundary_modifiers, detectors, local_tspans,
                         detector_outputs, times, inst_ds)
 end
@@ -261,6 +269,14 @@ function recompile!(job::SimulationJob, sys::System;
                     kwargs...)
 
     param_values = Dict{Symbol, Any}(kwargs)
+
+    # Phase 0: restore trapping beams to their compile-time state. Inner-loop
+    # modifiers (Move/Position/Amplitude) mutate beam.r0/_coeff in place; without
+    # this the displacement/amplitude from one shot carries into the next (e.g. a
+    # MoveCol would step the tweezer an extra `delta` every trajectory).
+    for k in eachindex(job.initial_beams)
+        restore_beam!(job.beams[k], job.initial_beams[k])
+    end
 
     sorted_nodes = _topological_sort(sys.nodes)
 

@@ -145,7 +145,15 @@ function play(job::SimulationJob, sys::System;
     end
 
     @assert shots > 0 "shots must be positive"
-    
+
+    # Restore the job's trapping beams to their compile-time state before the first
+    # shot. Move/Position/Amplitude modifiers mutate beam.r0/_coeff in place, so
+    # replaying a job that was already run (or whose beams a prior shot moved) must
+    # start from the snapshot. recompile! repeats this for each subsequent shot.
+    for k in eachindex(job.initial_beams)
+        restore_beam!(job.beams[k], job.initial_beams[k])
+    end
+
     # Single-shot fast path
     if shots == 1
         shot_seed = rand(rng, UInt)

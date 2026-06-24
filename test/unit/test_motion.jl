@@ -68,3 +68,43 @@
         @test isapprox(ω_measured, ω_trap, rtol = 0.10)
     end
 end
+
+# Regression: a MoveCol must not accumulate the displacement across Monte Carlo
+# shots or across repeated `play` calls. Move modifiers mutate beam.r0 in place;
+# the compiled job must own private beam copies and restore them per shot so that
+# (a) every shot's tweezer ends at the same position and (b) the source System /
+# TweezerArray is never mutated.
+@testset "MoveCol resets beam position across shots and plays" begin
+    f0  = 8.3e6
+    dx  = 3e-6 / 1e6          # 3 µm/MHz
+    x0  = dx * f0
+    d   = 1e-6                # 1 µm move
+    Δf  = d / dx
+
+    tw = TweezerArray(λ = 759e-9, w0 = 0.7e-6, P_total = 1e-3,
+                      row_freqs = [0.0], col_freqs = [f0], dx = dx, dy = dx)
+    atom = Ytterbium171Atom(; levels = [Level("1S0")], x_init = [x0, 0.0, 0.0])
+    sys  = System([atom], [tw])
+    add_detector!(sys, MotionDetectorSpec(tw[1]; dims = [1], name = "twz"))
+
+    seq = Sequence(0.5e-6)
+    @sequence seq begin
+        MoveCol(tw, 1, Δf, 100e-6; sweep = :min_jerk)
+    end
+
+    x_target = x0 + d
+
+    # Multi-shot: every shot must end at the same (single-move) target, not x0 + s·d.
+    # 1D detector with shots>1 → Matrix indexed [time, shot].
+    out = play(sys, seq; initial_state = Level("1S0"), shots = 4)
+    twz_ends = [out.detectors["twz"][end, s] for s in 1:4]
+    @test all(isapprox.(twz_ends, x_target; atol = 1e-9))
+
+    # Source array must be pristine after the run (not left at the moved position)
+    @test isapprox(tw[1].r0[1], x0; atol = 1e-12)
+
+    # A second play on the same system must reproduce the first, not drift further
+    out2 = play(sys, seq; initial_state = Level("1S0"), shots = 1)
+    @test isapprox(out2.detectors["twz"][end], x_target; atol = 1e-9)
+    @test isapprox(tw[1].r0[1], x0; atol = 1e-12)
+end
