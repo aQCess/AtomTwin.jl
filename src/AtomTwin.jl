@@ -125,6 +125,7 @@ export getqstate, compile, getmatrix, gethamiltonian, getbasis
 # Export polarizability
 export PolarizabilityModel, PolarizabilityCurve
 export light_shift_coeff_Hz_per_Wcm2
+export scattering_rate_per_Wcm2
 export polarizability_au, polarizability_si
 
 # Export simulation

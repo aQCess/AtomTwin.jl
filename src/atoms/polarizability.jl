@@ -6,7 +6,7 @@ from empirical transition models.
 """
 
 using RecipesBase
-using ..Units: c, ε0, a0, h
+using ..Units: c, ε0, a0, h, hbar
 
 # ======================================================================
 # Data model
@@ -62,6 +62,55 @@ function _calc_light_shift(ω0::Float64, Γ::Float64, ωL::Float64)
 end
 
 """
+    _calc_scattering_rate(ω0, Γ, ωL) -> Float64
+
+Off-resonant photon-scattering contribution from a single electric-dipole
+transition, per unit intensity.
+
+Far-off-resonance result for a two-level transition (Grimm, Weidemüller &
+Ovchinnikov, *Adv. At. Mol. Opt. Phys.* **42**, 95 (2000), Eq. 11), retaining
+both rotating and counter-rotating terms so it is valid across the full
+wavelength range, not only in the rotating-wave limit:
+
+    Γ_sc / I = (3π c² / 2ħ ω₀³) (ωL/ω₀)³ ( Γ/(ω₀−ωL) + Γ/(ω₀+ωL) )²
+
+# Arguments
+- `ω0`: Transition angular frequency [rad/s].
+- `Γ` : Radiative linewidth (angular) [rad/s].
+- `ωL`: Laser angular frequency [rad/s].
+
+# Returns
+- `Γ_sc/I`: photon-scattering rate per intensity in (1/s)/(W/m²).
+"""
+function _calc_scattering_rate(ω0::Float64, Γ::Float64, ωL::Float64)
+    return (3 * π * c^2) / (2 * hbar * ω0^3) * (ωL / ω0)^3 *
+           (Γ / (ω0 - ωL) + Γ / (ω0 + ωL))^2
+end
+
+"""
+    _Gamma_sc_over_I(model::PolarizabilityModel, λ_nm::Real) -> Float64
+
+Total off-resonant photon-scattering rate per intensity Γ_sc/I for a given
+state model and wavelength, as an incoherent sum over the model's transitions.
+
+The incoherent (rate) sum is the standard far-detuned approximation: it is
+accurate when the laser is far from every line relative to the line spacings,
+which holds for a trap wavelength well away from all resonances. Returns
+(1/s)/(W/m²).
+"""
+function _Gamma_sc_over_I(model::PolarizabilityModel, λ_nm::Real)
+    ωL = 2π * c / (λ_nm * 1e-9)
+
+    Γsc_over_I = 0.0
+    for t in model.transitions
+        ω0 = 2π * t.freq_THz  * 1e12
+        Γ  = 2π * t.gamma_MHz * 1e6
+        Γsc_over_I += _calc_scattering_rate(ω0, Γ, ωL)
+    end
+    return Γsc_over_I
+end
+
+"""
     _U_over_I(model::PolarizabilityModel, λ_nm::Real) -> Float64
 
 Compute total light shift per intensity U/I for a given model and wavelength.
@@ -109,6 +158,30 @@ function light_shift_coeff_Hz_per_Wcm2(model::PolarizabilityModel, λ_nm::Real)
     U = _U_over_I(model, λ_nm)
     ν_over_I = U / h              # Hz/(W/m²)
     return ν_over_I * 1e4         # Hz/(W/cm²)
+end
+
+"""
+    scattering_rate_per_Wcm2(model::PolarizabilityModel, λ_nm::Real) -> Float64
+
+Off-resonant photon-scattering-rate coefficient Γ_sc/I in (1/s)/(W/cm²) for the
+given state model and wavelength.
+
+# Definition
+For a beam intensity `I` in W/cm², the off-resonant scattering rate is
+
+    Γ_sc = scattering_rate_per_Wcm2(model, λ_nm) * I        # rad/s? NO — 1/s
+
+`Γ_sc` is a real photon-scattering *rate* in s⁻¹ (events per second), not an
+angular frequency. It is computed from the same transition data used for the
+light shift (see [`_Gamma_sc_over_I`](@ref)).
+
+The light shift scales as Γ/Δ while the scattering rate scales as (Γ/Δ)²; for a
+far-detuned trap Γ_sc ≪ |Δν|, which is what makes a far-off-resonance dipole trap
+viable.
+"""
+function scattering_rate_per_Wcm2(model::PolarizabilityModel, λ_nm::Real)
+    Γsc_over_I = _Gamma_sc_over_I(model, λ_nm)   # (1/s)/(W/m²)
+    return Γsc_over_I * 1e4                       # (1/s)/(W/cm²)
 end
 
 """

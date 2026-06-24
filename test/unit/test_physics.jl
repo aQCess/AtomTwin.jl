@@ -319,3 +319,59 @@ end
     @test haskey(out.detectors, "P_e")
 end
 
+# ── Polarizability & off-resonant scattering (Yb-171) ─────────────────────────
+
+using AtomTwin.Units: c, hbar
+
+@testset "Yb-171 atom-facing polarizability methods resolve" begin
+    # Regression: these used a stale `Polarizability.` module qualifier and threw
+    # UndefVarError. They must now dispatch and return finite numbers.
+    yb = Ytterbium171Atom(; levels = [Level("1S0")])
+    for st in ("1S0", "3P0")
+        @test isfinite(light_shift_coeff_Hz_per_Wcm2(yb, st, 759.0))
+        @test isfinite(polarizability_au(yb, st, 759.0))
+        @test scattering_rate_per_Wcm2(yb, st, 759.0) > 0
+    end
+end
+
+@testset "759 nm is magic: 1S0 and 3P0 trap depths agree" begin
+    yb  = Ytterbium171Atom(; levels = [Level("1S0")])
+    ls1 = light_shift_coeff_Hz_per_Wcm2(yb, "1S0", 759.0)
+    ls3 = light_shift_coeff_Hz_per_Wcm2(yb, "3P0", 759.0)
+    @test ls1 < 0 && ls3 < 0                       # both states trapped (red shift)
+    @test abs(ls1 - ls3) / abs(ls1) < 0.01         # equal depth to <1% ⇒ magic
+end
+
+@testset "scattering_rate_per_Wcm2 matches independent Grimm sum" begin
+    # Hand-rolled Grimm-et-al. (2000) rate sum over the 3P0 transition table
+    # (Phys. Rev. A 108, 053325) — independent of the implementation under test.
+    trans = [(215.870446, 0.308), (461.867846, 1.516), (675.141040, 4.081),
+             (729.293151, 0.625), (797.204099, 22.889)]
+    λ  = 759.0
+    ωL = 2π * c / (λ * 1e-9)
+    ref = 0.0   # (1/s)/(W/m²)
+    for (fTHz, gMHz) in trans
+        ω0 = 2π * fTHz * 1e12; Γ = 2π * gMHz * 1e6
+        ref += (3π * c^2) / (2 * hbar * ω0^3) * (ωL/ω0)^3 *
+               (Γ/(ω0 - ωL) + Γ/(ω0 + ωL))^2
+    end
+    ref *= 1e4   # → per (W/cm²)
+    yb  = Ytterbium171Atom(; levels = [Level("1S0")])
+    got = scattering_rate_per_Wcm2(yb, "3P0", λ)
+    @test isapprox(got, ref; rtol = 1e-10)
+end
+
+@testset "per-line Grimm identity Γsc = (Γ/Δ)·U_dip/ħ" begin
+    # In the RWA far-detuned limit, a single line's scattering rate and light
+    # shift obey Γsc = (Γ/Δ)·U_dip/ħ exactly. Check on each 3P0 line.
+    trans = [(215.870446, 0.308), (461.867846, 1.516), (675.141040, 4.081),
+             (729.293151, 0.625), (797.204099, 22.889)]
+    ωL = 2π * c / (759.0 * 1e-9)
+    for (fTHz, gMHz) in trans
+        ω0 = 2π * fTHz * 1e12; Γ = 2π * gMHz * 1e6; Δ = ωL - ω0
+        Udip = (3π * c^2 / (2 * ω0^3)) * (Γ / Δ)          # J/(W/m²), RWA single line
+        Γsc  = (3π * c^2 / (2 * hbar * ω0^3)) * (Γ / Δ)^2 # 1/s/(W/m²), RWA single line
+        @test isapprox(abs(Γsc), abs((Γ/Δ) * Udip / hbar); rtol = 1e-12)
+    end
+end
+
