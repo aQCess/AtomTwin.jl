@@ -85,6 +85,23 @@ function copy(b::GaussianBeam)
 end
 
 """
+    restore_beam!(b, snapshot)
+
+Reset the mutable runtime state of beam `b` in place to that of `snapshot`
+(a `copy` taken at compile time): the center position `r0` and the complex
+amplitude `_coeff`. Used by `recompile!` to undo per-shot beam motion/ramps
+(`MoveModifier`, `PositionModifier`, `AmplitudeModifier`) so trajectories start
+from identical beam configurations. `b` and `snapshot` must be the same type.
+"""
+function restore_beam!(b::GaussianBeam, snapshot::GaussianBeam)
+    @inbounds for i in eachindex(b.r0)
+        b.r0[i] = snapshot.r0[i]
+    end
+    b._coeff[] = snapshot._coeff[]
+    return b
+end
+
+"""
     intensity(b::GaussianBeam, r)
 
 Intensity of the axis-aligned Gaussian beam at position `r`.
@@ -399,6 +416,20 @@ function copy(b::GeneralGaussianBeam)
     )
 end
 
+
+"""
+    restore_beam!(b::GeneralGaussianBeam, snapshot)
+
+Reset the mutable runtime state (`r0`, `_coeff`) of `b` in place to that of
+`snapshot`. See [`restore_beam!`](@ref) for `GaussianBeam`.
+"""
+function restore_beam!(b::GeneralGaussianBeam, snapshot::GeneralGaussianBeam)
+    @inbounds for i in eachindex(b.r0)
+        b.r0[i] = snapshot.r0[i]
+    end
+    b._coeff[] = snapshot._coeff[]
+    return b
+end
 
 """
     local_coords(r, b) -> (x′, y′)
