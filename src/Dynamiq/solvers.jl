@@ -308,20 +308,26 @@ function fquantum!(dt::Float64,
     # Hamiltonian commutator part
     fquantum!(dt, ρ, Hlist, _ρ1, _ρ2; order = order)
 
+    # Dissipator: forward-Euler step of Σⱼ 𝒟ⱼ[ρ], all terms evaluated at the SAME
+    # input ρ. Snapshot the post-Hamiltonian ρ into _ρ1 and read gain/loss from it;
+    # writing gain into ρ in place and then reading it back for the anticommutator
+    # breaks trace preservation (the two terms would act on different inputs).
     n = size(ρ, 1)
+    ρ_in = _ρ1
+    copyto!(ρ_in, ρ)
     for (coeff, L, LdagL_diag) in Jlist
         γ = dt * abs2(coeff[])
 
         # L ρ L† term
         @inbounds for (a, j, vL) in L.forward
             for (b, k, vR) in L.forward
-                ρ[a, b] += γ * vL * ρ[j, k] * conj(vR)
+                ρ[a, b] += γ * vL * ρ_in[j, k] * conj(vR)
             end
         end
 
         # -1/2 {L†L, ρ} term via precomputed diagonal of L†L
         @inbounds for i in 1:n, j in 1:n
-            ρ[i, j] -= 0.5 * γ * (LdagL_diag[i] + LdagL_diag[j]) * ρ[i, j]
+            ρ[i, j] -= 0.5 * γ * (LdagL_diag[i] + LdagL_diag[j]) * ρ_in[i, j]
         end
     end
 end

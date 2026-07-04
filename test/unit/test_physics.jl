@@ -83,6 +83,39 @@ end
     @test all(x -> 0.0 ≤ x ≤ 1.0 + 1e-8, out.detectors["P_e"])
 end
 
+@testset "Lindblad: pure dephasing is trace-preserving (DM dissipator)" begin
+    # Regression: the density-matrix dissipator applied L ρ L† in place and then
+    # read the modified ρ back for the -½{L†L,ρ} term, so the gain and loss acted
+    # on different inputs and the trace leaked (Tr ρ ≈ 0.96 at t=1µs, γ=2π·1MHz).
+    # Pure dephasing L = √γ|e⟩⟨e| must leave populations and trace exactly fixed
+    # and damp coherences at γ/2.
+    g, e = Level("g"), Level("e")
+    atom = Atom(; levels = [g, e])
+    sys  = System(atom)
+    γ = 2π * 1e6
+    add_dephasing!(sys, atom, e, γ)
+    add_detector!(sys, PopulationDetectorSpec(atom, g; name = "P_g"))
+    add_detector!(sys, PopulationDetectorSpec(atom, e; name = "P_e"))
+    add_detector!(sys, CoherenceDetectorSpec(atom, g => e; name = "coh"))
+    seq = Sequence(1e-9; downsample = 100)
+    @sequence seq begin
+        Wait(1e-6)
+    end
+
+    # Start in |+⟩ = (|g⟩+|e⟩)/√2: this is the case that exposed the bug — it has
+    # both population on the dephased level and a coherence to damp.
+    out = play(sys, seq; initial_state = (1/√2)*g + (1/√2)*e, density_matrix = true)
+
+    # Trace preserved at every recorded time (pre-fix leaked to Tr ≈ 0.96)
+    trace = out.detectors["P_g"] .+ out.detectors["P_e"]
+    @test all(isapprox.(trace, 1.0; atol = 1e-9))
+    # Pure dephasing leaves populations fixed (P_g = P_e = 1/2)
+    @test all(isapprox.(out.detectors["P_e"], 0.5; atol = 1e-9))
+    @test all(isapprox.(out.detectors["P_g"], 0.5; atol = 1e-9))
+    # Coherence damps at γ/2 (standard L=√γ|e⟩⟨e| convention), not γ
+    @test isapprox(abs(out.detectors["coh"][end]), 0.5 * exp(-γ * 1e-6 / 2); rtol = 1e-2)
+end
+
 # ── C. Selection rules ────────────────────────────────────────────────────────
 
 @testset "Selection rules: |ΔmF| > 1 returns zero coupling" begin
