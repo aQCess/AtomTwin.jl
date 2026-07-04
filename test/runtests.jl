@@ -15,6 +15,10 @@ end
     include(joinpath(unit_dir, "test_sequence.jl"))
 end
 
+@testset "Levels" begin
+    include(joinpath(unit_dir, "test_levels.jl"))
+end
+
 @testset "System" begin
     include(joinpath(unit_dir, "test_system.jl"))
 end

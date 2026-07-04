@@ -5,7 +5,7 @@ Specify internal levels and manifolds for simulations.
 # Global physical constants
 const BOHR_MAGNETON_RAD_S_TESLA = 2π * 1.39962e10  # ~1.4 MHz/Gauss in rad/s
 
-import Base: +, -, *
+import Base: +, -, *, /
 
 #=============================================================================
 CORE TYPES
@@ -93,26 +93,29 @@ struct Superposition <: AbstractLevel
 end
 
 # Simple algebra on levels to build superpositions like ℓ1 + ℓ2, 2ℓ1 - ℓ2, etc.
-# Scalar multiplication
+# Scalar multiplication. A bare level becomes a one-term superposition; a
+# Superposition is scaled coefficient-wise. The Superposition method must be more
+# specific than the AbstractLevel fallback (Superposition <: AbstractLevel),
+# otherwise `a * (ℓ1 + ℓ2)` would nest the superposition as a dict KEY instead of
+# scaling it — silently producing a malformed state. See test_levels.jl.
 *(a::Number, l::AbstractLevel) = Superposition(Dict(l => complex(a)))
+*(a::Number, s::Superposition) =
+    Superposition(Dict(l => a * c for (l, c) in s.coeffs))
+*(l::AbstractLevel, a::Number) = a * l            # commute (covers Superposition too)
+/(l::AbstractLevel, a::Number) = inv(a) * l       # e.g. (ℓ1 + ℓ2)/√2
+-(l::AbstractLevel) = -1 * l                      # unary minus
 
-# Level + Level returns a LevelSuperposition
+# A bare level promotes to a one-term superposition; `+` then merges coefficients.
+# Subtraction is defined as `a + (-1)*b` rather than `mergewith(-, …)`: `mergewith`
+# only applies its combiner where keys COLLIDE, so `mergewith(-, …)` silently kept
+# the WRONG SIGN on any non-overlapping term (e.g. 2ℓ1 - 0.5ℓ2 gave +0.5ℓ2). The
+# `a + (-1)*b` form is correct for every key overlap.  See test_levels.jl.
+_super(l::Superposition) = l
+_super(l::AbstractLevel)  = Superposition(Dict(l => complex(1.0)))
+
 +(l1::AbstractLevel, l2::AbstractLevel) =
-    Superposition(Dict(l1 => 1.0, l2 => 1.0))
--(l1::AbstractLevel, l2::AbstractLevel) =
-    Superposition(Dict(l1 => 1.0, l2 => -1.0))
-
-# Level + LevelSuperposition and vice versa
-+(l::AbstractLevel, s::Superposition) = Superposition(mergewith(+, Dict(l => 1.0), s.coeffs))
-+(s::Superposition, l::AbstractLevel) = l + s # commutes
--(l::AbstractLevel, s::Superposition) = Superposition(mergewith(-, Dict(l => 1.0), s.coeffs))
--(s::Superposition, l::AbstractLevel) = Superposition(mergewith(-, s.coeffs, Dict(l => 1.0)))
-
-# Addition of two superpositions
-+(s1::Superposition, s2::Superposition) =
-    Superposition(mergewith(+, s1.coeffs, s2.coeffs))
--(s1::Superposition, s2::Superposition) =
-    Superposition(mergewith(-, s1.coeffs, s2.coeffs))
+    Superposition(mergewith(+, _super(l1).coeffs, _super(l2).coeffs))
+-(l1::AbstractLevel, l2::AbstractLevel) = l1 + (-1) * l2
 
 
 #=============================================================================
