@@ -753,9 +753,14 @@ function wfmc(psi::Vector{ComplexF64},
 
     has_modifiers  = !isempty(modifiers)
     has_fields     = !isempty(fields)
-    has_detectors  = !isempty(detectors)
-    prep_detectors = [d for d in detectors if d isa PopulationDetector]
+    # PhotoDetectors are written only when their bound jump fires (see below), not
+    # every step, so keep them out of the per-step `write!` sweep.
+    photo_detectors = PhotoDetector[d for d in detectors if d isa PhotoDetector]
+    state_detectors = [d for d in detectors if !(d isa PhotoDetector)]
+    has_detectors  = !isempty(state_detectors)
+    prep_detectors = [d for d in state_detectors if d isa PopulationDetector]
     has_prep       = !isempty(prep_detectors)
+    has_photo      = !isempty(photo_detectors)
 
     @inbounds for i in 1:steps
         if has_modifiers
@@ -771,7 +776,18 @@ function wfmc(psi::Vector{ComplexF64},
         fquantum!(dt, psi, H, Hnh, _q1, _q2; order = order)
         n = norm(psi)
         if n^2 < rand(rng)
-            jump!(psi, jumps, _prob, _q1, _q2, rng)
+            fired = jump!(psi, jumps, _prob, _q1, _q2, rng)
+            # Record a click for any photo detector bound to the jump that fired.
+            # The click lands in the downsampled bin containing raw step i (cld);
+            # clicks are not averaged away by downsampling. When steps isn't an exact
+            # multiple of downsample, raw steps in the trailing partial bin have no
+            # own output slot — attribute those clicks to the last recorded bin so no
+            # click is silently lost (and no out-of-bounds write).
+            if has_photo
+                for d in photo_detectors
+                    d.jump === fired && write!(d, min(cld(i, downsample), length(d.vals)))
+                end
+            end
             n = norm(psi)
         end
         inv_n = 1.0 / n
@@ -785,7 +801,7 @@ function wfmc(psi::Vector{ComplexF64},
                     prep!(d)
                 end
             end
-            for d in detectors
+            for d in state_detectors
                 write!(d, i_out)
             end
         end
@@ -840,6 +856,11 @@ function wfmc_semiclassical(psi::Vector{ComplexF64},
 
     _prob = Weights(zeros(length(jumps)))
 
+    # PhotoDetectors are written on jump firing, not in the per-step sweep.
+    photo_detectors = PhotoDetector[d for d in detectors if d isa PhotoDetector]
+    state_detectors = [d for d in detectors if !(d isa PhotoDetector)]
+    has_photo       = !isempty(photo_detectors)
+
     for i in 1:steps
         for m in modifiers
             update!(m, i)
@@ -855,17 +876,22 @@ function wfmc_semiclassical(psi::Vector{ComplexF64},
         fquantum!(dt, psi, H, Hnh, _q1, _q2; order = order)
         n = norm(psi)
         if n^2 < rand(rng)
-            jump = jump!(psi, jumps, _prob, _q1, _q2, rng)
-            #recoil!(jump, rng)
-            for d in jump.detectors
-                write!(d, i)  # photo events are not downsampled
+            fired = jump!(psi, jumps, _prob, _q1, _q2, rng)
+            #recoil!(fired, rng)
+            # Record a click for any photo detector bound to the jump that fired.
+            # Clamp to the last bin so a click in a trailing partial bin isn't lost
+            # or written out of bounds (see the frozen `wfmc` for the rationale).
+            if has_photo
+                for d in photo_detectors
+                    d.jump === fired && write!(d, min(cld(i, downsample), length(d.vals)))
+                end
             end
             n = norm(psi)
         end
         psi ./= n
         if i % downsample == 0
             i_out = i ÷ downsample
-            for d in detectors
+            for d in state_detectors
                 if d isa PopulationDetector
                     prep!(d)
                 end

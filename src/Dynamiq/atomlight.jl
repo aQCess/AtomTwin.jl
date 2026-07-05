@@ -3,7 +3,7 @@
 #------------------------------------------------------------------------------
 
 """
-    Jump(b, atom, transition, rate; detectors = AbstractDetector[], blockade = 0)
+    Jump(b, atom, transition, rate; blockade = 0)
 
 Generic quantum jump process for a single atomic transition with decay rate `rate`.
 
@@ -11,6 +11,10 @@ The constructor builds the collapse operator `L` as an `Op` in basis `b`,
 optionally with a Rydberg blockade constraint on a given level. The same
 `Jump` object can be reused across different solvers, which may fill the
 cached non-Hermitian Hamiltonian or Lindblad diagonals for performance.
+
+Photon-click detection is handled from the detector side: a `PhotoDetector`
+holds a reference to the jump it counts (see `add_decay!(...; clicks = spec)`),
+so the jump itself carries no detector list.
 """
 mutable struct Jump
     atom::AbstractAtom
@@ -23,10 +27,8 @@ mutable struct Jump
     LdagL_diag::Union{Nothing,Vector{Float64}}  # diag(L†L) (QME)
 
     _coeff::Base.RefValue{ComplexF64}
-    detectors::Vector{AbstractDetector}
 
-    function Jump(b, atom, transition, rate;
-                  detectors = AbstractDetector[], blockade = 0)
+    function Jump(b, atom, transition, rate; blockade = 0)
 
         # Always build the collapse operator L
         J = Op(b, atom, transition, sqrt(rate); jump = true, blockade = blockade)
@@ -37,7 +39,7 @@ mutable struct Jump
 
         return new{}(atom, transition, J, Float64(rate),
                      Hnh, LdagL_diag,
-                     Ref(ComplexF64(1.0)), detectors)
+                     Ref(ComplexF64(1.0)))
     end
 end
 
@@ -272,6 +274,42 @@ end
 No-op update for static detuning terms. The coefficient remains fixed.
 """
 update!(::Detuning, ::Int) = nothing
+
+"""
+    Hamiltonian(H::Op)
+
+A Hamiltonian term supplied directly as an operator `H`, with no atom/transition
+structure of its own. Produced by `add_hamiltonian!` when a Hamiltonian is
+written as an explicit `Operator` (built from levels) or handed as a
+dense/sparse matrix.
+
+Unlike the physical fields (couplings, detunings, Stark shifts), a `Hamiltonian`
+carries no beam/atom recipe; it is just an operator that enters the dynamics.
+Structurally it participates in the field-evaluation path so the solver applies
+it as `_coeff[] * H.forward + conj(_coeff[]) * H.reverse` (see `fquantum!`),
+with `_coeff` a time-dependent scalar envelope (default `1`) that makes the term
+`Switchable`/pulse-drivable.
+
+!!! warning
+    `H` must be Hermitian for unitary/trace-preserving dynamics; `add_hamiltonian!`
+    checks this at build time. The term is applied as
+    `c * forward + conj(c) * reverse`, so a real, Hermitian `H` stays Hermitian
+    under a real `_coeff` but not under a complex one.
+"""
+mutable struct Hamiltonian <: AbstractField
+    H::Op
+    _coeff::Base.RefValue{ComplexF64}
+
+    Hamiltonian(H::Op) = new(H, Ref(ComplexF64(1.0)))
+end
+
+"""
+    update!(::Hamiltonian, step)
+
+No-op update: the operator is static and its coefficient is handled by the
+instruction layer (constant `1` unless pulsed).
+"""
+update!(::Hamiltonian, ::Int) = nothing
 
 """
     StarkShiftAC(b, atom, level, beam)

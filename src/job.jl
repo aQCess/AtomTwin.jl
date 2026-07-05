@@ -95,6 +95,16 @@ function compile(sys::System, seq::Sequence;
       
     param_values = Dict{Symbol,Any}(kwargs)
 
+    # Photo (click) detectors count individual quantum jumps, which only exist in
+    # the statevector / wavefunction Monte Carlo solver. The density-matrix solver
+    # integrates the smooth master equation with no discrete jumps, so a photo
+    # detector would silently record nothing. Fail loudly instead.
+    if density_matrix && any(s -> s.kind === Dynamiq.PhotoDetector, sys.detector_specs)
+        error("PhotoDetector (photon clicks) requires the statevector solver: call " *
+              "play(...; density_matrix = false). The density-matrix solver has no " *
+              "discrete quantum jumps to count.")
+    end
+
     cache = IdDict{Any, Any}()
 
     sorted_nodes = _topological_sort(sys.nodes)
@@ -120,6 +130,7 @@ function compile(sys::System, seq::Sequence;
     # Atom positions are now set; BeamNodes already compiled.
     resolved_fields = AtomTwin.Dynamiq.AbstractField[]
     resolved_jumps  = Jump[]
+    clicks_jumps    = Dict{String,Jump}()   # PhotoDetector name -> the jump it counts
 
     for node in sorted_nodes
         node isa BeamNode && continue  # already compiled
@@ -130,6 +141,9 @@ function compile(sys::System, seq::Sequence;
             AtomTwin.Dynamiq.precompute!(obj, Vector)
             AtomTwin.Dynamiq.precompute!(obj, Matrix)
             push!(resolved_jumps, obj)
+            if node isa DecayNode && node.clicks !== nothing
+                clicks_jumps[node.clicks] = obj
+            end
         end
     end
     resolved_fields = [obj for obj in resolved_fields]   # eltype inferred from content
@@ -230,6 +244,21 @@ function compile(sys::System, seq::Sequence;
                 view(detector_vals[j], vals_slice, :)
             build_detector(sys.detector_specs[j], ds_tspan, vals_view, resolve_target, sys)
         end)
+    end
+
+    # Bind each PhotoDetector to the jump it counts (from add_decay!(...; clicks=…)).
+    # Each per-instruction PhotoDetector holds a view into its own time segment and
+    # a direct ref to the shared jump; the solver, which already receives both the
+    # per-instruction detectors and the jumps, increments a detector only when its
+    # bound jump fires. deepcopy for the parallel path preserves this shared ref.
+    if !isempty(clicks_jumps)
+        for i in 1:n_instructions, d in detectors[i]
+            d isa Dynamiq.PhotoDetector || continue
+            j = get(clicks_jumps, d.name, nothing)
+            j === nothing && error("PhotoDetector \"$(d.name)\" is attached but not " *
+                "bound to a decay; pass it to add_decay!(...; clicks = spec).")
+            d.jump = j
+        end
     end
 
     detector_outputs = Dict{String, Any}(

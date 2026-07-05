@@ -35,12 +35,17 @@ include("Dynamiq/Dynamiq.jl")
 import .Dynamiq: GaussianBeam, GeneralGaussianBeam
 using .Dynamiq: PlanarBeam
 using .Dynamiq: GlobalCoupling, PlanarCoupling, Detuning, Interaction, VdWInteraction, GaussianCoupling
-using .Dynamiq: Jump, AbstractAtom, NLevelAtom, Basis, Op
+using .Dynamiq: Hamiltonian
+using .Dynamiq: Jump, AbstractAtom, NLevelAtom, Basis
+import .Dynamiq: Op   # extended with an (Operator, sys, atom) materialisation method in operators.jl
 using .Dynamiq: productstate, build_detector, evolve!
 using .Dynamiq: getposition, getwavelength, getbeams
 using .Dynamiq: AbstractModifier, AbstractBeam
 using .Dynamiq: DetectorSpec, AbstractDetector
 using .Dynamiq: PopulationDetector, CoherenceDetector
+using .Dynamiq: ExpectationDetector
+import .Dynamiq: ExpectationDetectorSpec   # extended with an (sys, atom, Operator) method in operators.jl
+using .Dynamiq: PhotoDetector, PhotoDetectorSpec
 using .Dynamiq: MoveModifier, AmplitudeModifier, AbstractBoundaryModifier, SetModifier, ResetModifier, PositionModifier, begin_instruction!, end_instruction!, restore_beam!
 using .Dynamiq: Units; export Units
 
@@ -69,6 +74,7 @@ include("physics/couplings.jl")
 include("physics/detunings.jl")
 include("physics/dissipators.jl")
 include("physics/interactions.jl")
+include("operators.jl")
 include("resolve.jl")
 include("Visualization.jl")
 include("tomography.jl")
@@ -94,6 +100,8 @@ export DetectorSpec, AbstractDetector
 export PopulationDetector, CoherenceDetector
 export PopulationDetectorSpec, CoherenceDetectorSpec
 export MotionDetectorSpec, FieldDetectorSpec
+export ExpectationDetector, ExpectationDetectorSpec
+export PhotoDetector, PhotoDetectorSpec
 export add_detector!
 
 # Export abstract types
@@ -114,6 +122,11 @@ export LaserPhaseNoiseModel
 export HyperfineManifold, FineManifold
 export Level, FineLevel, HyperfineLevel
 export Superposition
+# `Operator` is exported; the `transition`/`projector` constructors are NOT, because
+# they collide with QuantumOptics' exports (AtomTwin is routinely `using`-ed alongside
+# QuantumOptics for crosschecks). Use `AtomTwin.transition`/`AtomTwin.projector`, or the
+# collision-free ket–bra syntax `ket * bra'` (e.g. `l1 * l0'`), which needs no export.
+export Operator
 
 # Export tweezers
 export TweezerArray
@@ -121,6 +134,7 @@ export TweezerArray
 # Export system and compilation
 export System
 export getqstate, compile, getmatrix, gethamiltonian, getbasis
+export getjumps, getheffective, getliouvillian
 
 # Export polarizability
 export PolarizabilityModel, PolarizabilityCurve
@@ -138,6 +152,7 @@ export add_zeeman_detunings!
 export add_coupling!, add_detuning!, rabi_frequencies
 export add_decay!, add_dephasing!
 export add_interaction!, add_vdwinteraction!
+export add_hamiltonian!
 
 # Export sequence instructions
 export Sequence, @sequence

@@ -309,6 +309,18 @@ function compile(atoms, inst::Pulse, dt; resolve_target = identity)
     else
         # Shaped pulse: resample amplitude envelope onto tsteps points
         scaled = inst.ampl .* inst.amplitudes
+        # A shaped Pulse on a Detuning is the supported way to make a detuning
+        # time-dependent (δ(t) = amplitudes, in rad/s). A detuning operator is
+        # diagonal (no `reverse` part), so its coefficient must stay REAL: a
+        # complex value would apply an anti-Hermitian term and break unitarity /
+        # trace preservation silently. Guard it here.
+        if any(c -> c isa Detuning, resolved_couplings) &&
+           any(a -> abs(imag(a)) > 1e-12 * max(abs(a), 1.0), scaled)
+            error("Pulse on a Detuning must have real amplitudes: a detuning δ(t) is " *
+                  "real (rad/s). A complex amplitude makes the term non-Hermitian and " *
+                  "breaks unitarity. (A complex amplitude is only meaningful for a " *
+                  "coupling, where it is a relative phase.)")
+        end
         amplitude_vals = if inst.interp == :piecewise_constant
             interpolate_piecewise_constant(scaled, tsteps)
         else

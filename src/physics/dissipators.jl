@@ -3,18 +3,31 @@ Add dissipative jump operators to the system.
 """
 
 """
-    add_decay!(system, atom, level::Pair, Gamma; active = true)
+    add_decay!(system, atom, level::Pair, Gamma; active = true, clicks = nothing)
 
 Add a single spontaneous-emission jump operator between two specific levels.
 
 `Gamma` (rad/s) may be a plain number or a `Parameter`. Builds a `DecayNode`
 and appends it to `system.nodes`. Returns the compiled `Jump` object.
+
+Pass `clicks = spec`, where `spec` is a `PhotoDetectorSpec` already attached with
+`add_detector!`, to count this jump's firings as photon clicks in that detector
+(statevector / wavefunction Monte Carlo runs only).
 """
-function add_decay!(system, atom::AbstractAtom, level::Pair{<:AbstractLevel, <:AbstractLevel}, Gamma; active=true)
-    node = DecayNode(Gamma, atom, level; active=active)
+function add_decay!(system, atom::AbstractAtom, level::Pair{<:AbstractLevel, <:AbstractLevel}, Gamma;
+                    active=true, clicks=nothing)
+    node = DecayNode(Gamma, atom, level; active=active, clicks=_clicks_name(clicks))
     build_node!(node, system.basis)
     push!(system, node)
     return node._field
+end
+
+# Accept either a PhotoDetectorSpec (extract its name) or nothing.
+_clicks_name(::Nothing) = nothing
+function _clicks_name(spec::Dynamiq.DetectorSpec)
+    spec.kind === Dynamiq.PhotoDetector ||
+        error("add_decay!(...; clicks=...) expects a PhotoDetectorSpec.")
+    return spec.params.name
 end
 
 """

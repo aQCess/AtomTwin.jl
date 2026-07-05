@@ -119,6 +119,97 @@ _super(l::AbstractLevel)  = Superposition(Dict(l => complex(1.0)))
 
 
 #=============================================================================
+SYMBOLIC OPERATORS
+=============================================================================#
+"""
+    Bra
+
+Adjoint (dual) of a level or superposition, produced by `ℓ'`. A `Bra` only
+exists to be paired with a ket via the outer product `ket * bra`, which builds
+an [`Operator`](@ref); it carries the same coefficient dictionary as the
+underlying `Superposition`.
+"""
+struct Bra
+    coeffs::Dict{AbstractLevel, ComplexF64}
+end
+
+Base.adjoint(l::AbstractLevel) = Bra(_super(l).coeffs)
+Base.adjoint(b::Bra) = Superposition(Dict(l => conj(c) for (l, c) in b.coeffs))
+
+"""
+    Operator
+
+Symbolic, basis-free linear operator on the internal level space.
+
+`Operator` stores a dictionary mapping each ket–bra pair `ket => bra` (both
+`AbstractLevel`s) to a complex amplitude, so it represents
+`∑ c |ket⟩⟨bra|`. It is a purely symbolic object — the analogue of
+[`Superposition`](@ref) for operators — and is materialised into a concrete
+sparse [`Op`](@ref) only when attached to a system (via `add_hamiltonian!` or an
+`ExpectationDetectorSpec`), at which point levels are resolved to basis indices.
+
+Construct one with [`transition`](@ref) / [`projector`](@ref), or directly from
+the outer product of a ket and a bra, e.g. `ℓ2 * ℓ1'` for `|ℓ2⟩⟨ℓ1|`. Operators
+compose with `+`, `-`, scalar `*`, and adjoint `'`:
+
+    Sz = 0.5 * (projector(up) - projector(dn))     # ½(|↑⟩⟨↑| − |↓⟩⟨↓|)
+    Sx = 0.5 * (up * dn' + dn * up')               # ½(|↑⟩⟨↓| + |↓⟩⟨↑|)
+"""
+struct Operator
+    terms::Dict{Pair{AbstractLevel, AbstractLevel}, ComplexF64}
+end
+
+Operator() = Operator(Dict{Pair{AbstractLevel, AbstractLevel}, ComplexF64}())
+
+"""
+    projector(ℓ) -> Operator
+
+The projector `|ℓ⟩⟨ℓ|` onto level `ℓ` as a symbolic [`Operator`](@ref).
+"""
+projector(l::AbstractLevel) = Operator(Dict((l => l) => complex(1.0)))
+
+"""
+    transition(ℓfrom => ℓto) -> Operator
+
+The transition operator `|ℓto⟩⟨ℓfrom|` as a symbolic [`Operator`](@ref) — i.e.
+it takes population from `ℓfrom` to `ℓto`. Its adjoint is the reverse
+transition: `transition(a => b)' == transition(b => a)`.
+"""
+transition(p::Pair{<:AbstractLevel, <:AbstractLevel}) =
+    Operator(Dict((p.second => p.first) => complex(1.0)))
+
+# Outer product ket * bra → Operator. A bare ket is promoted to a one-term
+# superposition; the tensor of the ket coeffs and (conjugated-at-construction)
+# bra coeffs gives every |ket⟩⟨bra| contribution. Kept consistent with the
+# `transition`/`projector` convention (key = ket => bra).
+function *(ket::AbstractLevel, bra::Bra)
+    terms = Dict{Pair{AbstractLevel, AbstractLevel}, ComplexF64}()
+    for (lk, ck) in _super(ket).coeffs, (lb, cb) in bra.coeffs
+        key = lk => lb
+        terms[key] = get(terms, key, complex(0.0)) + ck * cb
+    end
+    return Operator(terms)
+end
+
+# Operator algebra (mirrors the Superposition rules).
+*(a::Number, O::Operator) = Operator(Dict(k => a * c for (k, c) in O.terms))
+*(O::Operator, a::Number) = a * O
+/(O::Operator, a::Number) = inv(a) * O
+-(O::Operator) = -1 * O
+
++(O1::Operator, O2::Operator) = Operator(mergewith(+, O1.terms, O2.terms))
+-(O1::Operator, O2::Operator) = O1 + (-1) * O2
+
+"""
+    adjoint(O::Operator) -> Operator
+
+Hermitian conjugate: `(|ket⟩⟨bra|)' = |bra⟩⟨ket|` with conjugated coefficients.
+"""
+Base.adjoint(O::Operator) =
+    Operator(Dict((k.second => k.first) => conj(c) for (k, c) in O.terms))
+
+
+#=============================================================================
 MANIFOLDS
 =============================================================================#
 

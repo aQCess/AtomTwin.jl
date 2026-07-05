@@ -10,6 +10,26 @@ Add a single detuning term for a given atomic level.
 `delta` is the physical detuning in rad/s. It may be a plain number,
 a `Parameter`, or a `ParametricExpression`. Builds a `DetuningNode` and
 appends it to `system.nodes`. Returns the compiled `Detuning` object.
+
+# Time-dependent detuning
+
+The returned `Detuning` is `Switchable`, so a detuning can be made
+time-dependent by driving it with a shaped `Pulse` — the same mechanism used to
+shape couplings. Create it inactive with unit base value, then supply the
+per-step detuning samples (in rad/s) as the pulse `amplitudes`:
+
+```julia
+δ = add_detuning!(sys, atom, level, 1.0; active = false)   # base 1.0 ⇒ amplitudes ARE δ(t)
+@sequence seq begin
+    Pulse(δ, T; amplitudes = A .* sin.(2π*f .* tgrid), interp = :piecewise_constant)
+end
+```
+
+Because the base value is `1.0`, the pulse `amplitudes` map one-to-one to the
+physical detuning δ(t). The amplitudes **must be real** (a detuning is a real,
+diagonal energy shift; a complex amplitude would make the term non-Hermitian and
+is rejected at compile time). `Pulse`'s `amplitudes` keyword reads as an
+amplitude envelope; for a detuning it is really a frequency-vs-time *sweep*.
 """
 function add_detuning!(system, atom::AbstractAtom, level::AbstractLevel, delta; active=true, tol=1e-10)
     node = DetuningNode(delta, atom, level; active=active)

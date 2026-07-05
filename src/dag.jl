@@ -420,6 +420,51 @@ function recompile_node!(node::DetuningNode, d::Detuning, rng, param_values)
 end
 
 #=============================================================================
+HAMILTONIAN NODE  (Hamiltonian — operator supplied directly)
+=============================================================================#
+
+"""
+    HamiltonianNode
+
+Node for a Hamiltonian term supplied as an explicit operator (see
+[`add_hamiltonian!`](@ref)). `H` is a concrete `Op` already dimensioned to the
+system basis; the node simply wraps it in a [`Hamiltonian`](@ref) field. The
+operator is parameter-free (materialised at `add_hamiltonian!` time), so
+compile/recompile only toggle the active coefficient.
+"""
+mutable struct HamiltonianNode <: AbstractNode
+    H::Op
+    active::Bool
+    _field::Union{Nothing, Hamiltonian}
+end
+
+HamiltonianNode(H::Op; active=true) = HamiltonianNode(H, active, nothing)
+
+node_output(n::HamiltonianNode) = n._field
+
+function build_node!(node::HamiltonianNode, basis::Basis)
+    node._field === nothing || return node._field
+    h = Hamiltonian(node.H)
+    h._coeff[] = ComplexF64(node.active ? 1.0 : 0.0)
+    node._field = h
+    return h
+end
+
+function compile_node!(node::HamiltonianNode, basis::Basis, rng, param_values)
+    if node._field === nothing
+        h = Hamiltonian(node.H)
+        h._coeff[] = ComplexF64(node.active ? 1.0 : 0.0)
+        node._field = h
+    end
+    return node._field
+end
+
+function recompile_node!(node::HamiltonianNode, h::Hamiltonian, rng, param_values)
+    # Operator is static and parameter-free; nothing to resample.
+    return h
+end
+
+#=============================================================================
 DECAY NODE  (Jump)
 =============================================================================#
 
@@ -427,18 +472,21 @@ DECAY NODE  (Jump)
     DecayNode
 
 Node for a spontaneous decay or dephasing jump operator. `Gamma` is the
-decay rate in rad/s.
+decay rate in rad/s. `clicks` optionally holds the name of a `PhotoDetector`
+(from a `PhotoDetectorSpec`) to which this jump's events are reported, so its
+firings are counted as photon clicks; `nothing` means no photon detector.
 """
 mutable struct DecayNode <: AbstractNode
     Gamma::Any
     atom::AbstractAtom
     transition::Pair{<:AbstractLevel, <:AbstractLevel}
     active::Bool
+    clicks::Union{Nothing, String}
     _field::Union{Nothing, Jump}
 end
 
-DecayNode(Gamma, atom, transition; active=true) =
-    DecayNode(Gamma, atom, transition, active, nothing)
+DecayNode(Gamma, atom, transition; active=true, clicks=nothing) =
+    DecayNode(Gamma, atom, transition, active, clicks, nothing)
 
 node_output(n::DecayNode) = n._field
 

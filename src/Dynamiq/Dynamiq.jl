@@ -70,6 +70,7 @@ export PlanarCoupling
 export GlobalCoupling
 export BlockadeCoupling
 export Detuning
+export Hamiltonian
 export StarkShiftAC
 export NLevelAtom
 export Interaction, VdWInteraction, GaussianCoupling
@@ -102,7 +103,8 @@ export PopulationDetector, PopulationDetectorSpec
 export CoherenceDetector, CoherenceDetectorSpec
 export MotionDetector, MotionDetectorSpec
 export FieldDetector, FieldDetectorSpec
-export PhotoDetector
+export ExpectationDetector, ExpectationDetectorSpec
+export PhotoDetector, PhotoDetectorSpec
 export reset!
 export build_detectors
 
@@ -110,6 +112,7 @@ include("./detectors/detectorspec.jl")
 include("./detectors/populationdetector.jl")
 include("./detectors/coherencedetector.jl")
 include("./detectors/fielddetector.jl")
+include("./detectors/expectationdetector.jl")
 include("./detectors/motiondetector.jl")
 include("./detectors/photodetector.jl")
 

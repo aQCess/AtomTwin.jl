@@ -92,5 +92,21 @@ function build_detector(spec::DetectorSpec,
             vals;   # view into detector-specific vals array
             name = p.name
         )
+    elseif spec.kind === ExpectationDetector
+        # `obj` is the operator itself (basis-global; not an atom to resolve).
+        return ExpectationDetector(
+            system.state[],
+            obj,
+            tspan,  # view into global tspan
+            vals;   # view into detector-specific vals array
+            name = p.name
+        )
+    elseif spec.kind === PhotoDetector
+        # No state/atom target: counts are written by the jump it is bound to.
+        return PhotoDetector(
+            tspan,  # view into global tspan
+            vals;   # view into detector-specific vals array (Int)
+            name = p.name
+        )
     end
 end
