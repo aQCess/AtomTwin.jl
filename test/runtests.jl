@@ -112,6 +112,7 @@ examples = [
     joinpath(ex_path, "rabi_with_motion.jl"),
     joinpath(ex_path, "rabi_with_static_intensity_noise.jl"),
     joinpath(ex_path, "rydberg_blockade.jl"),
+    joinpath(ex_path, "two_qubit_exchange.jl"),
     joinpath(ex_path, "time-optimal_rydberg_gate.jl"),
     joinpath(ex_path, "yb171_raman_gate.jl"),
     joinpath(ex_path, "k39_state_prep.jl"),

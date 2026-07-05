@@ -392,7 +392,17 @@ end
 """
     operator2(b, atoms, transition1, transition2; jump = false)
 
-Two-atom operator constructed from a pair of single-atom transitions.
+Two-atom operator `Â₁ ⊗ Â₂` constructed from a pair of single-atom transitions,
+where `Âₖ` is the raising/lowering operator of `transitionₖ` on atom `k`.
+
+The two single-atom operators act on disjoint sites, so the two-body operator is
+their product. Because each atom's forward operator has at most one entry per
+column, the product's forward triplets are obtained by chaining `f1`'s columns
+into `f2`'s rows. For a Hamiltonian term (`jump = false`) the `reverse` part
+carries the Hermitian conjugate of the off-diagonal forward entries; a diagonal
+term (e.g. the blockade projector `(r,r) => (r,r)`) therefore has empty
+`reverse`, while an off-diagonal exchange term (`(0,1) => (1,0)`, i.e. σ₁⁺σ₂⁻)
+gets its `+ h.c.` automatically.
 
 Returns `(forward, reverse)` triplet lists for use in `Op(forward, reverse, b.dim)`.
 """
@@ -402,12 +412,24 @@ function operator2(b::Basis,
                    transition2::Pair{Int,Int};
                    jump::Bool = false)
     atom1, atom2 = atoms
-    f1, r1 = operator1(b, [atom1], transition1, 1.0, jump = jump)
-    f2, r2 = operator1(b, [atom2], transition2, 1.0, jump = jump)
+    # Forward parts are the bare ladder operators of each transition; compose
+    # them (`jump = true` keeps everything in `forward`, so this works for both).
+    f1, _ = operator1(b, [atom1], transition1, 1.0, jump = true)
+    f2, _ = operator1(b, [atom2], transition2, 1.0, jump = true)
 
-    # Pairwise intersection on triplets for forward and reverse parts
-    forward = intersect(f1, f2)
-    reverse = intersect(r1, r2)
+    # Product Â₁·Â₂: match atom1's target column to atom2's source row.
+    forward = Tuple{Int,Int,ComplexF64}[]
+    for (i, j, v) in f1, (jj, k, w) in f2
+        j == jj && push!(forward, (i, k, v * w))
+    end
+
+    # Hamiltonian terms carry the Hermitian conjugate; jump operators are one-way.
+    reverse = Tuple{Int,Int,ComplexF64}[]
+    if !jump
+        for (i, j, v) in forward
+            i != j && push!(reverse, (j, i, conj(v)))
+        end
+    end
 
     return forward, reverse
 end

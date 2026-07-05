@@ -502,9 +502,12 @@ node_output(n::InteractionNode) = n._field
 
 function _interaction_transitions(node::InteractionNode)
     atom1, atom2 = node.atoms
-    from_tuple = node.transition.first
-    t1 = atom1.level_indices[from_tuple[1]] => atom1.level_indices[from_tuple[2]]
-    t2 = atom2.level_indices[from_tuple[1]] => atom2.level_indices[from_tuple[2]]
+    from_tuple, to_tuple = node.transition.first, node.transition.second
+    # `(from1, from2) => (to1, to2)`: atom1 does from1→to1, atom2 does from2→to2.
+    # The diagonal form `(a,b) => (a,b)` gives the projector |ab⟩⟨ab|; an
+    # off-diagonal form like `(0,1) => (1,0)` gives the exchange σ₁⁺σ₂⁻ + h.c.
+    t1 = atom1.level_indices[from_tuple[1]] => atom1.level_indices[to_tuple[1]]
+    t2 = atom2.level_indices[from_tuple[2]] => atom2.level_indices[to_tuple[2]]
     return t1, t2
 end
 
