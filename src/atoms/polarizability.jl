@@ -6,7 +6,7 @@ from empirical transition models.
 """
 
 using RecipesBase
-using ..Units: c, ε0, a0, h, hbar
+using ..Units: c, ε0, a0, h, hbar, e
 
 # ======================================================================
 # Data model
@@ -22,9 +22,35 @@ discrete transitions and an optional offset.
 - `state::String`: Electronic state label (e.g. `"1S0"`, `"3P0"`).
 - `transitions::Vector{NamedTuple}`: List of transitions; each entry has
   - `freq_THz::Float64`: Transition frequency in THz (linear).
-  - `gamma_MHz::Float64`: Linewidth in MHz (linear).
+  - `gamma_MHz::Float64`: Effective line width in MHz (linear) — see below.
 - `offset_Hz_per_Wm2::Float64`: Empirical offset in Hz/(W/m²).
 - `reference::String`: Bibliographic reference for the data.
+
+# Specifying transitions
+
+Each transition weights the dynamic polarizability by its **line strength**. Two
+equivalent ways to supply that weight are accepted by the constructor:
+
+1. `(freq_THz = …, gamma_MHz = …)` — the transition's effective line-strength
+   width. This equals the natural linewidth **only for a `J=0 → J'=1` line**
+   (e.g. every Yb `¹S₀` line), where the upper level decays to a single ground
+   level. For such lines just use the natural linewidth.
+
+2. `(freq_THz = …, dipole_ea0 = …)` — the reduced dipole matrix element
+   `|⟨Jg‖er‖Je⟩|` in units of `e·a₀` (Steck's D-line convention), optionally with
+   `Jg = …` (ground total angular momentum, default `1/2`). This is the robust
+   choice for a **multiplet** such as an alkali D₁/D₂ doublet, where the two lines
+   share a ground state but have unequal line strengths (D₂ carries twice the
+   strength of D₁). The constructor converts the dipole to the effective width via
+
+       Γ_eff = (2/9π) · |d|² ω₀³ / ((2Jg+1) ε₀ c³ ħ)                    (rad/s)
+
+   so that AtomTwin's two-level light-shift sum reproduces the multi-level scalar
+   polarizability α(ω) = (1/(2Jg+1)) Σᵢ (2/3) |dᵢ|² ω₀ᵢ / (ħ(ω₀ᵢ²−ω²)) exactly.
+
+Do **not** feed natural linewidths for an alkali doublet: the near-equal D₁/D₂
+natural widths under-weight D₂ and mis-split the light shift off-resonance, while
+still agreeing at the static limit (a silent error). Use `dipole_ea0` instead.
 """
 struct PolarizabilityModel
     state::String
@@ -33,11 +59,47 @@ struct PolarizabilityModel
     reference::String
 end
 
+"""
+    _dipole_to_gamma_MHz(freq_THz, dipole_ea0, Jg) -> Float64
+
+Effective line-strength width (MHz, linear) for a transition specified by its
+reduced dipole matrix element `dipole_ea0` = `|⟨Jg‖er‖Je⟩|` in `e·a₀`, such that
+the two-level light-shift form reproduces the multi-level scalar polarizability.
+
+    Γ_eff = (2/9π) · |d|² ω₀³ / ((2Jg+1) ε₀ c³ ħ)      [rad/s]
+
+`Jg` is the ground-state total angular momentum (the `1/(2Jg+1)` line-strength
+normalisation). See [`PolarizabilityModel`](@ref).
+"""
+function _dipole_to_gamma_MHz(freq_THz::Real, dipole_ea0::Real, Jg::Real)
+    ω0 = 2π * freq_THz * 1e12
+    d  = dipole_ea0 * e * a0                       # C·m
+    Γ_eff = (2 / (9π)) * d^2 * ω0^3 / ((2Jg + 1) * ε0 * c^3 * hbar)   # rad/s
+    return Γ_eff / (2π * 1e6)                       # → MHz (linear)
+end
+
+# Normalise a single user transition entry to the internal (freq_THz, gamma_MHz)
+# form. A `gamma_MHz` entry is taken as-is; a `dipole_ea0` entry is converted to
+# its effective line-strength width (optional `Jg`, default 1/2 for alkalis).
+function _normalize_transition(t)
+    if haskey(t, :gamma_MHz)
+        return (freq_THz = Float64(t.freq_THz), gamma_MHz = Float64(t.gamma_MHz))
+    elseif haskey(t, :dipole_ea0)
+        Jg = haskey(t, :Jg) ? t.Jg : 0.5
+        return (freq_THz = Float64(t.freq_THz),
+                gamma_MHz = _dipole_to_gamma_MHz(t.freq_THz, t.dipole_ea0, Jg))
+    else
+        error("PolarizabilityModel transition must have either `gamma_MHz` or " *
+              "`dipole_ea0`; got keys $(keys(t))")
+    end
+end
+
 function PolarizabilityModel(state::String,
                              transitions::Vector;
                              offset_Hz_per_Wm2::Float64 = 0.0,
                              reference::String = "")
-    PolarizabilityModel(state, transitions, offset_Hz_per_Wm2, reference)
+    norm = [_normalize_transition(t) for t in transitions]
+    PolarizabilityModel(state, norm, offset_Hz_per_Wm2, reference)
 end
 
 # ======================================================================

@@ -408,3 +408,92 @@ end
     end
 end
 
+# ── Alkali D-line polarizability: line strength vs natural linewidth ───────────
+
+using AtomTwin.Units: ε0, a0
+using AtomTwin.Units: e as e_charge
+
+# Independent multi-level scalar polarizability (NOT the PolarizabilityModel code
+# path) from a list of (dipole_ea0, freq_Hz) reduced dipoles plus a static core:
+#   α(ω) = α_core + (1/(2Jg+1)) Σᵢ (2/3)|dᵢ|² ω0ᵢ /(ħ(ω0ᵢ²-ω²)).
+function _alpha_dipoles_au(λ_nm, lines; α_core = 0.0, Jg = 0.5)
+    au = 4π * ε0 * a0^3
+    ωL = 2π * c / (λ_nm * 1e-9)
+    s = 0.0
+    for (d_ea0, f) in lines
+        ω0 = 2π * f; d = d_ea0 * e_charge * a0
+        s += (1 / (2Jg + 1)) * (2 / 3) * d^2 * ω0 / (hbar * (ω0^2 - ωL^2))
+    end
+    return s / au + α_core
+end
+
+@testset "dipole-specified transitions reproduce multi-level α (mechanism)" begin
+    # A PolarizabilityModel built from reduced dipoles must equal the independent
+    # multi-level sum at EVERY wavelength — the dipole→effective-width conversion
+    # is exact. Isolate the API mechanism with a self-contained two-line model.
+    ref = [(4.227, 377.107463e12), (5.977, 384.230485e12)]
+    m = PolarizabilityModel("5S1/2",
+        [(freq_THz = 377.107463, dipole_ea0 = 4.227),
+         (freq_THz = 384.230485, dipole_ea0 = 5.977)])
+    for λ in (1e7, 1200.0, 1000.0, 900.0, 850.0, 800.0)
+        @test isapprox(polarizability_au(m, λ), _alpha_dipoles_au(λ, ref); rtol = 1e-9)
+    end
+    # D2 carries ~2× the line strength of D1: the produced effective widths encode
+    # that ratio (unlike the near-equal natural widths 5.75 / 6.07 MHz).
+    g1, g2 = m.transitions[1].gamma_MHz, m.transitions[2].gamma_MHz
+    @test 1.9 < g2 / g1 < 2.2
+end
+
+@testset "natural-Γ alkali doublet is wrong off-resonance (the trap it avoids)" begin
+    # The naive user path — the two D lines with their natural linewidths — agrees
+    # with the truth at the static limit but drifts toward the D lines. The
+    # dipole-specified model does not. This pins the value of the dipole API.
+    ref   = [(4.227, 377.107463e12), (5.977, 384.230485e12)]
+    m_nat = PolarizabilityModel("5S1/2",
+        [(freq_THz = 377.107463, gamma_MHz = 5.7500),   # D1 natural Γ
+         (freq_THz = 384.230485, gamma_MHz = 6.0666)])  # D2 natural Γ
+    @test isapprox(polarizability_au(m_nat, 1e7), _alpha_dipoles_au(1e7, ref); rtol = 0.02)
+    @test !isapprox(polarizability_au(m_nat, 850.0), _alpha_dipoles_au(850.0, ref); rtol = 0.02)
+end
+
+@testset "shipped Rb-87 5S1/2 model is accurate IR→blue" begin
+    m  = AtomTwin.RB87_POLARIZABILITY_5S12
+    rb = Rubidium87Atom(; levels = [Level("5S1/2")])
+    # The shipped model's full line list + ionic-core offset, reconstructed
+    # independently, must reproduce polarizability_au everywhere — including below
+    # the D lines, where D-only would err by several %.
+    lines   = [(t.dipole_ea0, t.freq_THz * 1e12) for t in (
+                (dipole_ea0 = 4.227, freq_THz = 377.107),
+                (dipole_ea0 = 5.977, freq_THz = 384.231),
+                (dipole_ea0 = 0.342, freq_THz = 710.960),
+                (dipole_ea0 = 0.553, freq_THz = 713.477),
+                (dipole_ea0 = 0.118, freq_THz = 834.474),
+                (dipole_ea0 = 0.207, freq_THz = 835.526))]
+    α_core  = 9.08
+    for λ in (1064.0, 900.0, 850.0, 700.0, 600.0, 532.0, 500.0)
+        @test isapprox(polarizability_au(m, λ),
+                       _alpha_dipoles_au(λ, lines; α_core = α_core); rtol = 2e-3)
+    end
+    # Accepted Rb-87 5S1/2 static scalar polarizability ≈ 318.8 a.u.
+    @test isapprox(polarizability_au(m, 1e7), 318.8; rtol = 5e-3)
+    # Atom-facing convenience methods wire to the same model.
+    @test polarizability_au(rb, "5S1/2", 850.0) ≈ polarizability_au(m, 850.0)
+    @test scattering_rate_per_Wcm2(rb, "5S1/2", 850.0) > 0
+end
+
+@testset "gamma_MHz path unchanged; Yb 759 nm magic wavelength intact" begin
+    # Yb models are gamma_MHz-based; the dipole extension must not perturb them.
+    yb  = Ytterbium171Atom(; levels = [Level("1S0")])
+    ls1 = light_shift_coeff_Hz_per_Wcm2(yb, "1S0", 759.0)
+    ls3 = light_shift_coeff_Hz_per_Wcm2(yb, "3P0", 759.0)
+    @test ls1 < 0 && ls3 < 0
+    @test abs(ls1 - ls3) / abs(ls1) < 0.01
+    # A gamma_MHz line and the dipole line that produces the same effective width
+    # (at the same frequency) give identical polarizability — round-trip of the
+    # normalisation. Take g_eff from a dipole model at the SAME freq to keep it exact.
+    m_d = PolarizabilityModel("x", [(freq_THz = 377.107463, dipole_ea0 = 4.227)])
+    m_g = PolarizabilityModel("x",
+        [(freq_THz = 377.107463, gamma_MHz = m_d.transitions[1].gamma_MHz)])
+    @test polarizability_au(m_g, 850.0) ≈ polarizability_au(m_d, 850.0)
+end
+
