@@ -12,7 +12,6 @@
 
 
 using AtomTwin
-using AtomTwin.Units
 using Printf
 using LinearAlgebra
 using Plots 
@@ -150,7 +149,7 @@ plot_labels = [
     "Ground |↑⟩",
     "Leakage ×100",
     "Ideal theory",
-    "Leak theory ×100",
+    "Leak theory",
 ]
 
 plt = Plots.plot(
