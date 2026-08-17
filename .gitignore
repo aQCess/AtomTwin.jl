@@ -5,3 +5,9 @@ examples/optical_molasses.jl
 CLAUDE.md
 CONTRIBUTING.html
 memory/
+
+# macOS hidden files
+.DS_Store
+src/.DS_Store
+src/Dynamiq/.DS_Store
+test/.DS_Store
