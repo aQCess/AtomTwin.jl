@@ -40,10 +40,10 @@ const YB171_POLARIZABILITY_3P0 = PolarizabilityModel(
         (freq_THz = 461.867846, gamma_MHz = 1.516),     # (6s7s) 3S1
         (freq_THz = 675.141040, gamma_MHz = 4.081),     # (6s6d) 3D1
         (freq_THz = 729.293151, gamma_MHz = 0.625),     # (6s8s) 3S1
-        (freq_THz = 797.204099, gamma_MHz = 22.889),    # Empirical J=1
+        (freq_THz = 797.204099, gamma_MHz = 23.567),    # Empirical J=1
     ];
     offset_Hz_per_Wm2 = 0.0,
-    reference = "Phys. Rev. A 108, 053325 (2023)",
+    reference = "Phys. Rev. A 108, 053325 (2023)", #PhD thesis
 )
 
 """
