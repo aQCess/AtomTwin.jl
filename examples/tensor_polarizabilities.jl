@@ -76,7 +76,7 @@ const YB171_POLARIZABILITY_3P0_st = PolarizabilityModel_st(
 const YB171_POLARIZABILITY_3P1_st = PolarizabilityModel_st(
     "3P1",
     [
-        (freq_THz=-539.386800, gamma_MHz=0.183, state_f="(6s2) 1S0", J_f=0),    # (6s2) 1S0     #
+        (freq_THz=-539.386800, gamma_MHz=0.183, state_f="(6s2) 1S0", J_f=1),    # (6s2) 1S0     #
         (freq_THz=194.778008, gamma_MHz=0.170, state_f="(6s5d) 3D1", J_f=1),     # (6s5d) 3D1
         (freq_THz=202.657933, gamma_MHz=0.280, state_f="(6s5d) 3D2", J_f=2),     # (6s5d) 3D2
         (freq_THz=440.775408, gamma_MHz=3.954, state_f="(6s7s) 3S1", J_f=1),     # (6s7s) 3S1   #
@@ -107,11 +107,12 @@ Computes the sign of `transition_freq`, and returns a different factor based on 
 
 """
 function _degeneracy_factor(J_i::Rational, J_f::Rational, transition_freq::Real)
+    #return (2J_f + 1)//(2J_i + 1)
     s = sign(transition_freq)
     if s == 1
         return (2J_f + 1)//(2J_i + 1)
     else
-        return -(2J_i + 1)//(2J_f + 1)
+        return -1#(2J_i + 1)//(2J_f + 1)
     end
 end
 
@@ -396,7 +397,7 @@ function tensor_light_shift_coeff_Hz_per_Wcm2(model::PolarizabilityModel_st, λ_
 end
 
 # For testing, accepts a single transition
-function tensor_light_shift_coeff_Hz_per_Wcm2_single_transition(transition::@NamedTuple{freq_THz::Float64, gamma_MHz::Float64, state_f::String, J_f::Rational}, ::Rational{Int64}, ::Float64, ::Rational{Int64}, Ji::Rational, λ_nm::Real; F::Rational = 0//1, I::Rational = 0//1, mF::Rational = 0//1, e_z::Real = 1.0)
+function tensor_light_shift_coeff_Hz_per_Wcm2_single_transition(transition::@NamedTuple{freq_THz::Float64, gamma_MHz::Float64, state_f::String, J_f::Rational}, Ji::Rational, λ_nm::Real; F::Rational = 0//1, I::Rational = 0//1, mF::Rational = 0//1, e_z::Real = 1.0)
     U = tensor_U_over_I_single_transition(transition, Ji, λ_nm; F=F, I=I, mF=mF, e_z=e_z)
     ν_over_I = U / h              # Hz/(W/m²)
 

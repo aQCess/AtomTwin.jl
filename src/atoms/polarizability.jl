@@ -7,6 +7,7 @@ from empirical transition models.
 
 using RecipesBase
 using ..Units: c, ε0, a0, h, hbar, e
+using WignerSymbols
 
 # ======================================================================
 # Data model
@@ -288,6 +289,21 @@ function polarizability_au(model::PolarizabilityModel, λ_nm::Real)
     α_SI = polarizability_si(model, λ_nm)
     return α_SI / (4π * ε0 * a0^3)
 end
+
+
+
+function tensor_polarizability_si(model:PolarizabilityModel, λ_nm:Real)
+    α2_SI = 0.0
+    return α2_SI
+end
+
+function tensor_polarizability_au(model:PolarizabilityModel, λ_nm::Real)
+    α2_SI = tensor_polarizability_si(model, λ_nm)
+    return α2_SI / (4π * ε0 * a0^3)
+end
+
+
+
 
 
 # ======================================================================
