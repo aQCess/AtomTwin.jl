@@ -51,7 +51,7 @@ plot!(p, λ, lshift_3P0; label="3P0 old", ls=:dash)
 if true
 λ = 400.0:0.01:800.0
 
-I = 1//2; F = 3//2; mF = 1//2
+I = 0//2; F = 2//2; mF = 0//2
 angle = 0.0
 e_z = cos(angle * π/180)
 #lshift_1S0_st = [scalar_light_shift_coeff_Hz_per_Wcm2(models_st["1S0"], l) for l in λ]

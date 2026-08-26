@@ -20,12 +20,18 @@ Empirical polarizability model for an atomic state, defined by a set of
 discrete transitions and an optional offset.
 
 # Fields
-- `state::String`: Electronic state label (e.g. `"1S0"`, `"3P0"`).
+- `state::String`: Electronic state label(e.g. `"1S0"`, `"3P0"`). We refer to this as the initial state.
 - `transitions::Vector{NamedTuple}`: List of transitions; each entry has
-  - `freq_THz::Float64`: Transition frequency in THz (linear).
+  - `freq_THz::Float64`: Transition frequency in THz (linear). If negative, then state_f < state in energy.
   - `gamma_MHz::Float64`: Effective line width in MHz (linear) — see below.
+  - `state_f::String`: Electronic configuration of final state.
+  - `J_f::Rational`: Total angular momentum of final state.
+- `J_i`::Rational: Total angular momentum of intial state
 - `offset_Hz_per_Wm2::Float64`: Empirical offset in Hz/(W/m²).
 - `reference::String`: Bibliographic reference for the data.
+
+
+Note that `freq_THz` is positive (negative) if the final state is above (below) the initial state in energy
 
 # Specifying transitions
 
@@ -55,7 +61,8 @@ still agreeing at the static limit (a silent error). Use `dipole_ea0` instead.
 """
 struct PolarizabilityModel
     state::String
-    transitions::Vector{NamedTuple{(:freq_THz, :gamma_MHz), Tuple{Float64, Float64}}}
+    transitions::Vector{NamedTuple{(:freq_THz, :gamma_MHz, :state_f, :J_f), Tuple{Float64, Float64, String, Rational}}}
+    J_i::Rational
     offset_Hz_per_Wm2::Float64
     reference::String
 end
@@ -84,7 +91,7 @@ end
 # its effective line-strength width (optional `Jg`, default 1/2 for alkalis).
 function _normalize_transition(t)
     if haskey(t, :gamma_MHz)
-        return (freq_THz = Float64(t.freq_THz), gamma_MHz = Float64(t.gamma_MHz))
+        return (freq_THz = Float64(t.freq_THz), gamma_MHz = Float64(t.gamma_MHz), state_f = String(t.state_f), J_f = Rational(t.J_f))
     elseif haskey(t, :dipole_ea0)
         Jg = haskey(t, :Jg) ? t.Jg : 0.5
         return (freq_THz = Float64(t.freq_THz),
@@ -97,11 +104,14 @@ end
 
 function PolarizabilityModel(state::String,
                              transitions::Vector;
+                             J_i::Union{Int, Rational},
                              offset_Hz_per_Wm2::Float64 = 0.0,
                              reference::String = "")
+    J_i_r = Rational(J_i)
     norm = [_normalize_transition(t) for t in transitions]
-    PolarizabilityModel(state, norm, offset_Hz_per_Wm2, reference)
+    PolarizabilityModel(state, norm, J_i_r, offset_Hz_per_Wm2, reference)
 end
+
 
 # ======================================================================
 # Core physics
@@ -109,6 +119,8 @@ end
 
 """
     _calc_light_shift(ω0, Γ, ωL) -> Float64
+
+[DEPRECATED]
 
 Light-shift contribution from a single electric-dipole transition.
 
@@ -122,6 +134,34 @@ Light-shift contribution from a single electric-dipole transition.
 """
 function _calc_light_shift(ω0::Float64, Γ::Float64, ωL::Float64)
     return -3 * π * c^2 * Γ / (ω0^2 * (ω0^2 - ωL^2))
+end
+
+"""
+    _U_over_I(model::PolarizabilityModel, λ_nm::Real) -> Float64
+
+[DEPRECATED]
+
+Compute total light shift per intensity U/I for a given model and wavelength.
+
+# Arguments
+- `model::PolarizabilityModel`: Polarizability model for a single state.
+- `λ_nm`: Laser wavelength in nanometres.
+
+# Returns
+- `U/I` in J/(W/m²).
+"""
+function _U_over_I(model::PolarizabilityModel, λ_nm::Real)
+    ωL = 2π * c / (λ_nm * 1e-9)
+
+    U_over_I = 0.0
+    for t in model.transitions
+        ω0 = 2π * t.freq_THz  * 1e12
+        Γ  = 2π * t.gamma_MHz * 1e6
+        U_over_I += _calc_light_shift(ω0, Γ, ωL)
+    end
+
+    U_over_I += model.offset_Hz_per_Wm2 * h
+    return U_over_I
 end
 
 """
@@ -173,30 +213,34 @@ function _Gamma_sc_over_I(model::PolarizabilityModel, λ_nm::Real)
     return Γsc_over_I
 end
 
+
 """
-    _U_over_I(model::PolarizabilityModel, λ_nm::Real) -> Float64
+    _degeneracy_factor(J::Rational, J_prime::Rational, transition_freq::Real) -> Rational
 
-Compute total light shift per intensity U/I for a given model and wavelength.
-
-# Arguments
-- `model::PolarizabilityModel`: Polarizability model for a single state.
-- `λ_nm`: Laser wavelength in nanometres.
-
-# Returns
-- `U/I` in J/(W/m²).
+Computes the degeneracy factor of a transitions for polarizability calculations.
+Factor depends on wether transitions goes to a higher or lower lying state, which is 
+found by computing the sign of `transition_freq`.
 """
-function _U_over_I(model::PolarizabilityModel, λ_nm::Real)
-    ωL = 2π * c / (λ_nm * 1e-9)
-
-    U_over_I = 0.0
-    for t in model.transitions
-        ω0 = 2π * t.freq_THz  * 1e12
-        Γ  = 2π * t.gamma_MHz * 1e6
-        U_over_I += _calc_light_shift(ω0, Γ, ωL)
+function _degeneracy_factor(J_i::Rational, J_f::Rational, transition_freq::Real)
+    s = sign(transition_freq)
+    if s == 1
+        return (2J_f + 1)//(2J_i + 1)
+    else
+        return -1
     end
+end
 
-    U_over_I += model.offset_Hz_per_Wm2 * h
-    return U_over_I
+
+"""
+    _light_shift_quotient(ω0::Float64, Γ::Float64, ωL::Float64)
+
+Only supports linear polarized light for now.
+
+Returns Γ / (ω0^2 * (ω0^2 - ωL^2)), which is proportional to the 
+scalar light-shift contribution from a single electric-dipole transition.
+"""
+function _light_shift_quotient(ω0::Float64, Γ::Float64, ωL::Float64)
+    return Γ / (ω0^2 * (ω0^2 - ωL^2))
 end
 
 # ======================================================================
@@ -292,12 +336,12 @@ end
 
 
 
-function tensor_polarizability_si(model:PolarizabilityModel, λ_nm:Real)
+function tensor_polarizability_si(model::PolarizabilityModel, λ_nm::Real)
     α2_SI = 0.0
     return α2_SI
 end
 
-function tensor_polarizability_au(model:PolarizabilityModel, λ_nm::Real)
+function tensor_polarizability_au(model::PolarizabilityModel, λ_nm::Real)
     α2_SI = tensor_polarizability_si(model, λ_nm)
     return α2_SI / (4π * ε0 * a0^3)
 end

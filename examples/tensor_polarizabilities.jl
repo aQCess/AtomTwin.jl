@@ -119,8 +119,8 @@ end
 
 
 function _light_shift_quotient(ω0::Float64, Γ::Float64, ωL::Float64, J_i::Rational, J_f::Rational)
-    deg_factor = _degeneracy_factor(J_i, J_f, ω0) 
-    return Γ / (ω0^2 * (ω0^2 - ωL^2)) * deg_factor
+    #deg_factor = _degeneracy_factor(J_i, J_f, ω0) 
+    return Γ / (ω0^2 * (ω0^2 - ωL^2)) #* deg_factor
 end
 
 
@@ -145,7 +145,9 @@ function scalar_polarisability_si(model::PolarizabilityModel_st, λ_nm::Real)
         Γ = 2π * t.gamma_MHz * 1e6
         Jf = t.J_f
 
-        α0 += _light_shift_quotient(ω0, Γ, ωL, Ji, Jf)
+        deg_factor = _degeneracy_factor(Ji, Jf, ω0)
+
+        α0 += _light_shift_quotient(ω0, Γ, ωL, Ji, Jf) * deg_factor
     end
 
     α0 *= 2π * ε0 * c^3
@@ -217,8 +219,9 @@ function tensor_polarisability_si(model::PolarizabilityModel_st, λ_nm::Real; F:
 
         am_factors = (-1)^(-2*Ji - Jf - F - I ) * sqrt((40*F*(2*F + 1)*(2*F - 1))/(3(F + 1)*(2*F + 3))) * (2*Ji + 1)
         quotient = _light_shift_quotient(ω0, Γ, ωL, Ji, Jf)
+        deg_factor = _degeneracy_factor(Ji, Jf, ω0)
         wigner_symbols = wigner6j(1, 1, 2, Ji, Ji, Jf) * wigner6j(Ji, Ji, 2, F, F, I)
-        α2 += am_factors * quotient * wigner_symbols
+        α2 += am_factors * quotient * wigner_symbols * deg_factor
     end
 
     α2 *= 3π * ε0 * c^3
