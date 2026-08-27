@@ -95,7 +95,9 @@ function _normalize_transition(t)
     elseif haskey(t, :dipole_ea0)
         Jg = haskey(t, :Jg) ? t.Jg : 0.5
         return (freq_THz = Float64(t.freq_THz),
-                gamma_MHz = _dipole_to_gamma_MHz(t.freq_THz, t.dipole_ea0, Jg))
+                gamma_MHz = _dipole_to_gamma_MHz(t.freq_THz, t.dipole_ea0, Jg),
+                state_f = "",
+                J_f = 1//2)
     else
         error("PolarizabilityModel transition must have either `gamma_MHz` or " *
               "`dipole_ea0`; got keys $(keys(t))")
@@ -139,7 +141,7 @@ end
 """
     _U_over_I(model::PolarizabilityModel, λ_nm::Real) -> Float64
 
-[DEPRECATED]
+[DEPRECATED] Use _U_over_I_si instead
 
 Compute total light shift per intensity U/I for a given model and wavelength.
 
@@ -243,9 +245,88 @@ function _light_shift_quotient(ω0::Float64, Γ::Float64, ωL::Float64)
     return Γ / (ω0^2 * (ω0^2 - ωL^2))
 end
 
+
+
 # ======================================================================
 # Public API
 # ======================================================================
+
+"""
+    polarizability_si(model::PolarizabilityModel, λ_nm::Real) -> Float64
+
+Dynamic electric scalar polarizability α in SI units (C·m²·V⁻¹) for the given
+model and wavelength.
+
+# Definition
+Uses the relation
+
+    U/I = -α_SI / (2 c ε₀)
+
+which gives
+
+    α_SI = - 2 c ε₀ (U/I)
+
+where U/I is the light shift per intensity in J/(W/m²).
+
+# Units
+Returns scalar polarizability in C·m²·V⁻¹ (or equivalently F·m²), which is the
+standard SI unit for electric polarizability.
+"""
+function polarizability_si(model::PolarizabilityModel, λ_nm::Real)
+    ωL = 2π * c / (λ_nm * 1e-9)
+    α0_SI = 0.0
+    Ji = model.J_i
+    for t in model.transitions
+        ω0 = 2π * t.freq_THz * 1e12
+        Γ = 2π * t.gamma_MHz * 1e6
+        Jf = t.J_f
+
+        deg_factor = _degeneracy_factor(Ji, Jf, ω0)
+
+        α0_SI += _light_shift_quotient(ω0, Γ, ωL) * deg_factor
+    end
+
+    α0_SI *= 2π * ε0 * c^3
+    α0_SI += -model.offset_Hz_per_Wm2 * h * 2 * c * ε0
+
+    return α0_SI
+end
+
+"""
+    polarizability_au(model::PolarizabilityModel, λ_nm::Real) -> Float64
+
+Dynamic electric scalar polarizability α in atomic units (a₀³) for the given
+model and wavelength.
+
+# Definition
+Converts from SI units via
+
+    α_au = α_SI / (4π ε₀ a₀³)
+"""
+function polarizability_au(model::PolarizabilityModel, λ_nm::Real)
+    α0_SI = polarizability_si(model, λ_nm)
+    return α0_SI / (4π * ε0 * a0^3)
+end
+
+"""
+    U_over_I_si(model::PolarizabilityModel, λ_nm::Real) -> Float64
+
+Compute total scalar light shift per intensity U0/I for a given model and wavelength.
+
+# Arguments
+- `model::PolarizabilityModel`: Polarizability model for a single state.
+- `λ_nm`: Laser wavelength in nanometres.
+
+# Returns
+- `U/I` in J/(W/m²).
+"""
+function U_over_I_si(model::PolarizabilityModel, λ_nm::Real)
+    α0 = polarizability_si(model, λ_nm)
+    U_I = - α0 / (2 * c * ε0)
+    return U_I
+end
+
+
 
 """
     light_shift_coeff_Hz_per_Wcm2(model::PolarizabilityModel, λ_nm::Real) -> Float64
@@ -262,7 +343,7 @@ For a beam intensity `I` in W/cm², the light shift is
 - `λ_nm`: Laser wavelength in nanometres.
 """
 function light_shift_coeff_Hz_per_Wcm2(model::PolarizabilityModel, λ_nm::Real)
-    U = _U_over_I(model, λ_nm)
+    U = U_over_I_si(model, λ_nm)
     ν_over_I = U / h              # Hz/(W/m²)
     return ν_over_I * 1e4         # Hz/(W/cm²)
 end
@@ -291,59 +372,102 @@ function scattering_rate_per_Wcm2(model::PolarizabilityModel, λ_nm::Real)
     return Γsc_over_I * 1e4                       # (1/s)/(W/cm²)
 end
 
-"""
-    polarizability_si(model::PolarizabilityModel, λ_nm::Real) -> Float64
 
-Dynamic electric polarizability α in SI units (C·m²·V⁻¹) for the given
+"""
+    tensor_polarizability_si(model::PolarizabilityModel, λ_nm::Real; F::Rational = 0//1, I::Rational = 0//1) -> Float64
+
+Dynamic electric tensor polarizability α⁽²⁾ in SI units (C·m²·V⁻¹) for the given
 model and wavelength.
 
 # Definition
 Uses the relation
 
-    U/I = -α_SI / (c ε₀)
+    U2/I (2 c ε₀) = -α2_SI ⋅ 
 
 which gives
 
-    α_SI = -c ε₀ (U/I)
+    α_SI = - 2 c ε₀ (U/I)
 
 where U/I is the light shift per intensity in J/(W/m²).
 
 # Units
-Returns polarizability in C·m²·V⁻¹ (or equivalently F·m²), which is the
+Returns scalar polarizability in C·m²·V⁻¹ (or equivalently F·m²), which is the
 standard SI unit for electric polarizability.
 """
-function polarizability_si(model::PolarizabilityModel, λ_nm::Real)
-    U = _U_over_I(model, λ_nm)
-    α_SI = - c * ε0 * U
-    return α_SI
-end
-
-"""
-    polarizability_au(model::PolarizabilityModel, λ_nm::Real) -> Float64
-
-Dynamic electric polarizability α in atomic units (a₀³) for the given
-model and wavelength.
-
-# Definition
-Converts from SI units via
-
-    α_au = α_SI / (4π ε₀ a₀³)
-"""
-function polarizability_au(model::PolarizabilityModel, λ_nm::Real)
-    α_SI = polarizability_si(model, λ_nm)
-    return α_SI / (4π * ε0 * a0^3)
-end
-
-
-
-function tensor_polarizability_si(model::PolarizabilityModel, λ_nm::Real)
+function tensor_polarizability_si(model::PolarizabilityModel, λ_nm::Real; F::Rational = 0//1, I::Rational = 0//1)
+    ωL = 2π * c / (λ_nm * 1e-9)
     α2_SI = 0.0
+    Ji = model.J_i
+
+    for t in model.transitions
+        ω0 = 2π * t.freq_THz * 1e12
+        Γ = 2π * t.gamma_MHz * 1e6
+        Jf = t.J_f
+
+        am_factors = (-1)^(-2*Ji - Jf - F - I ) * sqrt((40*F*(2*F + 1)*(2*F - 1))/(3(F + 1)*(2*F + 3))) * (2*Ji + 1)
+        quotient = _light_shift_quotient(ω0, Γ, ωL, Ji, Jf)
+        deg_factor = _degeneracy_factor(Ji, Jf, ω0)
+        wigner_symbols = wigner6j(1, 1, 2, Ji, Ji, Jf) * wigner6j(Ji, Ji, 2, F, F, I)
+        α2_SI += am_factors * quotient * wigner_symbols * deg_factor
+    end
+
+    α2_SI *= 3π * ε0 * c^3
     return α2_SI
 end
 
-function tensor_polarizability_au(model::PolarizabilityModel, λ_nm::Real)
-    α2_SI = tensor_polarizability_si(model, λ_nm)
+function tensor_polarizability_au(model::PolarizabilityModel, λ_nm::Real, F::Rational = 0//1, I::Rational = 0//1)
+    α2_SI = tensor_polarizability_si(model, λ_nm; F=F, I=I)
     return α2_SI / (4π * ε0 * a0^3)
+end
+
+"""
+    tensor_U_over_I_si(model::PolarizabilityModel, λ_nm::Real) -> Float64
+
+Compute total tensor light shift per intensity U0/I for a given model and wavelength.
+
+# Arguments
+- `model::PolarizabilityModel`: Polarizability model for a single state.
+- `λ_nm`: Laser wavelength in nanometres.
+
+# Returns
+- `U/I` in J/(W/m²).
+"""
+function tensor_U_over_I_si(model::PolarizabilityModel, λ_nm::Real; F::Rational = 0//1, I::Rational = 0//1, mF::Rational = 0//1, e_z::Real = 1.0)
+    α2 = tensor_polarisability_si(model, λ_nm; F=F, I=I)
+    polar_factor = (3*e_z^2 - 1)/2
+    num = (3*mF^2 - F*(F + 1))
+    denom = (F*(2*F - 1))
+
+    # denominator only vanishes for F = 0, 1/2s
+    geometric_factor = 0.0
+    if (denom != 0)
+        geometric_factor = polar_factor * num/denom
+    end
+
+    U_I = - α2 * geometric_factor / (2 * c * ε0)
+    return U_I
+end
+
+
+"""
+    tensor_light_shift_coeff_Hz_per_Wcm2(model::PolarizabilityModel, λ_nm::Real) -> Float64
+
+Tensor light-shift coefficient Δν/I in Hz/(W/cm²) for the given model and wavelength.
+
+# Definition
+For a beam intensity `I` in W/cm², the light shift is
+
+    Δν = light_shift_coeff_Hz_per_Wcm2(model, λ_nm) * I
+
+# Arguments
+- `model`: Polarizability model for a single atomic state.
+- `λ_nm`: Laser wavelength in nanometres.
+"""
+function tensor_light_shift_coeff_Hz_per_Wcm2(model::PolarizabilityModel, λ_nm::Real; F::Rational = 0//1, I::Rational = 0//1, mF::Rational = 0//1, e_z::Real = 1.0)
+    U = tensor_U_over_I(model, λ_nm; F=F, I=I, mF=mF, e_z=e_z)
+    ν_over_I = U / h              # Hz/(W/m²)
+
+    return ν_over_I * 1e4         # Hz/(W/cm²)
 end
 
 

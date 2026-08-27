@@ -42,6 +42,7 @@ const RB87_POLARIZABILITY_5S12 = PolarizabilityModel(
         (freq_THz = 834.474, dipole_ea0 = 0.118, Jg = 1//2),  #     5S1/2 → 7P1/2  (359 nm)
         (freq_THz = 835.526, dipole_ea0 = 0.207, Jg = 1//2),  #     5S1/2 → 7P3/2  (359 nm)
     ];
+    J_i = 1//2,
     # Static ionic-core (Rb⁺) + valence-tail polarizability, α_core ≈ 9.08 a.u.:
     #   offset_Hz_per_Wm2 = -α_core·(4πε₀a₀³) / (c ε₀ h).
     offset_Hz_per_Wm2 = -8.5118e-5,

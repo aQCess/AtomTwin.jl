@@ -435,8 +435,9 @@ Minimal `n`-level atomic model with classical center-of-mass motion.
 
 - `x`, `v`: position and velocity vectors in real space.
 - `m`: atomic mass.
-- `alphas`: dictionary of scalar or tensor polarizabilities keyed by wavelength.
-- `lambdas`: dictionary of transition wavelengths keyed by level pairs.
+- `alphas`: dictionary of scalar polarizabilities keyed by wavelength.
+- `alphas2`: dictionary of tensor polarizabilities keyed by wavelength
+- `lambda`: dictionary of transition wavelengths keyed by level pairs.
 
 Additional internal fields `_P` and `_pidx` are used for caching populations
 and basis-dependent index mappings during simulations.
@@ -447,6 +448,7 @@ mutable struct NLevelAtom <: AbstractAtom
     v::Vector{Float64}
     m::Float64
     alpha::Dict{Float64,Vector{Float64}}
+    alpha2::Dict{Float64,Vector{Float64}}
     lambda::Dict{Pair{Int,Int},Float64}
 
     _P::Vector{Float64}           # populations, used for intermediate computations
@@ -457,8 +459,9 @@ mutable struct NLevelAtom <: AbstractAtom
                         v       = [0.0, 0.0, 0.0],
                         m       = 1amu,
                         alphas  = Dict(),
+                        alphas2 = Dict(),
                         lambdas = Dict())
-        new(n, x, v, m, alphas, lambdas, zeros(n), [[0]])
+        new(n, x, v, m, alphas, alphas2, lambdas, zeros(n), [[0]])
     end
 end
 

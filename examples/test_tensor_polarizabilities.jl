@@ -52,7 +52,7 @@ if true
 λ = 400.0:0.01:800.0
 
 I = 0//2; F = 2//2; mF = 0//2
-angle = 0.0
+angle = 90.0
 e_z = cos(angle * π/180)
 #lshift_1S0_st = [scalar_light_shift_coeff_Hz_per_Wcm2(models_st["1S0"], l) for l in λ]
 #lshift_3P1_scalar = [scalar_light_shift_coeff_Hz_per_Wcm2(models_st["3P1"], l) for l in λ]

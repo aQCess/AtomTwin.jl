@@ -140,7 +140,8 @@ function AtomWrapper{S}(; levels=nothing, x=zeros(3), v=zeros(3),
                        x = Vector{Float64}(x),
                        v = Vector{Float64}(v),
                        m = m,
-                       alphas = Dict{Float64, Vector{Float64}}(),  # Empty - filled by initspeciesdata!
+                       alphas  = Dict{Float64, Vector{Float64}}(),  # Empty - filled by initspeciesdata!
+                       alphas2 = Dict{Float64, Vector{Float64}}(),
                        lambdas = Dict{Pair{Int,Int},Float64}())
 
     indices = levels === nothing ? Dict{AbstractLevel,Int}() :
@@ -253,6 +254,7 @@ is assumed as zero and a warning will be issued.
 """
 function _init_species_data!(a::AtomWrapper, inner::NLevelAtom, beams)
     models = getpolarizabilitymodels(a)
+    I = a.I
     isempty(models) && return nothing
     wavelengths = unique([getwavelength(b) for b in beams])
     for λ in wavelengths
@@ -264,7 +266,26 @@ function _init_species_data!(a::AtomWrapper, inner::NLevelAtom, beams)
                 0.0
             end
         end
+
+        # Tensor polarizability
+        α2_si = map(a.levels) do l
+            if haskey(models, l.label)
+                # need to get F and I values
+                if l isa HyperfineLevel
+                    F = l.F
+                    tensor_polarizability_si(models[l.label], λ * 1e9; F=F, I=I)
+                else
+                    @warn "Tensor polarizability can only be assigned to Hyperfinelevel, '$(l.label)' is of type $(typeof(l)); defaulting to α2 = 0.0" maxlog=1
+                    0.0
+                end
+                
+            else
+                @warn "Polarizability model not found for level '$(l.label)'; defaulting to α2 = 0.0" maxlog=1
+                0.0
+            end
+        end
         inner.alpha[λ] = α_si
+        inner.alpha2[λ] = α2_si
     end
     return nothing
 end
