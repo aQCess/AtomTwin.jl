@@ -497,3 +497,40 @@ end
     @test polarizability_au(m_g, 850.0) ≈ polarizability_au(m_d, 850.0)
 end
 
+@testset "Sr atom-facing polarizability methods resolve" begin
+    sr = Strontium88Atom(; levels = [Level("1S0")])
+    for st in ("1S0", "3P0")
+        @test isfinite(light_shift_coeff_Hz_per_Wcm2(sr, st, 813.4))
+        @test isfinite(polarizability_au(sr, st, 813.4))
+        @test scattering_rate_per_Wcm2(sr, st, 813.4) > 0
+    end
+end
+
+@testset "Sr static polarizabilities match Safronova 2013 recommended values" begin
+    # Line lists from Phys. Rev. A 87, 012509 (2013) reproduce the recommended
+    # static scalar polarizabilities: α(1S0)=197.14, α(3P0)=444.51 a.u.
+    sr = Strontium88Atom(; levels = [Level("1S0")])
+    @test isapprox(polarizability_au(sr, "1S0", 1.0e7), 197.1; rtol = 0.02)
+    @test isapprox(polarizability_au(sr, "3P0", 1.0e7), 444.5; rtol = 0.02)
+end
+
+@testset "813.4 nm is magic: 1S0 and 3P0 trap depths agree" begin
+    # The 3P0 tail offset is anchored to the measured 813.428 nm crossing, so the
+    # two trap depths must be equal there (to <1%) and the crossing near 813.4 nm.
+    sr  = Strontium88Atom(; levels = [Level("1S0")])
+    ls1 = light_shift_coeff_Hz_per_Wcm2(sr, "1S0", 813.428)
+    ls3 = light_shift_coeff_Hz_per_Wcm2(sr, "3P0", 813.428)
+    @test ls1 < 0 && ls3 < 0                       # both states trapped (red shift)
+    @test abs(ls1 - ls3) / abs(ls1) < 0.01         # equal depth ⇒ magic
+
+    # Locate the crossing by bisection; it must land within 0.1 nm of 813.428.
+    f(λ) = light_shift_coeff_Hz_per_Wcm2(sr, "3P0", λ) -
+           light_shift_coeff_Hz_per_Wcm2(sr, "1S0", λ)
+    lo, hi = 800.0, 826.0
+    for _ in 1:60
+        m = (lo + hi) / 2
+        f(lo) * f(m) <= 0 ? (hi = m) : (lo = m)
+    end
+    @test isapprox((lo + hi) / 2, 813.428; atol = 0.1)
+end
+
