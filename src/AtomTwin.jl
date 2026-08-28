@@ -34,7 +34,7 @@ include("Dynamiq/Dynamiq.jl")
 # Import from Dynamiq submodule
 import .Dynamiq: GaussianBeam, GeneralGaussianBeam
 using .Dynamiq: PlanarBeam
-using .Dynamiq: GlobalCoupling, PlanarCoupling, Detuning, Interaction, VdWInteraction, GaussianCoupling
+using .Dynamiq: GlobalCoupling, PlanarCoupling, Detuning, Interaction, VdWInteraction, GaussianCoupling, StarkShiftAC
 using .Dynamiq: Hamiltonian
 using .Dynamiq: Jump, AbstractAtom, NLevelAtom, Basis
 import .Dynamiq: Op   # extended with an (Operator, sys, atom) materialisation method in operators.jl
@@ -75,6 +75,7 @@ include("physics/couplings.jl")
 include("physics/detunings.jl")
 include("physics/dissipators.jl")
 include("physics/interactions.jl")
+include("physics/lightshifts.jl")
 include("operators.jl")
 include("resolve.jl")
 include("Visualization.jl")

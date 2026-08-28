@@ -328,13 +328,14 @@ struct StarkShiftAC{A} <: AbstractField
     beam::AbstractBeam
     alpha::Float64
     _coeff::Base.RefValue{ComplexF64}
+    q_axis::Vector{Float64}
 
-    function StarkShiftAC(b::Basis, atom, lvl, beam::AbstractBeam)
+    function StarkShiftAC(b::Basis, atom, lvl, beam::AbstractBeam, q_axis::Vector{Float64})
         @warn "TEMP: Building StarkShiftAC term!"
         H = Op(b, atom, lvl => lvl, 1.0)    # level projector H = |lvl⟩⟨lvl|
         alphas = atom.alpha[getwavelength(beam)]
         alpha = alphas[lvl] - mean(alphas)
-        new{typeof(atom)}(atom, lvl, H, beam, alpha, Ref(Complex(0.0)))
+        new{typeof(atom)}(atom, lvl, H, beam, alpha, Ref(Complex(0.0)), q_axis)
     end
 end
 

@@ -431,6 +431,7 @@ detuning in rad/s (positive = blue shift in rotating-frame convention).
 """
 
 mutable struct StarkShiftACNode <: AbstractNode
+    q_axis::Vector{<:Real}
     atom::AbstractAtom
     level::AbstractLevel
     beam::AbstractBeam
@@ -438,18 +439,18 @@ mutable struct StarkShiftACNode <: AbstractNode
     _field::Union{Nothing, StarkShiftAC}
 end
 
-StarkShiftACNode(atom, level, beam; active=true) = 
-    StarkShiftACNode(atom, level, beam, active, nothing)
+StarkShiftACNode(atom, level, beam; q_axis = [0.0, 0.0, 1.0], active=true) = 
+    StarkShiftACNode(q_axis, atom, level, beam, active, nothing)
 
 node_output(n::StarkShiftACNode) = n._field
 
 function build_node!(node::StarkShiftACNode, basis::Basis)
     node._field === nothing || return node._field
     idx = node.atom.level_indices[node.level]
-    f = StarkShiftAC(basis, node.atom.inner, idx, beam)
+    f = StarkShiftAC(basis, node.atom.inner, idx, beam, q_axis)
     f._coeff[] = ComplexF64(node.active ? 1.0 : 0.0)
     node._field = f
-    
+
     return f
 end
 

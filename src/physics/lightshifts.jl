@@ -13,14 +13,11 @@ function add_lightshifts!(
     system, atom; 
     q_axis::AbstractVector{<:Real} = [0.0, 0.0, 1.0]
 )
-    lvls = atom.levels
-    lvl_indices = atom.level_indices
-    beams = system.beams
-
     stark_shifts = Dynamiq.AbstractField[]
 
-    for l in lvls
-        for b in beams
+    for l in atom.levels
+        for b in system.beams
+            
             # instantiate a StarkShiftACNode(b, atom, l)
 
             #push!(stark_shifts, node._field)
