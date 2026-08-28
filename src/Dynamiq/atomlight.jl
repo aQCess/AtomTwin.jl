@@ -329,14 +329,17 @@ struct StarkShiftAC{A} <: AbstractField
     alpha::Float64
     _coeff::Base.RefValue{ComplexF64}
 
-    function StarkShiftAC(b, atom, lvl, beam)
-        H = Op(b, atom, lvl => lvl, 1.0)
+    function StarkShiftAC(b::Basis, atom, lvl, beam::AbstractBeam)
+        @warn "TEMP: Building StarkShiftAC term!"
+        H = Op(b, atom, lvl => lvl, 1.0)    # level projector H = |lvl⟩⟨lvl|
         alphas = atom.alpha[getwavelength(beam)]
         alpha = alphas[lvl] - mean(alphas)
         new{typeof(atom)}(atom, lvl, H, beam, alpha, Ref(Complex(0.0)))
     end
 end
 
+
+# TEMP: This is where I must add tensor lightshift calculation
 """
     update!(f::StarkShiftAC, step)
 
@@ -345,7 +348,7 @@ intensity at the atomic position. The stored coefficient is
 \\(\alpha I / \\hbar\\) in angular-frequency units.
 """
 function update!(f::StarkShiftAC{A}, i::Int) where A
-    f._coeff[] = 1 / hbar * f.alpha * intensity(f.beam, f.atom.x)
+    f._coeff[] = 1 / hbar * (f.alpha / (2 * ε0 * c))  * intensity(f.beam, f.atom.x)
     return nothing
 end
 

@@ -108,15 +108,18 @@ end
 
 
 
-p = plot(λ, lshift_1S0_st; size=(900, 500), ylim=(-30, 10), label="1S0", xlabel="Wavelength [nm]", ylabel="Δν / I  [Hz/(W/cm²)]", alpha=1.0)
-plot!(p, λ, lshift_3P1_scalar.+lshift_3P1_tensor, label=f"3P1, I={I}, F={F}, mF={mF}, {angle} degrees")
-plot!(p, λ, lshift_3P1_scalar, label=f"3P1 scalar")
-plot!(p, λ, lshift_3P1_tensor, label=f"3P1 tensor")
+p = plot(λ, lshift_1S0_st; size=(900, 500), ylim=(-200, 10), label="1S0", xlabel="Wavelength [nm]", ylabel="Δν / I  [Hz/(W/cm²)]", alpha=1.0, linewidth = 2)
+plot!(p, λ, lshift_3P1_scalar.+lshift_3P1_tensor, label=f"3P1, I={I}, F={F}, mF={mF}, {angle} degrees", linewidth = 2)
+plot!(p, λ, lshift_3P1_scalar, label=f"3P1 scalar", linestyle=:dash)
+plot!(p, λ, lshift_3P1_tensor, label=f"3P1 tensor", linestyle=:dash)
 if filepath_3P1 != "No file"
     scatter!(p, data_3P1[!, "Wavelength"], data_3P1[!, "Lightshift"], label="Paper results", alpha=0.5, markersize=3)
 end
 scatter!(p, data_1S0[!, "Wavelength"], data_1S0[!, "Lightshift"], label="1S0 paper", alpha=0.5, markersize=3)
 vline!(p, [759], c="grey", linestyle=:dash)
+plot!(;xlim=(400, 500))
+
+vline!(p, [405], color="grey", linestyle=:dash)
 
 
 #savefig(p, f"25-08_deg_fix_I={I:.2f}_F={F:.2f}_mF={mF:.2f}_{angle}deg.pdf")

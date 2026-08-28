@@ -420,6 +420,61 @@ function recompile_node!(node::DetuningNode, d::Detuning, rng, param_values)
 end
 
 #=============================================================================
+AC STARK SHIFT NODE  (light shift)
+=============================================================================#
+
+"""
+    StarkShiftACNode
+
+Node for a single-level energy shift (Detuning). `delta` is the physical
+detuning in rad/s (positive = blue shift in rotating-frame convention).
+"""
+
+mutable struct StarkShiftACNode <: AbstractNode
+    atom::AbstractAtom
+    level::AbstractLevel
+    beam::AbstractBeam
+    active::Bool
+    _field::Union{Nothing, StarkShiftAC}
+end
+
+StarkShiftACNode(atom, level, beam; active=true) = 
+    StarkShiftACNode(atom, level, beam, active, nothing)
+
+node_output(n::StarkShiftACNode) = n._field
+
+function build_node!(node::StarkShiftACNode, basis::Basis)
+    node._field === nothing || return node._field
+    idx = node.atom.level_indices[node.level]
+    f = StarkShiftAC(basis, node.atom.inner, idx, beam)
+    f._coeff[] = ComplexF64(node.active ? 1.0 : 0.0)
+    node._field = f
+    
+    return f
+end
+
+function compile_node!(node::StarkShiftACNode, basis::Basis, ::Any, ::Any)
+    f = node._field
+    f === nothing && return build_node!(node, basis)
+    update!(f, nothing)
+    f._coeff[] = ComplexF64(node.active ? 1.0 : 0.0)
+
+    return f
+end
+
+function recompile_node!(node::StarkShiftACNode, ::Any, ::Any, ::Any)
+    f = node._field
+    f === nothing && error("StarkShiftACNode not compiled before recompile!")
+    update!(f, nothing)
+    f._coeff[] = ComplexF64(node.active ? 1.0 : 0.0)
+
+    return f
+end
+
+
+
+
+#=============================================================================
 HAMILTONIAN NODE  (Hamiltonian — operator supplied directly)
 =============================================================================#
 
