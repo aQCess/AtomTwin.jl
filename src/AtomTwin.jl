@@ -83,7 +83,7 @@ include("tomography.jl")
 
 # Export beams and fields
 export GaussianBeam, GeneralGaussianBeam, PlanarBeam
-export GlobalCoupling, PlanarCoupling, Detuning, Interaction, VdWInteraction, GaussianCoupling
+export GlobalCoupling, PlanarCoupling, Detuning, Interaction, VdWInteraction, GaussianCoupling, StarkShiftAC
 
 # Export quantum types
 export Jump, AbstractAtom, NLevelAtom, Basis
@@ -140,9 +140,10 @@ export getjumps, getheffective, getliouvillian
 
 # Export polarizability
 export PolarizabilityModel, PolarizabilityCurve
-export light_shift_coeff_Hz_per_Wcm2
+export light_shift_coeff_Hz_per_Wcm2, tensor_light_shift_coeff_Hz_per_Wcm2
 export scattering_rate_per_Wcm2
 export polarizability_au, polarizability_si
+export tensor_polarizability_au, tensor_polarizability_si
 
 # Export simulation
 export SimulationJob
@@ -155,6 +156,7 @@ export add_coupling!, add_detuning!, rabi_frequencies
 export add_decay!, add_dephasing!
 export add_interaction!, add_vdwinteraction!
 export add_hamiltonian!
+export add_lightshifts!
 
 # Export sequence instructions
 export Sequence, @sequence

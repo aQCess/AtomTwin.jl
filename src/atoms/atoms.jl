@@ -258,6 +258,7 @@ function _init_species_data!(a::AtomWrapper, inner::NLevelAtom, beams)
     isempty(models) && return nothing
     wavelengths = unique([getwavelength(b) for b in beams])
     for λ in wavelengths
+        @info "Populating α at λ = $(round(λ, sigdigits=3)*1e9)nm" maxlog=1
         α_si = map(a.levels) do l
             if haskey(models, l.label)
                 polarizability_si(models[l.label], λ * 1e9)

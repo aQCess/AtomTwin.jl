@@ -567,6 +567,7 @@ function tdse_semiclassical(psi::Vector{ComplexF64},
             fclassical!(dt, atom, beams)
         end
         for f in fields
+            @info "Updating field $(typeof(f))" maxlog=5
             update!(f, i)
         end
         fquantum!(dt, psi, H, _q1, _q2; order = order)

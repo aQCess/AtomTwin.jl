@@ -331,7 +331,7 @@ struct StarkShiftAC{A} <: AbstractField
     q_axis::Vector{Float64}
 
     function StarkShiftAC(b::Basis, atom, lvl, beam::AbstractBeam, q_axis::Vector{Float64})
-        @warn "TEMP: Building StarkShiftAC term!"
+        @info "TEMP: Building StarkShiftAC term!" maxlog=1
         H = Op(b, atom, lvl => lvl, 1.0)    # level projector H = |lvl⟩⟨lvl|
         alphas = atom.alpha[getwavelength(beam)]
         alpha = alphas[lvl] - mean(alphas)
@@ -483,6 +483,7 @@ function copy(a::NLevelAtom)
         v       = copy(a.v),
         m       = a.m,
         alphas  = Dict(k => copy(v) for (k, v) in a.alpha),
+        alphas2  = Dict(k => copy(v) for (k, v) in a.alpha2),
         lambdas = copy(a.lambda),
     )
     # Copy internal/derived state
