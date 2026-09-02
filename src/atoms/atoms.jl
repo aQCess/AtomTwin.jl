@@ -202,6 +202,7 @@ Each entry stores a named tuple `(mass, polarizabilities, I)` used by
 `AtomWrapper{S}` when explicit values are not provided.
 """
 const ATOM_DEFAULTS = Dict{Symbol, NamedTuple}(
+    :Ytterbium174 => (mass = 174amu, I = 0//1),
     :Ytterbium171 => (mass = 171amu, I = 1//2),
     :Rubidium87 => (mass = 87amu, I = 3//2),
     :Strontium88 => (mass = 88amu, I = 0//1),
@@ -258,9 +259,9 @@ function _init_species_data!(a::AtomWrapper, inner::NLevelAtom, beams)
     isempty(models) && return nothing
     wavelengths = unique([getwavelength(b) for b in beams])
     for λ in wavelengths
-        @info "Populating α at λ = $(round(λ, sigdigits=3)*1e9)nm" maxlog=1
         α_si = map(a.levels) do l
             if haskey(models, l.label)
+                @info "Populating '$(l.label)' at λ = $(round(λ, sigdigits=3)*1e9)nm, α = $(round(polarizability_si(models[l.label], λ * 1e9), sigdigits=3)) SI" maxlog=1
                 polarizability_si(models[l.label], λ * 1e9)
             else
                 @warn "Polarizability model not found for level '$(l.label)'; defaulting to α = 0.0" maxlog=1

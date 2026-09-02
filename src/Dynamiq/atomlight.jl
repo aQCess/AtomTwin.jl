@@ -327,6 +327,7 @@ struct StarkShiftAC{A} <: AbstractField
     H::Op
     beam::AbstractBeam
     alpha::Float64
+    alpha2::Float64
     _coeff::Base.RefValue{ComplexF64}
     q_axis::Vector{Float64}
 
@@ -334,8 +335,12 @@ struct StarkShiftAC{A} <: AbstractField
         @info "TEMP: Building StarkShiftAC term!" maxlog=1
         H = Op(b, atom, lvl => lvl, 1.0)    # level projector H = |lvl⟩⟨lvl|
         alphas = atom.alpha[getwavelength(beam)]
-        alpha = alphas[lvl] - mean(alphas)
-        new{typeof(atom)}(atom, lvl, H, beam, alpha, Ref(Complex(0.0)), q_axis)
+        alpha = alphas[lvl]# - mean(alphas)
+
+        alphas2 = atom.alpha2[getwavelength(beam)]
+        alpha2 = alphas2[lvl]
+        @info "alpha = $(round(alpha, sigdigits=3)), alpha2 = $(round(alpha2, sigdigits=3))" maxlog=3
+        new{typeof(atom)}(atom, lvl, H, beam, alpha, alpha2, Ref(Complex(0.0)), q_axis)
     end
 end
 
@@ -349,7 +354,12 @@ intensity at the atomic position. The stored coefficient is
 \\(\alpha I / \\hbar\\) in angular-frequency units.
 """
 function update!(f::StarkShiftAC{A}, i::Int) where A
-    f._coeff[] = 1 / hbar * (f.alpha / (2 * ε0 * c))  * intensity(f.beam, f.atom.x)
+    # For now we assume the beam is aligned along the z-axis
+    # This is already assumed for `GaussianBeam` objects, and only they implement the intensity() function
+    scalar_part = f.alpha
+
+
+    f._coeff[] = 1 / hbar * (f.alpha / (- 2 * ε0 * c))  * intensity(f.beam, f.atom.x)
     return nothing
 end
 

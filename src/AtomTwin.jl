@@ -66,6 +66,7 @@ include("system.jl")
 include("atoms/polarizability.jl")
 include("atoms/atoms.jl")
 include("atoms/ytterbium171atom.jl")
+include("atoms/ytterbium174atom.jl")
 include("atoms/rubidium87atom.jl")
 include("detectors.jl")
 include("job.jl")
@@ -169,7 +170,7 @@ export Parallel
 
 # Export atoms
 export Atom
-export Ytterbium171Atom
+export Ytterbium171Atom, Ytterbium174Atom
 export Potassium39Atom, Rubidium87Atom, Strontium88Atom
 export getspecies
 

@@ -13,7 +13,7 @@ Fields:
 - `λ::Float64`: Wavelength in meters.
 - `w0::Float64`: Transverse beam waist (radius) in meters.
 - `P::Float64`: Optical power in watts.
-- `I0::Float64`: Peak intensity at the waist.
+- `I0::Float64`: Peak intensity at the waist in W/m^2.
 - `w0z::Float64`: Effective axial waist (harmonic approximation) in meters.
 - `r0::Vector{Float64}`: Beam center position \\((x_0, y_0, z_0)\\).
 - `_coeff::Base.RefValue{ComplexF64}`: Complex amplitude envelope used by
@@ -27,7 +27,7 @@ mutable struct GaussianBeam <: AbstractBeam
     λ::Float64      # wavelength in m
     w0::Float64     # beam waist in m
     P::Float64      # power in watts
-    I0::Float64     # peak intensity
+    I0::Float64     # peak intensity in W/m^2
     w0z::Float64    # axial waist (harmonic approx.)
     r0::Vector{Float64}
     _coeff::Base.RefValue{ComplexF64}

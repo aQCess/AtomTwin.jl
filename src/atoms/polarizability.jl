@@ -404,8 +404,15 @@ function tensor_polarizability_si(model::PolarizabilityModel, λ_nm::Real; F::Ra
         Γ = 2π * t.gamma_MHz * 1e6
         Jf = t.J_f
 
-        am_factors = (-1)^(-2*Ji - Jf - F - I ) * sqrt((40*F*(2*F + 1)*(2*F - 1))/(3(F + 1)*(2*F + 3))) * (2*Ji + 1)
-        quotient = _light_shift_quotient(ω0, Γ, ωL, Ji, Jf)
+        #@info "Ji=$Ji, Jf=$Jf, F=$"
+        n = 2*Ji + Jf + F + I
+        if !isinteger(n)
+            error("Non-integer angular-momentum parity exponent: n = 2Ji + Jf + F + i = $n. 2Ji = $(2Ji), Jf = $Jf, F = $F, I = $I" *
+                "This usually means either wrong isotope/species model is being used (for example Yb171 vs Yb174), or the listed quantum numbers are impossible for this isotope.")
+        end
+        phase = (-1)^Int(-n)
+        am_factors = phase * sqrt((40*F*(2*F + 1)*(2*F - 1))/(3(F + 1)*(2*F + 3))) * (2*Ji + 1)
+        quotient = _light_shift_quotient(ω0, Γ, ωL)
         deg_factor = _degeneracy_factor(Ji, Jf, ω0)
         wigner_symbols = wigner6j(1, 1, 2, Ji, Ji, Jf) * wigner6j(Ji, Ji, 2, F, F, I)
         α2_SI += am_factors * quotient * wigner_symbols * deg_factor
