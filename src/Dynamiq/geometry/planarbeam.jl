@@ -83,3 +83,15 @@ end
 Return a vector containing the beam pb
 """
 getbeams(pb::PlanarBeam) = AbstractBeam[pb]
+
+
+"""
+    intensity(b::GeneralGaussianBeam, r)
+
+Intensity of the plane wave at position `r` in SI units.
+
+This is syntactical sugar for `b.I`*1e-4, which is constant for a plane wave.
+"""
+@inline function intensity(b::PlanarBeam, r::Vector{Float64})
+    return b.I*1e-4
+end

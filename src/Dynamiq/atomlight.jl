@@ -328,6 +328,9 @@ struct StarkShiftAC{A} <: AbstractField
     beam::AbstractBeam
     alpha::Float64
     alpha2::Float64
+    tensor_shift::Bool
+    mF::Rational
+    F::Rational
     _coeff::Base.RefValue{ComplexF64}
     q_axis::Vector{Float64}
 
@@ -340,7 +343,20 @@ struct StarkShiftAC{A} <: AbstractField
         alphas2 = atom.alpha2[getwavelength(beam)]
         alpha2 = alphas2[lvl]
         @info "alpha = $(round(alpha, sigdigits=3)), alpha2 = $(round(alpha2, sigdigits=3))" maxlog=3
-        new{typeof(atom)}(atom, lvl, H, beam, alpha, alpha2, Ref(Complex(0.0)), q_axis)
+
+        tensor_shift = true
+        # Only HyperfineLevels can have tensor shift
+        if !(level isa HyperfineLevel)
+            @warn "StarkShiftAC: level $(f.level.label) is not HyperfineLevel; tensor shift disabled" maxlog=1
+            tensor_shift = false
+        end
+
+        if !(hasproperty(f.beam, :pol))
+            @warn "StarkShiftAC: beam $(beam) has no polarization; tensor shift disabled" maxlog=1
+            tensor_shift = false
+        end
+
+        new{typeof(atom)}(atom, lvl, H, beam, alpha, alpha2, tensor_shift, Ref(Complex(0.0)), q_axis)
     end
 end
 
@@ -354,12 +370,20 @@ intensity at the atomic position. The stored coefficient is
 \\(\alpha I / \\hbar\\) in angular-frequency units.
 """
 function update!(f::StarkShiftAC{A}, i::Int) where A
-    # For now we assume the beam is aligned along the z-axis
-    # This is already assumed for `GaussianBeam` objects, and only they implement the intensity() function
+    # We assume that the beam object implements the `intensity` method
     scalar_part = f.alpha
 
+    tensor_part = 0.0
+    if f.tensor_shift
+        F = f.level.F
+        mF = f.level.mF
+        # vectors are normalised
+        costheta = abs(dot(f.beam.pol, f.q_axis))
 
-    f._coeff[] = 1 / hbar * (f.alpha / (- 2 * ε0 * c))  * intensity(f.beam, f.atom.x)
+        tensor_part = f.alpha2 * 0.5 * (3 * costheta^2 - 1) * (3 * mF^2 - F * (F + 1)) / (F * (2 * F - 1))
+    end
+
+    f._coeff[] = ((scalar_part + tensor_part) / (- 2 * ε0 * c * hbar))  * intensity(f.beam, f.atom.x)
     return nothing
 end
 

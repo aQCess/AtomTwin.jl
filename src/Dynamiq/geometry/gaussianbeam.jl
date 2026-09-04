@@ -22,6 +22,9 @@ Fields:
 The axial waist `w0z` is chosen such that the simple 3D Gaussian intensity
 \\(I \\propto \\exp[-2(x^2/w_0^2 + y^2/w_0^2 + z^2/w_{0z}^2)]\\) matches the
 quadratic expansion of a paraxial Gaussian near the focus.
+
+`GaussianBeam` does not contain polarization information, it is not suitable for tensor lightshift simulations. 
+Use `GeneralGaussianBeam` for arbitrary propagation directions and polarizations.
 """
 mutable struct GaussianBeam <: AbstractBeam
     λ::Float64      # wavelength in m
@@ -104,7 +107,7 @@ end
 """
     intensity(b::GaussianBeam, r)
 
-Intensity of the axis-aligned Gaussian beam at position `r`.
+Intensity of the axis-aligned Gaussian beam at position `r` in SI units.
 
 Implements a 3D harmonic Gaussian profile
 
@@ -449,7 +452,7 @@ end
 """
     intensity(b::GeneralGaussianBeam, r)
 
-Intensity of the elliptical Gaussian beam at position `r`.
+Intensity of the elliptical Gaussian beam at position `r` in SI units.
 
 In local coordinates \\((x', y')\\),
 
