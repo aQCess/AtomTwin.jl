@@ -329,12 +329,11 @@ struct StarkShiftAC{A} <: AbstractField
     alpha::Float64
     alpha2::Float64
     tensor_shift::Bool
-    mF::Rational
-    F::Rational
+    hyperfine_coeff::Rational{Int64}
     _coeff::Base.RefValue{ComplexF64}
     q_axis::Vector{Float64}
 
-    function StarkShiftAC(b::Basis, atom, lvl, beam::AbstractBeam, q_axis::Vector{Float64})
+    function StarkShiftAC(b::Basis, atom, lvl, beam::AbstractBeam, q_axis::Vector{Float64}; tensor_shift = false, F = 0//1, mF = 0//1)
         @info "TEMP: Building StarkShiftAC term!" maxlog=1
         H = Op(b, atom, lvl => lvl, 1.0)    # level projector H = |lvl⟩⟨lvl|
         alphas = atom.alpha[getwavelength(beam)]
@@ -344,19 +343,20 @@ struct StarkShiftAC{A} <: AbstractField
         alpha2 = alphas2[lvl]
         @info "alpha = $(round(alpha, sigdigits=3)), alpha2 = $(round(alpha2, sigdigits=3))" maxlog=3
 
-        tensor_shift = true
-        # Only HyperfineLevels can have tensor shift
-        if !(level isa HyperfineLevel)
-            @warn "StarkShiftAC: level $(f.level.label) is not HyperfineLevel; tensor shift disabled" maxlog=1
+        num = (3*mF^2 - F*(F + 1))
+        denom = (F*(2*F - 1))
+        # denominator only vanishes for F = 0, 1/2, where tensor shift vanishes anyways
+        if denom != 0//1
+            hyperfine_coeff = num/denom
+        else
             tensor_shift = false
+            hyperfine_coeff = 0//1
         end
 
-        if !(hasproperty(f.beam, :pol))
-            @warn "StarkShiftAC: beam $(beam) has no polarization; tensor shift disabled" maxlog=1
-            tensor_shift = false
-        end
+        
 
-        new{typeof(atom)}(atom, lvl, H, beam, alpha, alpha2, tensor_shift, Ref(Complex(0.0)), q_axis)
+
+        new{typeof(atom)}(atom, lvl, H, beam, alpha, alpha2, tensor_shift, hyperfine_coeff, Ref(Complex(0.0)), q_axis)
     end
 end
 
@@ -375,12 +375,10 @@ function update!(f::StarkShiftAC{A}, i::Int) where A
 
     tensor_part = 0.0
     if f.tensor_shift
-        F = f.level.F
-        mF = f.level.mF
         # vectors are normalised
         costheta = abs(dot(f.beam.pol, f.q_axis))
 
-        tensor_part = f.alpha2 * 0.5 * (3 * costheta^2 - 1) * (3 * mF^2 - F * (F + 1)) / (F * (2 * F - 1))
+        tensor_part = f.alpha2 * 0.5 * (3 * costheta^2 - 1) * f.hyperfine_coeff
     end
 
     f._coeff[] = ((scalar_part + tensor_part) / (- 2 * ε0 * c * hbar))  * intensity(f.beam, f.atom.x)

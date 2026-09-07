@@ -447,7 +447,24 @@ node_output(n::StarkShiftACNode) = n._field
 function build_node!(node::StarkShiftACNode, basis::Basis)
     node._field === nothing || return node._field
     idx = node.atom.level_indices[node.level]
-    f = StarkShiftAC(basis, node.atom.inner, idx, node.beam, node.q_axis)
+
+    tensor_shift = true
+    # Only HyperfineLevels can have tensor shift
+    F = 0//1; mF = 0//1
+    if node.level isa HyperfineLevel
+        F = node.level.F
+        mF = node.level.mF
+    else
+        @warn "StarkShiftAC: level $(node.level.label) is not HyperfineLevel; tensor shift disabled" maxlog=1
+        tensor_shift = false
+    end
+    # Polarization data must be availabele to compute tensor shift
+    if !(hasproperty(node.beam, :pol))
+        @warn "StarkShiftAC: beam $(node.beam) has no polarization; tensor shift disabled" maxlog=1
+        tensor_shift = false
+    end
+
+    f = StarkShiftAC(basis, node.atom.inner, idx, node.beam, node.q_axis; tensor_shift=tensor_shift, F=F, mF=mF)
     f._coeff[] = ComplexF64(node.active ? 1.0 : 0.0)
     node._field = f
 

@@ -50,7 +50,7 @@ end
 # ## Run simulations
 out_me = play(system, seq; initial_state = g, density_matrix = true) # master equation
 out_qt = play(system, seq; initial_state = g, shots = 400) # quantum trajectories
-end     
+  
 
 # ## Plot results
 
