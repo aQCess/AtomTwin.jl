@@ -51,23 +51,29 @@ const YB171_POLARIZABILITY_3P0 = PolarizabilityModel(
 """
     YB171_POLARIZABILITY_3P1
 Empirical polarizability model for the Yb-171 3P₁ state.
+
+Model adapted from T. O. Höhn, PhD thesis (2024), with total effective linewidth of 51.35 MHz on the fictious high-lying transitions
+
+The near-magic 532nm wavelength reported in New J. Phys. 18 (2016) 023016 is not well captured by the model.
+Please let us know of any measurements of the differential lightshift around 530-550nm.
+
 """
 const YB171_POLARIZABILITY_3P1 = PolarizabilityModel(
     "3P1",
     [
-        (freq_THz = -539.386800, gamma_MHz = 0.183,  state_f = "(6s2) 1S0",     J_f = 1),     # (6s2) 1S0     #
+        (freq_THz = -539.386800, gamma_MHz = 0.183,  state_f = "(6s2) 1S0",     J_f = 0),     # (6s2) 1S0     #
         (freq_THz = 194.778008,  gamma_MHz = 0.170,  state_f = "(6s5d) 3D1",    J_f = 1),     # (6s5d) 3D1
         (freq_THz = 202.657933,  gamma_MHz = 0.280,  state_f = "(6s5d) 3D2",    J_f = 2),     # (6s5d) 3D2
         (freq_THz = 440.775408,  gamma_MHz = 3.954,  state_f = "(6s7s) 3S1",    J_f = 1),     # (6s7s) 3S1   #
         (freq_THz = 654.048602,  gamma_MHz = 2.783,  state_f = "(6s6d) 3D1",    J_f = 1),     # (6s6d) 3D1   #
         (freq_THz = 654.927593,  gamma_MHz = 5.215,  state_f = "(6s6d) 3D2",    J_f = 2),     # (6s6d) 3D2   #
         (freq_THz = 708.200713,  gamma_MHz = 1.718,  state_f = "(6s8s) 3S1",    J_f = 1),     # (6s8s) 3S1
-        (freq_THz = 778.975785,  gamma_MHz = 22.313, state_f = "Empirical J=1", J_f = 1),     # Empirical J=1
-        (freq_THz = 778.975785,  gamma_MHz = 36.687, state_f = "Empirical J=2", J_f = 2),     # Empirical J=2
+        (freq_THz = 778.975785,  gamma_MHz = 51.352116012573234 * 0.378, state_f = "Empirical J=1", J_f = 1),     # Empirical J=1
+        (freq_THz = 778.975785,  gamma_MHz = 51.352116012573234 * 0.622, state_f = "Empirical J=2", J_f = 2),     # Empirical J=2
     ];
     J_i = 1,
     offset_Hz_per_Wm2 = 0.0,
-    reference="T. O. Höhn, PhD thesis (2024)",
+    reference="Model adapted from T. O. Höhn, PhD thesis (2024)",
 )
 
 
