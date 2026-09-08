@@ -52,9 +52,10 @@ const YB171_POLARIZABILITY_3P0 = PolarizabilityModel(
     YB171_POLARIZABILITY_3P1
 Empirical polarizability model for the Yb-171 3P₁ state.
 
-Model adapted from T. O. Höhn, PhD thesis (2024), with total effective linewidth of 51.35 MHz on the fictious high-lying transitions
+Model adapted from T. O. Höhn, PhD thesis (2024)
+Total linewidth of the two empirical transitions is a fit parameter with fitted value 51.35 MHz.
 
-The near-magic 532nm wavelength reported in New J. Phys. 18 (2016) 023016 is not well captured by the model.
+The near-magic 532nm wavelength reported in New J. Phys. 18 (2016) 023016 is not well captured by this model.
 Please let us know of any measurements of the differential lightshift around 530-550nm.
 
 """

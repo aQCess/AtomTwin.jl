@@ -5,6 +5,7 @@
 
 
 using AtomTwin
+using AtomTwin.Units
 using Plots 
 
 # ## Parameters

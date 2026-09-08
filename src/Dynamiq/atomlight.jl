@@ -376,10 +376,13 @@ function update!(f::StarkShiftAC{A}, i::Int) where A
         # vectors are normalised
         costheta = abs(dot(f.beam.pol, f.q_axis))
 
+        #@info "costheta = $(costheta), $(f.beam.pol), $(f.q_axis)" maxlog=10
+
         tensor_part = f.alpha2 * 0.5 * (3 * costheta^2 - 1) * f.hyperfine_coeff
     end
+    #@info "tensor part = $(tensor_part), tensor_on = $(f.tensor_shift)" maxlog=10
 
-    f._coeff[] = ((scalar_part + tensor_part) / (- 2 * ε0 * c * hbar))  * intensity(f.beam, f.atom.x)
+    f._coeff[] = ((scalar_part + tensor_part) / (- 2 * ε0 * c * hbar)) * intensity(f.beam, f.atom.x)
     return nothing
 end
 
