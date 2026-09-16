@@ -15,6 +15,7 @@ example_titles = (
     "rabi_with_motion"                 => "Rabi with motion",
     "rabi_with_static_intensity_noise" => "Rabi with static noise",
     "rydberg_blockade"                 => "Rydberg blockade",
+    "two_qubit_exchange"               => "Two-qubit exchange (iSWAP)",
     "time-optimal_rydberg_gate"        => "Time-optimal Rydberg gate",
     "gateX_tomography"                 => "GateX tomography",
     "eit_with_dissipation"             => "EIT with dissipation",

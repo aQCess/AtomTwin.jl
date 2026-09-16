@@ -96,7 +96,9 @@ Public = false
 ### Solvers
 ```@autodocs
 Modules = [AtomTwin.Dynamiq]
-Pages = ["Dynamiq/solvers.jl"]
+Pages = ["Dynamiq/solvers/kernels.jl", "Dynamiq/solvers/integrators.jl",
+         "Dynamiq/solvers/propagators.jl", "Dynamiq/solvers/control.jl",
+         "Dynamiq/solvers/solvers.jl"]
 Public = false
 ```
 ### Statevectors and Operators

@@ -38,32 +38,60 @@ Keyword arguments
 - `gifname`: if `nothing`, animate interactively; otherwise, record a
   GIF to the given file path.
 - `framerate`: frame rate used when recording a GIF.
+- `stride`: show every `stride`-th time sample. Raising it speeds the animation
+  up (and shrinks the GIF) without changing `framerate`; e.g. `stride = 10` plays
+  5x faster than the default 2.
 - `shotidx`: trajectory index to animate in the multi-shot case.
 
 Returns the `Figure` containing the animation. When `gifname` is set,
 frames are recorded with `record`; otherwise, frames are advanced in a
 loop with `sleep(sleep_time)` between updates.
 """
+
+# `options` may be a Dict (unordered) or a Vector of `name => style` pairs, which
+# preserves the caller's intended draw order.
+_style_names(o::AbstractDict) = collect(keys(o))
+_style_names(o::AbstractVector) = [first(p) for p in o]
+_style_for(o::AbstractDict, k) = o[k]
+_style_for(o::AbstractVector, k) = last(o[findfirst(p -> first(p) == k, o)])
+
 function AtomTwin.Visualization.animate(
     out::NamedTuple;
-    options = Dict{String,NamedTuple}(),
+    options = Dict{String,NamedTuple}(),   # Dict, or an ordered Vector of `name => style` pairs
     limits = ((-40, 40), (-15, 15)),
     sleep_time = 0.001,
     unit = 1e-6,
     gifname = nothing,
     framerate = 60,
+    stride = 2,
     shotidx = 1,
 )
-    groups = collect(keys(out.detectors))
-
     # Map detector name to a style key based on prefixes in `options`
     function style_key(det::AbstractString)
-        for k in keys(options)
+        for k in _style_names(options)
             if startswith(det, k)
                 return k
             end
         end
         return nothing
+    end
+
+    # Draw order matters: `keys(out.detectors)` is a Dict, so its order is
+    # arbitrary and interleaves groups. Markers drawn later paint over earlier
+    # ones, so a large static-tweezer marker could hide a smaller dynamic one
+    # sitting on the same site -- making dynamic tweezers look stationary, and
+    # appear/disappear as they moved between sites.
+    #
+    # Sort by the order the styles are declared in `options`, so the caller
+    # controls layering (declare background groups first), and sort by name
+    # within a group so runs are reproducible.
+    groups = let ks = filter(k -> !endswith(k, "_ampl"), collect(keys(out.detectors))),
+                 order = _style_names(options)
+        rank(g) = begin
+            k = style_key(g)
+            k === nothing ? length(order) + 1 : findfirst(==(k), order)
+        end
+        sort(ks; by = g -> (rank(g), g))
     end
 
     # Build per-group trajectory vectors
@@ -88,6 +116,34 @@ function AtomTwin.Visualization.animate(
         xvecs[g], yvecs[g], tvecs[g] = extractor(out, g, shotidx)
     end
 
+    # Amplitude gating. A tweezer trap is switched off by setting its beam
+    # amplitude to zero (AmplRow/AmplCol), but a MotionDetector only records
+    # POSITION -- so without this every trap is drawn whether or not it exists,
+    # showing phantom static boxes and letting "boxes" appear to cross.
+    #
+    # If a detector "<name>" has a companion amplitude detector "<name>_ampl",
+    # frames where |amplitude| is negligible are blanked (NaN), which Makie
+    # simply does not draw.
+    avecs = Dict{String,Vector{Float64}}()
+    for g in groups
+        key = g * "_ampl"
+        haskey(out.detectors, key) || continue
+        raw = out.detectors[key]
+        col = ndims(raw) == 3 ? view(raw, :, 1, shotidx) : vec(raw)
+        avecs[g] = abs.(col)
+    end
+    if !isempty(avecs)
+        for (g, a) in avecs
+            thresh = 1e-9 * maximum(a; init = 0.0)
+            for i in eachindex(a)
+                if a[i] <= thresh
+                    xvecs[g][i] = NaN
+                    yvecs[g][i] = NaN
+                end
+            end
+        end
+    end
+
     x_obs = Dict(g => Observable([xvecs[g][1]]) for g in groups)
     y_obs = Dict(g => Observable([yvecs[g][1]]) for g in groups)
 
@@ -107,7 +163,7 @@ function AtomTwin.Visualization.animate(
 
     for g in groups
         key = style_key(g)
-        style = key === nothing ? NamedTuple() : options[key]
+        style = key === nothing ? NamedTuple() : _style_for(options, key)
         scatter!(ax, x_obs[g], y_obs[g]; style...)
     end
 
@@ -125,7 +181,6 @@ function AtomTwin.Visualization.animate(
         ax.title[] = "$t ms"
     end
 
-    stride = 2
     M = minimum(length.(values(tvecs)))
     if gifname !== nothing
         record(fig, gifname, 1:stride:M; framerate = framerate) do i
