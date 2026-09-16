@@ -148,18 +148,27 @@ end
 const _THETA_WARN = 2.0
 
 """
-    warn_if_step_too_large(terms, dt, order)
+    warn_if_step_too_large(terms, dt, integrator)
 
-Warn once, before integrating, when the step is near or past the Taylor
-propagator's stability limit. Too large a `dt` otherwise produces `NaN`
-populations with no indication of why.
+Warn, before integrating, when the step is near or past `integrator`'s stability
+limit. Too large a `dt` otherwise produces `NaN` populations with no indication
+of why.
+
+Only [`Taylor`](@ref) has such a limit. [`Chebyshev`](@ref) has none -- it
+absorbs a larger `θ = ‖H‖·dt` by raising its expansion degree -- so warning on it
+would be false: measured at `θ = 63`, Chebyshev is accurate to 3.5e-13 where
+Taylor-4 is wrong by 6.5e+05.
 """
+warn_if_step_too_large(::Vector{Tuple{Base.RefValue{ComplexF64},Op}},
+                       ::Float64, ::AbstractIntegrator) = 0.0
+
 function warn_if_step_too_large(terms::Vector{Tuple{Base.RefValue{ComplexF64},Op}},
-                                dt::Float64, order::Int)
+                                dt::Float64, integrator::Taylor)
     # `peak = true`: an instantaneous bound would miss a drive not yet switched on.
     nrm = gershgorin_bound(terms; peak = true)
     θ = nrm * dt
     θ < _THETA_WARN && return θ
+    order = taylor_order(integrator)
     lim = stability_limit(order)
     suggested = 0.5 * lim / max(nrm, eps())
     @warn """

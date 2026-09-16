@@ -57,7 +57,7 @@ function evolve!(state::Tuple{Matrix{ComplexF64},Vector{<:NLevelAtom}},
     ]
 
     warn_if_step_too_large(L, length(tspan) > 1 ? tspan[2] - tspan[1] : 0.0,
-                           get(kwargs, :order, 4))
+                           get(kwargs, :integrator, Chebyshev()))
     if frozen || isempty(beams)
         qme(ρ, L, J, tspan; fields = fields, kwargs...)
     else
@@ -89,7 +89,7 @@ function evolve!(state::Tuple{Vector{ComplexF64},Vector{<:NLevelAtom}},
     psi, atoms = state
     _dt_probe = length(tspan) > 1 ? tspan[2] - tspan[1] : 0.0
     H = Tuple{Base.RefValue{ComplexF64},Op}[(d._coeff, d.H) for d in fields]
-    warn_if_step_too_large(H, _dt_probe, get(kwargs, :order, 4))
+    warn_if_step_too_large(H, _dt_probe, get(kwargs, :integrator, Chebyshev()))
 
     if isempty(jumps)
         if frozen

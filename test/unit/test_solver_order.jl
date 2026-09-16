@@ -601,6 +601,42 @@ end
     end
 
 
+    @testset "stability warning is integrator-aware" begin
+        # The warning describes Taylor's failure mode, and `evolve!` used to ask
+        # for it with `get(kwargs, :order, 4)` -- but `order` moved onto
+        # `Taylor(order)`, so that always returned 4 and every Chebyshev run was
+        # warned against a limit it does not have. Chebyshev at theta = 63 is
+        # accurate to 3.5e-13 where Taylor-4 is wrong by 6.5e+05.
+        Ω = 2π * 5e6
+        op = AtomTwin.Dynamiq.Op(
+            Tuple{Int,Int,ComplexF64}[(1, 2, ComplexF64(Ω))],
+            Tuple{Int,Int,ComplexF64}[(2, 1, ComplexF64(Ω))], 2)
+        H = Tuple{Base.RefValue{ComplexF64},AtomTwin.Dynamiq.Op}[
+                (Ref(ComplexF64(1.0)), op)]
+        dt = 1e-6                                   # theta ~ 31, far past 2.828
+
+        # Chebyshev: silent, and says so by returning 0.
+        @test_logs AtomTwin.Dynamiq.warn_if_step_too_large(
+            H, dt, AtomTwin.Dynamiq.Chebyshev())
+
+        # Taylor: warns, and reports the limit of the order actually requested.
+        @test_logs (:warn,) AtomTwin.Dynamiq.warn_if_step_too_large(
+            H, dt, AtomTwin.Dynamiq.Taylor(4))
+        @test_logs (:warn,) AtomTwin.Dynamiq.warn_if_step_too_large(
+            H, dt, AtomTwin.Dynamiq.Taylor(8))
+
+        # Chebyshev really is accurate where the old warning claimed divergence.
+        spec = AtomTwin.Dynamiq.spectral_spec(H)
+        Hm = ComplexF64[0 Ω; Ω 0]
+        ψ0 = ComplexF64[1, 0]
+        plan = AtomTwin.Dynamiq.plan_step(AtomTwin.Dynamiq.Chebyshev(), ψ0, dt,
+                                          spec; tol = 1e-12)
+        ψ = copy(ψ0)
+        AtomTwin.Dynamiq.propagate!(AtomTwin.Dynamiq.Chebyshev(), ψ, H, plan)
+        @test norm(ψ - exp(-1im * Hm * dt) * ψ0) < 1e-10
+    end
+
+
     @testset "solver probe" begin
         # The controller's instrumentation hook. `NoProbe` must cost nothing --
         # the field was previously `::Any`, and the point of typing it is that
