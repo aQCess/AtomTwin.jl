@@ -50,6 +50,27 @@ const YB171_POLARIZABILITY_3P0 = PolarizabilityModel(
 
 
 """
+    Ytterbium171
+
+Term symbols for Yb-171, for the `term =` argument of a level or manifold.
+Usually written with the `l"..."` macro, which needs no species prefix:
+
+```julia
+g = Level("ground"; term = l"1S0")
+e = HyperfineManifold(3//2, 1; label = "³P₁", term = l"3P1")
+```
+
+`Ytterbium171._3P1` names the same object when the species is worth spelling out.
+Either way a typo is an error where it is written, not a silent α = 0.
+"""
+module Ytterbium171
+import ..TermSymbol, ..TERM_REGISTRY, ..@term
+@term "1S0" 0//1      # (6s²)  ¹S₀  ground
+@term "3P0" 0//1      # (6s6p) ³P₀  clock
+@term "3P1" 1//1      # (6s6p) ³P₁  intercombination
+end
+
+"""
     YB171_POLARIZABILITY
 
 Dictionary of all Yb-171 polarizability models, keyed by state label.

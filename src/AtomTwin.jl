@@ -123,6 +123,7 @@ export LaserPhaseNoiseModel
 # Export levels
 export HyperfineManifold, FineManifold
 export Level, FineLevel, HyperfineLevel
+export TermSymbol, @term, @l_str
 export Superposition
 # `Operator` is exported; the `transition`/`projector` constructors are NOT, because
 # they collide with QuantumOptics' exports (AtomTwin is routinely `using`-ed alongside
@@ -168,6 +169,8 @@ export Parallel
 # Export atoms
 export Atom
 export Ytterbium171Atom
+# Species term-symbol namespaces (Ytterbium171._3P1, or l"3P1")
+export Ytterbium171, Strontium88
 export Potassium39Atom, Rubidium87Atom, Strontium88Atom
 export getspecies
 

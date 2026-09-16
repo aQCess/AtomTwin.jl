@@ -242,29 +242,59 @@ Base.hash(a::AtomWrapper, h::UInt) = hash(a.inner, h)
 #------------------------------------------------------------------------------
 
 """
-    initspeciesdata!(a::AtomWrapper{S}, beams) where S
+    _level_term(level) -> String
 
-Generic species data initialization. If the species defines a constant
-`Symbol(S, "_POLARIZABILITY_MODELS")` as a `Dict{String, PolarizabilityModel}`,
-polarizabilities are automatically computed for all beam wavelengths and all levels.
+The polarizability lookup key for a level: its `term` if it has one, else its
+`label`. A bare [`Level`](@ref) sets `term` from `label`, so `Level("1S0")` keeps
+resolving as it always did.
+"""
+_level_term(l::AbstractLevel) = hasproperty(l, :term) ? getproperty(l, :term) :
+                                hasproperty(l, :label) ? getproperty(l, :label) : ""
 
-Level labels must match keys in the polarizability dictionary, otherwise the polarizability
-is assumed as zero and a warning will be issued.
+"""
+    _init_species_data!(a::AtomWrapper, inner::NLevelAtom, beams)
+
+Fill `inner.alpha[λ]` with one polarizability per level, for every wavelength the
+`beams` use. Levels are matched to the species' models (see
+[`getpolarizabilitymodels`](@ref)) by [`_level_term`](@ref).
+
+A level with no matching model gets `α = 0`. That is legitimate — a leakage level
+or a Rydberg state has no model here — so it is not an error, but it IS reported
+once per atom listing every unmatched term together, because the consequence is
+silent: an untrapped atom, and a `frozen` heuristic in `play` that then declines
+to move anything at all.
+
+Tensor polarizability is not applied here. `α` is the state's scalar response;
+the sublevel- and polarisation-dependent part needs the trap's own geometry and is
+applied where that is known.
 """
 function _init_species_data!(a::AtomWrapper, inner::NLevelAtom, beams)
     models = getpolarizabilitymodels(a)
     isempty(models) && return nothing
     wavelengths = unique([getwavelength(b) for b in beams])
+
+    missing_terms = String[]
     for λ in wavelengths
         α_si = map(a.levels) do l
-            if haskey(models, l.label)
-                polarizability_si(models[l.label], λ * 1e9)
+            key = _level_term(l)
+            if haskey(models, key)
+                polarizability_si(models[key], λ * 1e9)
             else
-                @warn "Polarizability model not found for level '$(l.label)'; defaulting to α = 0.0" maxlog=1
+                key in missing_terms || push!(missing_terms, key)
                 0.0
             end
         end
         inner.alpha[λ] = α_si
+    end
+
+    if !isempty(missing_terms)
+        @warn """
+              No polarizability model for $(length(missing_terms)) level(s) of \
+              $(getspecies(a)); each takes α = 0 and feels no dipole force.
+              Unmatched: $(join(map(t -> isempty(t) ? "(no term)" : "'$t'", missing_terms), ", "))
+              Known: $(join(sort(collect(keys(models))), ", "))
+              Set `term=` on the level or manifold if one of these was meant.\
+              """
     end
     return nothing
 end

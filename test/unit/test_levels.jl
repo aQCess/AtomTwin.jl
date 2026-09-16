@@ -55,3 +55,61 @@
     @test abs(ψ[atom.level_indices[g2]]) ≈ 0 atol=1e-12
     @test ψ'ψ ≈ 1
 end
+
+# ======================================================================
+# Term symbols
+# ======================================================================
+
+@testset "term symbols resolve and carry J" begin
+    @test l"1S0" isa TermSymbol
+    @test (l"1S0").J == 0//1
+    @test (l"3P1").J == 1//1
+    @test (l"3P1").name == "3P1"
+    # The species-qualified constants name the same objects: a term denotes an
+    # electronic state, and the species-specific part is the polarizability model.
+    @test AtomTwin.Ytterbium171._3P1 === l"3P1"
+    @test AtomTwin.Strontium88._1S0  === l"1S0"
+    # An unknown term fails where it is written. (`l"..."` resolves at parse time,
+    # so this has to go through eval to be catchable.)
+    @test_throws Exception eval(:(@l_str "3Q9"))
+end
+
+@testset "term propagates from manifold to sublevels" begin
+    # The failure this prevents: `label` is display text — the shipped examples
+    # write "³P₀" — while polarizability data is keyed on ASCII "3P0". Matching
+    # one against the other silently misses and the level takes α = 0.
+    e = HyperfineManifold(1//1, 1; label = "³P₁", term = l"3P1")
+    @test e.term == "3P1"
+    @test length(e.levels) == 3
+    @test all(l -> l.term == "3P1", e.levels)
+    @test all(l -> l.label == "³P₁", e.levels)   # label stays cosmetic
+
+    f = FineManifold(1//1; label = "³P₁", term = l"3P1")
+    @test f.term == "3P1"
+    @test all(l -> l.term == "3P1", f.levels)
+end
+
+@testset "a term checks the manifold's own J" begin
+    # HyperfineManifold(F, J) — the classic slip is swapping the two. The term
+    # knows J, so the mismatch is caught at declaration.
+    @test_throws ErrorException HyperfineManifold(1//1, 0; term = l"3P1")
+    @test_throws ErrorException FineManifold(0//1; term = l"3P1")
+    # the correct declaration is fine
+    @test HyperfineManifold(1//1, 1; term = l"3P1").J == 1//1
+end
+
+@testset "levels keep their pre-term behaviour" begin
+    # A bare Level has no quantum numbers, so its label doubles as its term —
+    # this is what keeps `Level("1S0")` resolving against species data.
+    @test AtomTwin._level_term(Level("1S0")) == "1S0"
+    @test Level("1S0").term == "1S0"
+    # …but an explicit term wins, so a level may be labelled freely.
+    @test AtomTwin._level_term(Level("ground"; term = l"1S0")) == "1S0"
+    @test copy(Level("g"; term = l"1S0")).term == "1S0"
+
+    # Positional constructors predate `term` and must still work.
+    @test HyperfineLevel(1//1, 1//1, 0//1, 1.0, "x").term == ""
+    @test FineLevel(1//1, 0//1, 1.0, "x").term == ""
+    # A plain String is still accepted where a term is.
+    @test HyperfineManifold(1//1, 1; term = "3P1").term == "3P1"
+end
