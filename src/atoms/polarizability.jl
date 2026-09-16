@@ -21,8 +21,14 @@ discrete transitions and an optional offset.
 # Fields
 - `state::String`: Electronic state label (e.g. `"1S0"`, `"3P0"`).
 - `transitions::Vector{NamedTuple}`: List of transitions; each entry has
-  - `freq_THz::Float64`: Transition frequency in THz (linear).
+  - `freq_THz::Float64`: Transition frequency in THz (linear). **Signed**: positive
+    if the final state lies ABOVE the model's state in energy, negative if below.
   - `gamma_MHz::Float64`: Effective line width in MHz (linear) — see below.
+  - `J::Rational{Int}`: Total angular momentum of the model's own state.
+  - `J_f::Rational{Int}`: Total angular momentum of the final state.
+  - `f::Rational{Int}`: The line's weight in the scalar sum (see below).
+  - `source::Symbol`: Provenance — `:measured`, `:ls_estimated`, or `:fitted`.
+- `J::Rational{Int}`: Total electronic angular momentum of the state itself.
 - `offset_Hz_per_Wm2::Float64`: Empirical offset in Hz/(W/m²).
 - `reference::String`: Bibliographic reference for the data.
 
@@ -51,10 +57,42 @@ equivalent ways to supply that weight are accepted by the constructor:
 Do **not** feed natural linewidths for an alkali doublet: the near-equal D₁/D₂
 natural widths under-weight D₂ and mis-split the light shift off-resonance, while
 still agreeing at the static limit (a silent error). Use `dipole_ea0` instead.
+
+# Angular momentum and the line-strength factor
+
+Each line enters the scalar sum with a weight `f`. How that weight is obtained
+depends on which of the two specifications above was used, and the distinction
+matters:
+
+- A **`gamma_MHz`** line is a physical decay rate `Γ(J,J')`, so its angular-momentum
+  weight is still outstanding and is computed as `f(J,J')` (see
+  [`_line_strength_factor`](@ref)). With the defaults `J = 0`, `J_f = 1` this gives
+  `f = 3`, which is what the scalar sum assumed implicitly before these fields
+  existed — hence every pre-existing `¹S₀`/`³P₀` model is unchanged. A state with
+  `J > 0`, notably `³P₁`, **must** declare `J` and `J_f`: a line *below* it in
+  energy (negative `freq_THz`) carries `f = −1`, the opposite sign, which is why
+  the two states of a two-level atom take opposite light shifts.
+
+- A **`dipole_ea0`** line already has its `1/(2Jg+1)` normalisation folded into
+  `Γ_eff` by the conversion above, precisely so the sum closes with a fixed `f = 3`.
+  Applying `f(J,J')` again would double-count the angular momentum. Such lines
+  therefore keep `f = 3`, and declaring `J` on the model is safe — it documents the
+  state and feeds the tensor part without disturbing the scalar sum. A `dipole_ea0`
+  line must lie above the state; use `gamma_MHz` for one below.
+
+# Provenance
+
+`source` records where a width came from, so a refit can tell free parameters from
+spectroscopy: `:measured` (experimental), `:ls_estimated` (deduced from a lifetime
+via an LS-coupling branching ratio — the asterisked entries in the Yb literature),
+`:fitted` (a free parameter of an empirical model). Defaults to `:measured`.
 """
 struct PolarizabilityModel
     state::String
-    transitions::Vector{NamedTuple{(:freq_THz, :gamma_MHz), Tuple{Float64, Float64}}}
+    transitions::Vector{NamedTuple{(:freq_THz, :gamma_MHz, :J, :J_f, :f, :source),
+                                   Tuple{Float64, Float64, Rational{Int}, Rational{Int},
+                                         Rational{Int}, Symbol}}}
+    J::Rational{Int}
     offset_Hz_per_Wm2::Float64
     reference::String
 end
@@ -78,28 +116,70 @@ function _dipole_to_gamma_MHz(freq_THz::Real, dipole_ea0::Real, Jg::Real)
     return Γ_eff / (2π * 1e6)                       # → MHz (linear)
 end
 
-# Normalise a single user transition entry to the internal (freq_THz, gamma_MHz)
-# form. A `gamma_MHz` entry is taken as-is; a `dipole_ea0` entry is converted to
-# its effective line-strength width (optional `Jg`, default 1/2 for alkalis).
-function _normalize_transition(t)
+# Normalise a single user transition entry to the internal
+# (freq_THz, gamma_MHz, J, J_f, f, source) form.
+#
+# The stored `f` is the line's weight in the scalar sum, and WHICH weight is right
+# depends on how the line was specified:
+#
+#   * `gamma_MHz` is a physical decay rate Γ(J,J'), so the angular-momentum factor
+#     is still outstanding: f = _line_strength_factor(J, J_f, freq).
+#
+#   * `dipole_ea0` is converted by `_dipole_to_gamma_MHz`, which ALREADY folds the
+#     1/(2Jg+1) line-strength normalisation into Γ_eff precisely so the sum closes
+#     with the fixed f = 3. Applying f(J,J') on top would double-count the angular
+#     momentum — for Rb that is a factor 1/3 on D₁ and 2/3 on D₂. So dipole lines
+#     keep f = 3 and carry their angular momentum inside Γ_eff.
+#
+# Hence declaring `J` on a dipole-specified model is safe: it documents the state
+# and feeds the tensor part, without disturbing the scalar sum.
+function _normalize_transition(t, J_model::Rational{Int})
+    J   = haskey(t, :J)   ? Rational{Int}(t.J)   : J_model
+    J_f = haskey(t, :J_f) ? Rational{Int}(t.J_f) : 1//1
+    src = haskey(t, :source) ? Symbol(t.source) : :measured
+    src in (:measured, :ls_estimated, :fitted) || error(
+        "PolarizabilityModel transition `source` must be :measured, :ls_estimated " *
+        "or :fitted; got $(repr(src))")
+
     if haskey(t, :gamma_MHz)
-        return (freq_THz = Float64(t.freq_THz), gamma_MHz = Float64(t.gamma_MHz))
+        γ = Float64(t.gamma_MHz)
+        f = _line_strength_factor(J, J_f, t.freq_THz)
     elseif haskey(t, :dipole_ea0)
-        Jg = haskey(t, :Jg) ? t.Jg : 0.5
-        return (freq_THz = Float64(t.freq_THz),
-                gamma_MHz = _dipole_to_gamma_MHz(t.freq_THz, t.dipole_ea0, Jg))
+        Jg = haskey(t, :Jg) ? t.Jg : 1//2   # historical default (alkali D lines)
+        γ  = _dipole_to_gamma_MHz(t.freq_THz, t.dipole_ea0, Jg)
+        f  = 3 // 1                          # already folded into Γ_eff
+        t.freq_THz ≥ 0 || error(
+            "a `dipole_ea0` line must lie above the state (freq_THz > 0); the " *
+            "dipole normalisation assumes an upward transition. Use `gamma_MHz` " *
+            "with a negative `freq_THz` for a line below the state.")
     else
         error("PolarizabilityModel transition must have either `gamma_MHz` or " *
               "`dipole_ea0`; got keys $(keys(t))")
     end
+    return (freq_THz = Float64(t.freq_THz), gamma_MHz = γ,
+            J = J, J_f = J_f, f = f, source = src)
 end
 
+"""
+    PolarizabilityModel(state, transitions; J = 0, offset_Hz_per_Wm2 = 0.0, reference = "")
+
+Build a model for `state` from a list of `transitions`. `J` is the total electronic
+angular momentum of `state` itself; it is the default for each line's own `J`, and
+leaving it at `0` reproduces the pre-existing `J=0 → J'=1` behaviour exactly.
+"""
 function PolarizabilityModel(state::String,
                              transitions::Vector;
+                             J = 0//1,
                              offset_Hz_per_Wm2::Float64 = 0.0,
                              reference::String = "")
-    norm = [_normalize_transition(t) for t in transitions]
-    PolarizabilityModel(state, norm, offset_Hz_per_Wm2, reference)
+    Jm   = Rational{Int}(J)
+    norm = [_normalize_transition(t, Jm) for t in transitions]
+    for t in norm
+        t.J == Jm || error(
+            "transition declares J = $(t.J) but the model's state has J = $Jm; " *
+            "every line of a model shares the model's initial state.")
+    end
+    PolarizabilityModel(state, norm, Jm, offset_Hz_per_Wm2, reference)
 end
 
 # ======================================================================
@@ -107,20 +187,54 @@ end
 # ======================================================================
 
 """
-    _calc_light_shift(ω0, Γ, ωL) -> Float64
+    _line_strength_factor(J, J_f, freq_THz) -> Rational{Int}
+
+Angular-momentum weight `f(J,J')` of one line in the scalar polarizability sum.
+
+Writing the scalar polarizability in terms of decay rates rather than reduced
+dipole matrix elements gives
+
+    α⁽⁰⁾(ω) = 2π ε₀ c³ Σ_J'  f(J,J') · Γ(J,J') / (ω₀² (ω₀² − ω²))
+
+where `Γ(J,J')` is always the rate of the *downward* (excited → ground) decay, and
+
+    f(J,J') = (2J'+1)/(2J+1)   if the final state is ABOVE  (freq_THz > 0)
+            = −1               if the final state is BELOW  (freq_THz < 0)
+
+The asymmetry is real, not a convention: the reduced matrix element is not
+symmetric under label exchange,
+`|⟨J‖d‖J'⟩|² = ((2J'+1)/(2J+1))·|⟨J'‖d‖J⟩|²`, and `Γ` is only defined downward.
+The `−1` is why the two states of a two-level atom take opposite light shifts.
+
+For the `J=0 → J'=1` lines that every ¹S₀-type model is built from, `f = 3` — the
+value that was hard-coded into this kernel before the angular momenta were tracked,
+which is why those models were correct. A `J>0` state such as ³P₁ has lines both
+above and below it and genuinely needs the sign.
+
+Reference: Höhn-model derivation in the AtomTwin polarizability notes; Steck,
+*Quantum and Atom Optics*, §7.3.4 (reduced-matrix-element conventions).
+"""
+function _line_strength_factor(J::Rational{Int}, J_f::Rational{Int}, freq_THz::Real)
+    return freq_THz ≥ 0 ? (2J_f + 1) // (2J + 1) : -1 // 1
+end
+
+"""
+    _calc_light_shift(ω0, Γ, ωL, f = 3) -> Float64
 
 Light-shift contribution from a single electric-dipole transition.
 
 # Arguments
-- `ω0`: Transition angular frequency [rad/s].
+- `ω0`: Transition angular frequency [rad/s]. Use `|ω₀|`; the sign of the
+  transition frequency enters through `f` (see [`_line_strength_factor`](@ref)).
 - `Γ` : Radiative linewidth (angular) [rad/s].
 - `ωL`: Laser angular frequency [rad/s].
+- `f` : Angular-momentum line-strength factor; `3` for a `J=0 → J'=1` line.
 
 # Returns
 - `U/I`: Energy shift per intensity in J/(W/m²).
 """
-function _calc_light_shift(ω0::Float64, Γ::Float64, ωL::Float64)
-    return -3 * π * c^2 * Γ / (ω0^2 * (ω0^2 - ωL^2))
+function _calc_light_shift(ω0::Float64, Γ::Float64, ωL::Float64, f::Real = 3)
+    return -π * c^2 * f * Γ / (ω0^2 * (ω0^2 - ωL^2))
 end
 
 """
@@ -165,8 +279,8 @@ function _Gamma_sc_over_I(model::PolarizabilityModel, λ_nm::Real)
 
     Γsc_over_I = 0.0
     for t in model.transitions
-        ω0 = 2π * t.freq_THz  * 1e12
-        Γ  = 2π * t.gamma_MHz * 1e6
+        ω0 = 2π * abs(t.freq_THz) * 1e12   # |ω₀|: a line below the state still
+        Γ  = 2π * t.gamma_MHz     * 1e6    # scatters at its own resonance
         Γsc_over_I += _calc_scattering_rate(ω0, Γ, ωL)
     end
     return Γsc_over_I
@@ -189,9 +303,9 @@ function _U_over_I(model::PolarizabilityModel, λ_nm::Real)
 
     U_over_I = 0.0
     for t in model.transitions
-        ω0 = 2π * t.freq_THz  * 1e12
-        Γ  = 2π * t.gamma_MHz * 1e6
-        U_over_I += _calc_light_shift(ω0, Γ, ωL)
+        ω0 = 2π * abs(t.freq_THz) * 1e12     # |ω₀|; the sign is carried by f
+        Γ  = 2π * t.gamma_MHz     * 1e6
+        U_over_I += _calc_light_shift(ω0, Γ, ωL, t.f)
     end
 
     U_over_I += model.offset_Hz_per_Wm2 * h

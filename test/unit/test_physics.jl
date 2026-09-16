@@ -434,7 +434,9 @@ end
     ref = [(4.227, 377.107463e12), (5.977, 384.230485e12)]
     m = PolarizabilityModel("5S1/2",
         [(freq_THz = 377.107463, dipole_ea0 = 4.227),
-         (freq_THz = 384.230485, dipole_ea0 = 5.977)])
+         (freq_THz = 384.230485, dipole_ea0 = 5.977)];
+        J = 1//2)   # Rb 5S₁/₂. Declaring J must NOT perturb a dipole-specified
+                    # scalar sum — the 1/(2Jg+1) weight is already inside Γ_eff.
     for λ in (1e7, 1200.0, 1000.0, 900.0, 850.0, 800.0)
         @test isapprox(polarizability_au(m, λ), _alpha_dipoles_au(λ, ref); rtol = 1e-9)
     end
@@ -491,6 +493,8 @@ end
     # A gamma_MHz line and the dipole line that produces the same effective width
     # (at the same frequency) give identical polarizability — round-trip of the
     # normalisation. Take g_eff from a dipole model at the SAME freq to keep it exact.
+    # Both models must land on the same `f`: leave J/J_f at their defaults so the
+    # dipole line (f = 3 by construction) and the gamma line (f(0,1) = 3) agree.
     m_d = PolarizabilityModel("x", [(freq_THz = 377.107463, dipole_ea0 = 4.227)])
     m_g = PolarizabilityModel("x",
         [(freq_THz = 377.107463, gamma_MHz = m_d.transitions[1].gamma_MHz)])

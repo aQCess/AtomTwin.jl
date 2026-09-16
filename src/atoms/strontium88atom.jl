@@ -66,6 +66,7 @@ const SR88_POLARIZABILITY_1S0 = PolarizabilityModel(
         (freq_THz = 1022.2323, dipole_ea0 = 0.281, Jg = 0), # 5s6p ¹P₁   (293 nm)
         (freq_THz = 1234.3055, dipole_ea0 = 0.517, Jg = 0), # 4d5p ¹P₁   (243 nm)
     ];
+    J = 0//1,                                                  # 5s² ¹S₀
     offset_Hz_per_Wm2 = _au_to_offset_Hz_per_Wm2(4.60 + 5.29),  # Other + Core+Vc
     reference = "Phys. Rev. A 87, 012509 (2013), Tables II & IV",
 )
@@ -88,6 +89,7 @@ const SR88_POLARIZABILITY_3P0 = PolarizabilityModel(
         (freq_THz = 692.7304, dipole_ea0 = 0.516, Jg = 0),  # 5s7s ³S₁   (433 nm)
         (freq_THz = 760.5135, dipole_ea0 = 1.161, Jg = 0),  # 5s6d ³D₁   (394 nm)
     ];
+    J = 0//1,                                            # 5s5p ³P₀
     offset_Hz_per_Wm2 = _au_to_offset_Hz_per_Wm2(39.31),  # tail anchored to 813.428 nm
     reference = "Phys. Rev. A 87, 012509 (2013), Tables II & IV; " *
                 "tail anchored to the measured 813.428 nm magic wavelength",

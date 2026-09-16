@@ -19,10 +19,11 @@ Empirical polarizability model for the Yb-171 1S₀ state.
 const YB171_POLARIZABILITY_1S0 = PolarizabilityModel(
     "1S0",
     [
-        (freq_THz = 539.386800, gamma_MHz = 0.183),
-        (freq_THz = 751.526389, gamma_MHz = 29.127),
-        (freq_THz = 865.111516, gamma_MHz = 11.052),
+        (freq_THz = 539.386800, gamma_MHz = 0.183,  J_f = 1//1),  # (6s6p) ³P₁   556 nm
+        (freq_THz = 751.526389, gamma_MHz = 29.127, J_f = 1//1),  # (6s6p) ¹P₁   399 nm
+        (freq_THz = 865.111516, gamma_MHz = 11.052, J_f = 1//1),  # (7/2,5/2) J=1  347 nm
     ];
+    J = 0//1,                       # (6s²) ¹S₀
     offset_Hz_per_Wm2 = -0.8e-4,
     reference = "Phys. Rev. A 108, 053325 (2023)",
 )
@@ -35,12 +36,14 @@ Empirical polarizability model for the Yb-171 3P₀ state.
 const YB171_POLARIZABILITY_3P0 = PolarizabilityModel(
     "3P0",
     [
-        (freq_THz = 215.870446, gamma_MHz = 0.308),
-        (freq_THz = 461.867846, gamma_MHz = 1.516),
-        (freq_THz = 675.141040, gamma_MHz = 4.081),
-        (freq_THz = 729.293151, gamma_MHz = 0.625),
-        (freq_THz = 797.204099, gamma_MHz = 22.889),
+        (freq_THz = 215.870446, gamma_MHz = 0.308,  J_f = 1//1),  # (6s5d) ³D₁  1389 nm
+        (freq_THz = 461.867846, gamma_MHz = 1.516,  J_f = 1//1),  # (6s7s) ³S₁   649 nm
+        (freq_THz = 675.141040, gamma_MHz = 4.081,  J_f = 1//1),  # (6s6d) ³D₁   444 nm
+        (freq_THz = 729.293151, gamma_MHz = 0.625,  J_f = 1//1),  # (6s8s) ³S₁   411 nm
+        (freq_THz = 797.204099, gamma_MHz = 22.889, J_f = 1//1,   # effective line 376 nm
+         source = :fitted),
     ];
+    J = 0//1,                       # (6s6p) ³P₀
     offset_Hz_per_Wm2 = 0.0,
     reference = "Phys. Rev. A 108, 053325 (2023)",
 )
