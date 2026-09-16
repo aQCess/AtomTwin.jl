@@ -628,3 +628,41 @@ PolarizabilityCurve(model::PolarizabilityModel; kwargs...) =
 
 
 ## see ext/AtomTwinPlots.jl for plot recipes
+# ======================================================================
+# Atom-facing forwarders
+# ======================================================================
+#
+# One generic method per public function, dispatching through
+# `getpolarizabilitymodels`. These replaced a ~45-line block copy-pasted into
+# every species file, which had also drifted: `polarizability_si` — the one
+# function `_init_species_data!` actually calls — was missing from all of them.
+
+"""
+    _model_for(atom, term) -> PolarizabilityModel
+
+The species' polarizability model for `term`, or an error naming what is
+available. `term` may be a [`TermSymbol`](@ref) or its name.
+"""
+function _model_for(atom::AbstractAtom, term)
+    models = getpolarizabilitymodels(atom)
+    key = termname(term)
+    haskey(models, key) && return models[key]
+    isempty(models) && error("$(getspecies(atom)) has no polarizability models.")
+    error("no polarizability model for '$key' in $(getspecies(atom)); " *
+          "known terms: $(join(sort(collect(keys(models))), ", "))")
+end
+
+for f in (:light_shift_coeff_Hz_per_Wcm2, :scattering_rate_per_Wcm2,
+          :polarizability_au, :polarizability_si)
+    @eval begin
+        """
+            $($f)(atom, term, λ_nm; kwargs...)
+
+        As the model-level [`$($f)`](@ref), for the state `term` of `atom`'s
+        species. `term` may be a [`TermSymbol`](@ref) (`l"3P1"`) or its name
+        (`"3P1"`).
+        """
+        $f(atom::AbstractAtom, term, λ_nm::Real; kwargs...) =
+            $f(_model_for(atom, term), λ_nm; kwargs...)
+    end
+end
