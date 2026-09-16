@@ -3,7 +3,7 @@ using AtomTwin
 using Printf
 using Random
 using Statistics
-using StatsBase
+using Statistics
 
 unit_dir = joinpath(@__DIR__, "unit")
 
@@ -33,6 +33,14 @@ end
 
 @testset "Motion" begin
     include(joinpath(unit_dir, "test_motion.jl"))
+end
+
+@testset "Thread workspaces" begin
+    include(joinpath(unit_dir, "test_thread_workspaces.jl"))
+end
+
+@testset "Solver order" begin
+    include(joinpath(unit_dir, "test_solver_order.jl"))
 end
 
 @testset "Paper listings" begin
@@ -99,9 +107,12 @@ function run_example(path; min_shots::Int = 10, max_shots::Int = 100, time_limit
     end
 
 
-    build_time = first_elapsed - best_runtime
+    # Everything the script does outside its own `runtime` block on the first
+    # include: setup, compilation latency, and any further physics after the
+    # timed block (process tomography, plotting). Not build time.
+    other_time = first_elapsed - best_runtime
     avg_runtime = total_runtime / n_shots  # New: compute average
-    return build_time, best_runtime, avg_runtime, first_cs, first_desc
+    return other_time, best_runtime, avg_runtime, first_cs, first_desc
 end
 
 
@@ -138,7 +149,7 @@ if RUN_EXAMPLES; @testset "Example scripts" begin
     end
 
     println()
-    println(rpad("Example", 40), "    best[s]    avg[s]   build[s]   checksum")
+    println(rpad("Example", 40), "    best[s]    avg[s]   other[s]   checksum")
     println(repeat("-", 40 + 2 + 10 + 2 + 10 + 2 + 18))
     for row in rows
         println(row)

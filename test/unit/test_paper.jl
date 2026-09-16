@@ -5,7 +5,11 @@
 # (fewer shots, shorter durations) where the listing itself does not constrain
 # the value.
 
-using AtomTwin.Dynamiq.Units    # µm, nm, MHz, µK, mW, G, µB, hbar, e, a0 …
+# Explicit import: a blanket `using AtomTwin.Dynamiq.Units` drops e, g and G
+# into Main, and since runtests.jl includes every file into the SAME Main,
+# that breaks every example using the `g, e = Level(...)` idiom -- even ones
+# that never import Units. `e` and `g` below are the charge and the gram.
+using AtomTwin.Dynamiq.Units: MHz, kHz, GHz, Hz, s, ms, µs, ns, m, cm, mm, µm, nm, mW, µW, W, µK, mK, nK, K, hbar, h, kb, c, a0, amu, µB, ε0, μ0, m_e, m_p
 
 # ═════════════════════════════════════════════════════════════════════════════
 # Section 3 (Implementation) listings
@@ -173,7 +177,7 @@ end
 # ── lst:model — HyperfineManifold, atoms, beam, rabi_frequencies ──────────────
 @testset "app-listing-model: HyperfineManifold, maxwellboltzmann, GeneralGaussianBeam, rabi_frequencies" begin
     g_eff = 2.357
-    d_eff = 0.001071 * e * a0
+    d_eff = 0.001071 * Units.e * a0   # elementary charge, not the level `e`
 
     met     = HyperfineManifold(1//2, 0; label = "3P0",     g_F = -0.00067875)
     rydberg = HyperfineManifold(1//2, 0; label = "54.28S1", g_F = g_eff)
@@ -187,7 +191,7 @@ end
     P_ryd   = 20mW
     k_ryd   = [1.0, 0.0, 0.0]
     pol_ryd = [0.0, 1.0, 0.0]
-    B_vec   = [4.88G, 0.0, 0.0]
+    B_vec   = [4.88Units.G, 0.0, 0.0]   # gauss, not a level
     beam    = GeneralGaussianBeam(302nm, w_ryd, w_ryd, P_ryd, k_ryd, pol_ryd)
 
     Ω_π, Ω_p, Ω_m = rabi_frequencies(beam; q_axis = B_vec, d_red = d_eff)
@@ -203,9 +207,9 @@ end
 # ── lst:system — multi-atom system assembly ───────────────────────────────────
 @testset "app-listing-system: zeeman detunings, vdW interaction, manifold coupling, decay" begin
     g_eff = 2.357
-    d_eff = 0.001071 * e * a0
+    d_eff = 0.001071 * Units.e * a0   # elementary charge, not the level `e`
     C6    = 2π * 34 * (GHz * µm^6)
-    B_mag = 4.88G
+    B_mag = 4.88Units.G
 
     met     = HyperfineManifold(1//2, 0; label = "3P0",     g_F = -0.00067875)
     rydberg = HyperfineManifold(1//2, 0; label = "54.28S1", g_F = g_eff)
@@ -298,9 +302,9 @@ end
 # ── lst:seq — @sequence with MoveRow and gate-helper instructions ─────────────
 @testset "app-listing-seq: @sequence with MoveRow builds successfully" begin
     g_eff = 2.357
-    d_eff = 0.001071 * e * a0
+    d_eff = 0.001071 * Units.e * a0   # elementary charge, not the level `e`
     C6    = 2π * 34 * (GHz * µm^6)
-    B_mag = 4.88G
+    B_mag = 4.88Units.G
 
     met     = HyperfineManifold(1//2, 0; label = "3P0",     g_F = -0.00067875)
     rydberg = HyperfineManifold(1//2, 0; label = "54.28S1", g_F = g_eff)
