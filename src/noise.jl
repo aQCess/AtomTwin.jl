@@ -85,10 +85,13 @@ mutable struct NoisyField{A, T, N} <: Dynamiq.AbstractField
 end
 
 
-Dynamiq.update!(field::NoisyField, i::Int) = Dynamiq.update!(field.coupling, i)
+# Forwarded to the wrapped coupling. Takes a time now, like every other
+# time-dependent update: the solver evaluates drives wherever its step lands,
+# not at a step index.
+Dynamiq.update!(field::NoisyField, t::Float64) = Dynamiq.update!(field.coupling, t)
 
 # Constructors
-NoisyField(coupling::T, noise::N; n_freqs = noise.n_freqs, rng=Random.MersenneTwister(rand(UInt32))) where {T, N} =
+NoisyField(coupling::T, noise::N; n_freqs = noise.n_freqs, rng=Random.Xoshiro(rand(UInt32))) where {T, N} =
     NoisyField{typeof(coupling.atom), T, N}(coupling, noise, Ref(0.0), n_freqs, rng, Float64[])
 
 NoisyField(coupling::T, noise::N, global_time_ref::Ref{Float64}, n_freqs::Int, rng::AbstractRNG) where {T, N} =
@@ -107,7 +110,7 @@ function Base.deepcopy_internal(nf::NoisyField, stackdict::IdDict)
         deepcopy_internal(nf.noise, stackdict),
         Ref(0.0),  # Fresh time ref
         nf.n_freqs,
-        Random.MersenneTwister(rand(UInt32)),  # Fresh RNG
+        Random.Xoshiro(rand(UInt32)),  # Fresh RNG
         Float64[]  # Fresh buffer per copy
     )
     
@@ -244,7 +247,7 @@ INTEGRATION WITH AMPLITUDE MODIFIERS
 =============================================================================#
 
 """
-    AmplitudeModifier(nf::NoisyField, amplitude, tspan) -> AmplitudeModifier
+    AmplitudeModifier(nf::NoisyField, amplitude, tspan, duration) -> AmplitudeModifier
 
 Construct an `AmplitudeModifier` for a noisy field.
 
@@ -256,12 +259,23 @@ Construct an `AmplitudeModifier` for a noisy field.
 This method is called during instruction compilation when a field is wrapped
 in a [`NoisyField`](@ref).
 """
-function Dynamiq.AmplitudeModifier(nf::NoisyField, amplitude::Vector{<:Number}, tspan::Vector{Float64})
+function Dynamiq.AmplitudeModifier(nf::NoisyField, amplitude::Vector{<:Number},
+                                  tspan::Vector{Float64}, duration::Real)
     global_time = nf.global_time_ref[]
     noise_mod = generate_noise(tspan, global_time, nf)
     noisy_amplitude = amplitude .* noise_mod
     
-    return AmplitudeModifier(nf.coupling, noisy_amplitude, tspan)
+    # Keep the NoisyField itself as the modifier target, NOT nf.coupling: the
+    # per-shot regeneration hook in job.jl looks for `mod.field isa NoisyField`
+    # to redraw the noise trace each shot. Handing it the unwrapped coupling
+    # makes that check fail, so every shot reuses one trace and the trajectory
+    # average shows no damping at all.
+    #
+    # `:linear`, not the usual `:cubic`: a noise trace is a stochastic
+    # realisation synthesised at these very points, not a smooth function
+    # sampled from one. Cubic would invent structure between samples and can
+    # overshoot; linear passes through every drawn value.
+    return AmplitudeModifier(nf, noisy_amplitude, duration; interp = :linear)
 end
 
 #=============================================================================

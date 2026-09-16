@@ -4,14 +4,16 @@
 Modifier that updates a beam position incrementally over time to realize a
 smooth displacement according to a user-defined schedule.
 
-Unlike `PositionModifier`, which overwrites positions, `MoveModifier` stores
-per-step increments that are added to the beam position.
+Like `PositionModifier` it writes an absolute position, but from a total
+displacement and a schedule rather than a table of points: position at
+normalised time `s` is `r0_start + schedule(s) * displacement`.
 
 # Fields
 
 - `beam::AbstractBeam`: Beam whose position `r0` will be moved.
-- `vals::Vector{Vector{Float64}}`: Per-step displacement increments.
-- `tspan::Vector{Float64}`: Internal time grid (left edges of increments).
+- `displacement::Vector{Float64}`: Total displacement over the instruction.
+- `schedule::Function`: `s in [0,1]` -> fraction of `displacement` applied.
+- `tspan::Vector{Float64}`: Time grid; its span sets the instruction duration.
 - `dims::Vector{Int}`: Components of `r0` to move at each step.
 
 # Constructor
@@ -27,9 +29,12 @@ per-step increments that are added to the beam position.
 """
 struct MoveModifier <: AbstractModifier
     beam::AbstractBeam
-    vals::Matrix{Float64}   # 3 × n_steps, contiguous increments
+    displacement::Vector{Float64}   # total displacement over the instruction
+    schedule::Function              # s in [0,1] -> fraction of `displacement`
     tspan::Vector{Float64}
     dims::Vector{Int}
+    r0_start::Vector{Float64}       # captured on the first update of a run
+    started::Base.RefValue{Bool}
 
     function MoveModifier(beam::AbstractBeam,
                           displacement::Vector{Float64},
@@ -39,37 +44,45 @@ struct MoveModifier <: AbstractModifier
 
         length(tspan) ≥ 2 ||
             error("MoveModifier: tspan must contain at least two time points")
+        @assert tspan[end] - tspan[1] > 0 "Move interval cannot be zero"
 
-        T  = tspan[end] - tspan[1]
-        @assert T > 0 "Move interval cannot be zero"
-
-        n  = length(tspan) - 1
-        t0 = tspan[1]
-        vals = Matrix{Float64}(undef, 3, n)
-        s_prev = schedule(0.0)
-        for i in 1:n
-            s_next = schedule((tspan[i + 1] - t0) / T)
-            Δs = s_next - s_prev
-            @inbounds for d in 1:3
-                vals[d, i] = Δs * displacement[d]
-            end
-            s_prev = s_next
-        end
-
-        return new(beam, vals, tspan[1:end-1], dims)
+        return new(beam, copy(displacement), schedule, tspan, dims,
+                   zeros(Float64, 3), Ref(false))
     end
 end
 
 """
-    update!(m::MoveModifier, i)
+    update!(m::MoveModifier, t)
 
-Increment the beam position `r0` at time step `i` by the stored displacement
-increment on the components listed in `m.dims`, if `i` is within bounds.
+Set the beam position `r0` to its start plus the scheduled displacement at time
+`t` within the instruction, on the components listed in `m.dims`.
+
+**Absolute, not incremental.** The stored schedule is evaluated at `t` and the
+result written, rather than a per-step increment being accumulated. The solver
+no longer visits a fixed set of steps -- it chooses its step from `tol` and
+sub-divides further when the error estimator asks -- so accumulating increments
+would make the final position depend on how many times `update!` happened to be
+called. Evaluating the schedule directly makes the trajectory a function of time
+alone, which is what it physically is.
+
+The start position is captured on the first call of an instruction, since it is
+whatever the previous instruction left behind.
 """
-function update!(m::MoveModifier, i::Int)
-    if i <= size(m.vals, 2)
-        @inbounds for d in m.dims
-            m.beam.r0[d] += m.vals[d, i]
+function update!(m::MoveModifier, t::Float64)
+    if !m.started[]
+        @inbounds for d in 1:3
+            m.r0_start[d] = m.beam.r0[d]
         end
+        m.started[] = true
+    end
+    T = m.tspan[end] - m.tspan[1]
+    s = T > 0 ? clamp(t / T, 0.0, 1.0) : 1.0
+    f = m.schedule(s)
+    @inbounds for d in m.dims
+        m.beam.r0[d] = m.r0_start[d] + f * m.displacement[d]
     end
 end
+
+# A new instruction re-captures the start position: a second move must begin
+# from wherever the first one left the beam, not from the first one's origin.
+begin_instruction!(m::MoveModifier) = (m.started[] = false; nothing)

@@ -42,8 +42,17 @@ abstract type AbstractField end  # can be static or time-dependent
 # Default no-op: subtypes that don't need per-step updates inherit this.
 # Explicit return Nothing ensures a uniform inferred return type across all
 # AbstractField subtypes, preventing boxing when dispatching through the
-# abstract type (e.g. in `for f in fields; update!(f, i); end`).
-update!(::AbstractField, ::Int) = nothing
+# abstract type (e.g. in `for f in fields; update!(f, t); end`).
+#
+# The second argument is `::Real`, matching every concrete field method. It must
+# not be narrower: with `::Int` here and `::Real` on a subtype's own method,
+# neither signature dominates -- one is more specific in the field, the other in
+# the time -- and every such call becomes an ambiguity error.
+#
+# Fields ignore this argument entirely; they recompute from the current atom and
+# beam state. It exists so the solver can pass the time its step actually landed
+# on, which the time-dependent MODIFIERS do use.
+update!(::AbstractField, ::Real) = nothing
 
 """
 base_coupling(coupling::AbstractField)
@@ -91,6 +100,13 @@ abstract type AbstractBoundaryModifier end
 
 begin_instruction!(::AbstractBoundaryModifier) = nothing
 end_instruction!(::AbstractBoundaryModifier) = nothing
+
+# Inner modifiers get the same boundary notification. Most ignore it; the ones
+# that carry state across a step (`MoveModifier` captures the beam position it
+# starts from) need to know when a new instruction begins, because the solver no
+# longer visits a predictable set of steps.
+begin_instruction!(::AbstractModifier) = nothing
+end_instruction!(::AbstractModifier) = nothing
 
 """
 AbstractDetector{A}

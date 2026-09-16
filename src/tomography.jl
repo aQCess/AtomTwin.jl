@@ -63,12 +63,12 @@ function simulate_process(sys, seq, input_states; density_matrix=nothing, shots=
     # Save sys.state[] so process_tomography does not leave sys mutated.
     saved_state = sys.state[]
 
-    # Use an explicit MersenneTwister (not the task-local default_rng) so that
+    # Use an explicit generator (not the task-local default_rng) so that
     # Threads.@threads task-spawning inside play cannot perturb the RNG state
     # between the four sequential play calls. Without this, the variable number
     # of RNG draws consumed by @threads would make recompile! see a different
     # Ω draw before each play call, breaking determinism across test runs.
-    sim_rng = something(rng, Random.MersenneTwister(rand(Random.default_rng(), UInt)))
+    sim_rng = something(rng, Random.Xoshiro(rand(Random.default_rng(), UInt)))
 
     # Compile once with first state
     job = compile(sys, seq; initial_state=[input_states[1]],

@@ -20,7 +20,7 @@ Apply laser coupling for a fixed duration or with a shaped amplitude profile.
 - `duration::Float64` – pulse duration in seconds. The compiled pulse will span exactly this duration.
 - `ampl::ComplexF64` – overall coupling strength (relative to the default). Can be complex. It scales the entire amplitude shape.
 - `amplitudes::Vector{ComplexF64}` – vector of complex amplitudes defining the pulse shape. If empty, the pulse has constant amplitude `ampl` over `duration`. If non‑empty, the shape is resampled onto the simulation time grid using the method selected by `interp`.
-- `interp::Symbol` – interpolation method for the amplitude envelope: `:lagrange` (default, cubic Lagrange) or `:piecewise_constant` (each sample held for its fraction of `duration`, matching the original pulse generator convention).
+- `interp::Symbol` – how the envelope is read between its samples: `:cubic` (default, Catmull-Rom, 4th order), `:linear` (2nd order), or `:constant` (each sample held for its fraction of `duration` — a physical staircase, correct for AWG-defined waveforms). `:lagrange` and `:piecewise_constant` are accepted as aliases for `:cubic` and `:constant`.
 """
 struct Pulse <: AbstractInstruction
     couplings::Vector{Switchable}
@@ -33,7 +33,7 @@ struct Pulse <: AbstractInstruction
 end
 
 """
-    Pulse(couplings::Vector{<:Switchable}, duration; ampl=1.0, amplitudes=ComplexF64[], interp=:lagrange)
+    Pulse(couplings::Vector{<:Switchable}, duration; ampl=1.0, amplitudes=ComplexF64[], interp=:cubic)
 
 Construct a `Pulse` acting on multiple couplings simultaneously, all with the same duration and relative amplitude `ampl`.
 
@@ -42,18 +42,18 @@ Construct a `Pulse` acting on multiple couplings simultaneously, all with the sa
 - `duration`: pulse duration (seconds). The compiled pulse will span exactly this duration.
 - `ampl`: overall coupling strength (relative to default). Scales the entire amplitude shape.
 - `amplitudes`: optional vector of amplitudes defining the pulse shape. If empty, the pulse has constant amplitude `ampl` over `duration`. If non‑empty, the shape is resampled onto the simulation time grid using the method selected by `interp`.
-- `interp`: interpolation method — `:lagrange` (default, cubic) or `:piecewise_constant`.
+- `interp`: how the envelope is read between samples — `:cubic` (default), `:linear` or `:constant`.
 """
-function Pulse(couplings::Vector, duration::Float64; ampl=1.0, amplitudes=ComplexF64[], dt=nothing, downsample=nothing, interp=:lagrange)
+function Pulse(couplings::Vector, duration::Float64; ampl=1.0, amplitudes=ComplexF64[], dt=nothing, downsample=nothing, interp=:cubic)
     Pulse(couplings, duration, ampl, amplitudes, dt, downsample, interp)
 end
 
 """
-    Pulse(coupling::Switchable, duration; ampl=1.0, amplitudes=ComplexF64[], interp=:lagrange)
+    Pulse(coupling::Switchable, duration; ampl=1.0, amplitudes=ComplexF64[], interp=:cubic)
 
 Convenience constructor for a single‑coupling pulse. Equivalent to `Pulse([coupling], duration; ampl, amplitudes, interp)`.
 """
-Pulse(coupling::Switchable, duration::Float64; ampl=1.0, amplitudes=ComplexF64[], dt=nothing, downsample=nothing, interp=:lagrange) = Pulse([coupling], duration, ampl, amplitudes, dt, downsample, interp)
+Pulse(coupling::Switchable, duration::Float64; ampl=1.0, amplitudes=ComplexF64[], dt=nothing, downsample=nothing, interp=:cubic) = Pulse([coupling], duration, ampl, amplitudes, dt, downsample, interp)
 
 """
     On(couplings)

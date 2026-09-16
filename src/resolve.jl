@@ -103,12 +103,16 @@ end
 """
     _resolve(seq::Sequence, param_values, cache::IdDict)
 
-Resolve all instructions in a `Sequence`, preserving its time step `dt`.
+Resolve all instructions in a `Sequence`, preserving its solver settings.
 
-Returns a new `Sequence` with the same `dt` and resolved instructions.
+Returns a new `Sequence` with the same `dt`, `downsample` and `tol`, and resolved
+instructions.
 """
 function _resolve(seq::Sequence, param_values, cache::IdDict)
-    Sequence([_resolve(inst, param_values, cache) for inst in seq.instructions], seq.dt)
+    # NB: pass every field. Reconstructing with only (instructions, dt) silently
+    # dropped `downsample` back to its default.
+    Sequence([_resolve(inst, param_values, cache) for inst in seq.instructions],
+             seq.dt, seq.downsample, seq.tol)
 end
 
 """

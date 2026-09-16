@@ -12,7 +12,8 @@ This object should not be constructed directly by users. Instead, use
 - **Execution structures** (shared across shots): `fields`, `jumps`, `modifiers`
 - **Detectors**: `detectors` (per-instruction), `detector_outputs` (views to results)
 - **Time grids**: `times` (global downsampled), `local_tspans` (per-instruction solver time grids)
-- **Configuration**: `downsamples` (per-instruction downsample factors)
+- **Configuration**: `downsamples` (per-instruction downsample factors), `tol`
+  (target local relative error per step, forwarded to the propagator)
 
 # Per-Instruction Customization
 
@@ -43,6 +44,13 @@ struct SimulationJob{S}
     detector_outputs::Dict{String, Any}
     times::Vector{Float64}   # downsampled time grid (length = sum(t_steps[i] ÷ downsamples[i]))
     downsamples::Vector{Int} # per-instruction downsample factors
+    inst_dts::Vector{Float64}# per-instruction OUTPUT step; the solver needs it
+                             # explicitly because `local_tspans[i]` may hold a
+                             # single absolute time, from which no spacing can
+                             # be recovered
+    tol::Float64             # target local relative error, forwarded to the propagator
+    jtol::Float64            # target MCWF jump-omission probability
+    integrator::Dynamiq.AbstractIntegrator  # propagator backend, forwarded to the solver
 end
 
 
@@ -50,6 +58,158 @@ _tovector(state::AbstractLevel) = [state]
 _tovector(state::Tuple) = collect(state)
 _tovector(state::AbstractVector) = state
 _tovector(state) = [state]
+
+"""
+    _derive_dt(seq, fields) -> Float64
+
+Pick a solver step for a `Sequence` built without an explicit `dt`.
+
+Returns the **output** resolution, not the integration step. The solver
+sub-divides this as its own error estimators require (`strang_substeps!` for the
+splitting error, `jump_substeps` for the MCWF jump test), so `tol` and `jtol`
+govern accuracy while this governs only how often results are recorded.
+
+With no `dt` or `steps` on the `Sequence`, the default is one sample per
+instruction: a user who wrote only `Sequence(; tol)` is asking for an accurate
+final state, and one who wants a trace says so with `dt`, `steps` or
+`downsample`. QuTiP and QuantumOptics.jl both make output times a required
+argument for the same reason.
+
+The accuracy-derived step from `Dynamiq.suggested_dt` still applies where it is
+*smaller*, since recording more often than the solver steps would be misleading.
+
+The step need not divide any instruction's duration: `stepgrid` adjusts it per
+instruction so every duration is realised exactly.
+"""
+# The field that actually carries `H`. Every `AbstractField` is a leaf except
+# `NoisyField`, which wraps one; unwrapping here keeps the step estimator from
+# silently losing a noisy system's Hamiltonian.
+_hamiltonian_source(f) = hasproperty(f, :coupling) ? f.coupling : f
+
+"""
+    resolve_jtol(jtol, shots) -> Float64
+
+The MCWF jump-omission tolerance to use. An explicit `jtol` is honoured
+unchanged; `nothing` — the default — derives one from the shot count as
+`clamp(1/sqrt(shots), 1e-4, 1e-2)`.
+
+`jtol` bounds a sampling error, the probability of missing a second jump within
+one sub-step, not an integrator error. Tightening it past the statistical noise
+floor costs sub-steps as `1/sqrt(jtol)` and buys nothing, so it is matched to the
+`1/sqrt(N)` noise of an `N`-shot trajectory mean. The clamps bound the ends,
+where a single trajectory has no ensemble to average a bias into and where the
+bound would otherwise cost more than the statistics it protects.
+"""
+resolve_jtol(jtol::Float64, ::Integer) = jtol
+resolve_jtol(::Nothing, shots::Integer) = clamp(1 / sqrt(max(shots, 1)), 1e-4, 1e-2)
+
+function _derive_dt(seq::Sequence, fields, jumps = (), qstate = nothing;
+                    integrator::Dynamiq.AbstractIntegrator = Dynamiq.Chebyshev(),
+                    shots::Integer = 1)
+    # `NoisyField` WRAPS a coupling rather than carrying `H` itself, so a plain
+    # `hasproperty` filter drops it and the Hamiltonian never reaches the
+    # accuracy bound: `suggested_dt` then returns `Inf` and the step falls
+    # through to the control-grid floor, with `tol` having no effect at all.
+    terms = Tuple{Base.RefValue{ComplexF64},Dynamiq.Op}[]
+    for f in fields
+        ff = _hamiltonian_source(f)
+        (hasproperty(ff, :H) && hasproperty(ff, :_coeff)) || continue
+        push!(terms, (ff._coeff, ff.H))
+    end
+
+    durations = Float64[inst.duration for inst in seq
+                        if hasproperty(inst, :duration) && inst.duration > 0]
+    longest   = isempty(durations) ? 0.0 : maximum(durations)
+
+    # `dt` is the OUTPUT resolution, and the user did not ask for one, so give
+    # the minimum that is still meaningful: one sample per instruction, at its
+    # end. Someone who wanted a trace would have said so with `dt`, `steps` or
+    # `downsample`; someone who only wrote `Sequence(; tol)` is asking for an
+    # accurate final state, which is what they get.
+    #
+    # This is the convention every comparable package follows -- QuTiP's `tlist`
+    # and QuantumOptics.jl's `tspan` are both REQUIRED arguments, and neither
+    # invents output times.
+    #
+    # No floor on the output grid: resolving pulse envelopes is `sample_at`'s
+    # job, since envelopes are read at whatever time the solver asks for. A
+    # `shortest/100` floor here bound on six of nine examples --
+    # over-resolving `gateX_tomography` by 148x -- and that capped `tol`: the
+    # delivered error sat at 1.08e-5 for every `tol` from 1e-3 to 1e-6, because
+    # the floor, not the tolerance, was choosing the step.
+    #
+    # The integration step is NOT this: the solver sub-divides `dt` as its own
+    # error estimator requires (`strang_substeps!`, `jump_substeps`).
+    dt = min(Dynamiq.suggested_dt(terms, seq.tol; integrator = integrator),
+             longest > 0 ? longest : Inf)
+
+    # MCWF tests `‖ψ‖² < rand()` ONCE per step, so at most one jump can fire per
+    # step. When the norm drops appreciably within a single step the extra jumps
+    # are lost and population is stranded in the decaying level -- a SILENT
+    # failure, no NaN and no warning. Measured on a driven two-level atom
+    # (steady state Ω²/(2Ω²+γ²) = 0.3333): γ·dt = 2.5 gave 0.2269 and γ·dt = 4.0
+    # gave 0.1528, 32% and 54% low.
+    #
+    # It is not a propagator error. Chebyshev integrates the deterministic part
+    # correctly, which is exactly why it made this worse: a more accurate
+    # propagator licenses larger steps.
+    #
+    # The fix is the standard MCWF Δp-criterion (Dörner et al.,
+    # Comput. Phys. Commun. 234 (2019) 44, arXiv:1803.08589): bound the total
+    # jump probability per step by `Δp`, whereupon the probability of TWO jumps
+    # in one step -- the event the one-jump-per-step scheme omits -- is `Δp²`.
+    # Setting `Δp = sqrt(tol)` therefore bounds the omitted probability by `tol`,
+    # with no fitted constant.
+    #
+    # `Δp` converts to a step through a rigorous, state-independent bound. With
+    # `D = Σⱼ γⱼ Lⱼ†Lⱼ`, `d‖ψ‖²/dt = −⟨ψ|D|ψ⟩ ≥ −λ_max(D)·‖ψ‖²`, so the jump
+    # probability over one step is at most `1 − exp(−Γ_max·dt)` for ANY state.
+    # `D` is diagonal because AtomTwin's jumps are single-transition operators
+    # (verified on k39: max |offdiag| = 0), so `Γ_max` is the largest entry of the
+    # cached `LdagL_diag` sums -- no eigendecomposition. Checked on k39 (d=24,
+    # 54 jumps): the worst ratio of actual to bounded jump probability over 2000
+    # random states is 0.911, so the bound holds and is tight.
+    # MCWF ONLY. The bound corrects a sampling error of the stochastic unravelling
+    # -- omitted second jumps -- which the master equation does not have: it
+    # propagates the ensemble directly and never draws a jump. Measured on the ME
+    # path, `jtol` moves nothing but the step count (identical P_e to 8 digits at
+    # `tol = 1e-6`, 469 steps either way), so applying it there buys no accuracy
+    # and costs up to 67x (eit_with_dissipation 0.18 s -> 12.0 s).
+    #
+    # The ME and MCWF grids may therefore differ. Code that compares the two
+    # elementwise must put them on a common grid explicitly, as
+    # `rabi_with_dissipation` now does, rather than relying on both being clamped
+    # by a bound only one of them needs.
+    if qstate isa Vector{ComplexF64} && !isempty(jumps)
+        Γmax = 0.0
+        for j in jumps
+            (hasproperty(j, :_coeff) && hasproperty(j, :LdagL_diag)) || continue
+            j.LdagL_diag === nothing && continue
+            γ = abs2(j._coeff[])
+            for x in j.LdagL_diag
+                Γmax = max(Γmax, γ * x)
+            end
+        end
+        jt = resolve_jtol(seq.jtol, shots)
+        if Γmax > 0
+            Δp = sqrt(min(jt, 0.25))          # two-jump probability ≈ Δp² ≤ jtol
+            dt = min(dt, -log1p(-Δp) / Γmax)
+        end
+    end
+
+    # The Strang splitting error is NOT bounded here. It is measured and
+    # corrected inside the solver: `strang_substeps!` divides each `dt` into
+    # however many equal sub-steps the step tolerance needs, re-estimating every
+    # step from a step-doubling comparison. A compile-time bound cannot do this
+    # job -- it would have to predict, from the initial state, an error that
+    # depends on the trajectory and on drive amplitudes that are still zero when
+    # the sequence is built.
+
+    (isfinite(dt) && dt > 0) || throw(ArgumentError(
+        "cannot derive a time step: the sequence has no Hamiltonian terms and no " *
+        "instruction durations. Pass an explicit step, e.g. Sequence(1e-9)."))
+    return dt
+end
 
 """
     compile(system::System, sequence::Sequence; initial_state=nothing, density_matrix=false) -> SimulationJob
@@ -90,7 +250,9 @@ job = compile(sys, seq)  # builds per-instruction time grids automatically
 function compile(sys::System, seq::Sequence;
     initial_state = sys.initial_state,
     density_matrix = false,
+    integrator::Dynamiq.AbstractIntegrator = Dynamiq.Chebyshev(),
     rng = Random.default_rng(),
+    shots::Integer = 1,
     kwargs...)
       
     param_values = Dict{Symbol,Any}(kwargs)
@@ -173,16 +335,37 @@ function compile(sys::System, seq::Sequence;
     step_counts = Vector{Int}(undef, n_instructions)
     total_tspan_size = 0
 
+    # When the sequence carries no explicit dt, derive one from the Hamiltonian
+    # that is actually present. `Dynamiq.suggested_dt` uses a Gershgorin upper
+    # bound on ‖H‖ (O(nnz), no matrix assembled), so the result is conservative.
+    derived_dt = seq.dt === nothing ? _derive_dt(seq, resolved_fields, resolved_jumps, qstate; integrator = integrator, shots = shots) : nothing
+
     for (i, inst) in enumerate(seq)
         # Resolve instruction if it contains deferred objects (using same cache)
         resolved_inst = resolve(inst, param_values; cache=cache)
 
-        # Resolve per-instruction dt: use instruction's dt if specified, else sequence default
-        dt_i = something(resolved_inst.dt, seq.dt)
+        # Per-instruction dt: instruction's own, else the sequence's, else derived.
+        dt_i = something(resolved_inst.dt, seq.dt, derived_dt)
+
+        # Detectors record every `downsample`-th step, so `dt` is also refined so
+        # that `downsample` divides the step count. Otherwise the final group is
+        # partial and `out.times` is non-uniform in exactly one interval -- a grid
+        # that looks uniform but breaks `diff(t)` at the boundary. `stepgrid`
+        # rounds the count UP, so this only ever makes the step smaller.
+        ds_i = something(resolved_inst.downsample, seq.downsample)
+        if ds_i > 1 && hasproperty(resolved_inst, :duration) && resolved_inst.duration > 0
+            _, dt_i = stepgrid(resolved_inst.duration, dt_i, ds_i)
+        end
 
         # Compile and resolve_target (which uses same cache)
         mods, bmods, n_steps = compile(atoms, resolved_inst, dt_i; resolve_target=resolve_target)
-        modifiers[i] = mods
+        # Narrow the element type. `compile` returns `Vector{AbstractModifier}`,
+        # and iterating an abstractly-typed vector is a dynamic dispatch: the
+        # solver calls `update!` on every modifier at every sub-step, and the
+        # boxing costs 48 B per call. `identity.(...)` re-infers the eltype from
+        # the contents, which for the usual single-modifier case is concrete and
+        # allocation-free. (Same reason `resolved_fields` is narrowed above.)
+        modifiers[i] = isempty(mods) ? mods : identity.(mods)
         boundary_modifiers[i] = bmods
         step_counts[i] = n_steps
         total_tspan_size += n_steps
@@ -192,11 +375,24 @@ function compile(sys::System, seq::Sequence;
 
     offsets  = cumsum([0; step_counts])
 
-    # Resolve per-instruction dt and downsample from instructions, with sequence defaults
-    inst_dts = [something(seq[i].dt, seq.dt) for i in 1:n_instructions]
+    # Per-instruction dt must be the step `compile` ACTUALLY used, not the one
+    # requested. `stepgrid` adjusts dt so the instruction's duration is realised
+    # exactly (duration is physical; dt is a discretisation choice), so recompute
+    # it from the realised step count — otherwise the time grid built here drifts
+    # from the grid the solver steps on.
+    inst_dts = Float64[]
+    for i in 1:n_instructions
+        req = something(seq[i].dt, seq.dt, derived_dt)
+        dur = hasproperty(seq[i], :duration) ? Float64(seq[i].duration) : 0.0
+        push!(inst_dts, (dur > 0 && step_counts[i] > 0) ? dur / step_counts[i] : req)
+    end
     inst_ds  = [something(seq[i].downsample, seq.downsample) for i in 1:n_instructions]
 
-    ds_counts  = [step_counts[i] ÷ inst_ds[i] for i in 1:n_instructions]
+    # `stepgrid` has already refined `dt` so `downsample` divides the step count,
+    # so this divides exactly. `cld` rather than `÷` regardless, so that any path
+    # which bypasses that refinement still sizes the buffer for the final partial
+    # group instead of silently dropping the endpoint.
+    ds_counts  = [max(1, cld(step_counts[i], inst_ds[i])) for i in 1:n_instructions]
     ds_offsets = cumsum([0; ds_counts])
     ds_total   = ds_offsets[end]
 
@@ -220,6 +416,9 @@ function compile(sys::System, seq::Sequence;
         step  = ds_i * dt_i
         seg   = ds_offsets[i]+1:ds_offsets[i+1]
         times[seg] .= range(abs_start + step, step=step, length=ds_counts[i])
+        # The last sample is the instruction's final step, which is only a whole
+        # `step` from the previous one when `ds_i` divides `step_counts[i]`.
+        times[ds_offsets[i+1]] = abs_start + step_counts[i] * dt_i
         abs_start += step_counts[i] * dt_i
     end
 
@@ -237,7 +436,10 @@ function compile(sys::System, seq::Sequence;
     detectors = Vector{Any}(undef, n_instructions)
     for i in 1:n_instructions
         ds_tspan = view(times, ds_offsets[i]+1:ds_offsets[i+1])
-        detectors[i] = Vector{AbstractDetector}(map(1:n_detectors) do j
+        # Narrow the element type, as for `modifiers` above: `write_detectors!`
+        # runs once per output step, and iterating an abstractly-typed vector
+        # boxes.
+        detectors[i] = identity.(map(1:n_detectors) do j
             vals_slice = ds_offsets[i]+1:ds_offsets[i+1]
             vals_view  = ndims(detector_vals[j]) == 1 ?
                 view(detector_vals[j], vals_slice) :
@@ -275,7 +477,9 @@ function compile(sys::System, seq::Sequence;
     return SimulationJob(qstate, qstate === nothing ? nothing : copy(qstate),
                         atoms, resolved_beams, initial_beams, resolved_fields, resolved_jumps,
                         modifiers, boundary_modifiers, detectors, local_tspans,
-                        detector_outputs, times, inst_ds)
+                        detector_outputs, times, inst_ds, inst_dts, seq.tol,
+                        resolve_jtol(seq.jtol, shots),
+                        integrator)
 end
 
 

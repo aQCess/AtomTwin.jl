@@ -81,12 +81,11 @@ function ramp(beams, amplitudes_final, ramp_time, dt)
     tspan = collect(dt:dt:ramp_time)
     nsteps = length(tspan)
 
+    # A ramp is a straight line between two amplitudes, so two samples read
+    # linearly reproduce it exactly at any time -- no need to tabulate it.
     ramps = AmplitudeModifier[
-        AmplitudeModifier(
-            beam,
-            # Linear interpolation from initial to final amplitude
-            collect(range(beam._coeff[], stop=amp_final, length=nsteps))
-        )
+        AmplitudeModifier(beam, ComplexF64[beam._coeff[], amp_final], ramp_time;
+                          interp = :linear)
         for (beam, amp_final) in zip(beams, amplitudes_final)
     ]
 
@@ -124,6 +123,56 @@ const _NO_BMODS = AbstractBoundaryModifier[]
 #-----------------------------------------------------------------------------
 
 """
+    stepgrid(duration, dt, downsample = 1) -> (tsteps, dt_exact)
+
+Resolve an instruction's duration and requested step into a step COUNT and the
+exact step that realises it: `tsteps = round(duration/dt)`, `dt_exact = duration
+/ tsteps`.
+
+**The duration is physical; `dt` is not.** A pulse length is a property of the
+protocol the user is modelling, while `dt` is a discretisation knob they chose
+approximately. So when the two are incompatible, `dt` gives way — never the
+duration.
+
+Computing `tsteps` from `dt` and letting the realised duration be `tsteps*dt`
+runs the instruction for the wrong length of time whenever `dt` does not divide
+it. The discrepancy is under one step
+(~0.05% of a typical duration) but on a driven transition that is a ~1e-3
+population error — and, because it depends on how nearly `dt` divides `duration`,
+it made accuracy **non-monotonic in `dt`**, so a smaller step could be far worse
+than a larger one.
+
+Adjusting `dt` instead perturbs it by less than one part in `tsteps`, which is
+immaterial — it was an approximate choice to begin with.
+
+**`downsample` applies the same rule.** Detectors record every `downsample`-th
+step, so unless `downsample` divides `tsteps` the last group is partial: its
+sample sits closer to its predecessor than the rest, leaving `out.times`
+non-uniform in exactly one interval — a grid that *looks* uniform and quietly
+breaks `diff(t)`, FFTs and trapezoid integration at the boundary.
+
+So `tsteps` is rounded **up** to the next multiple of `downsample`. That makes
+`dt` smaller, never larger, so accuracy is equal or better, and it costs at most
+`downsample - 1` extra steps (nothing at all for `downsample = 1`). The output
+grid is then uniform by construction rather than uniform-if-it-happens-to-divide.
+
+At least one output sample is always produced: a `downsample` larger than the
+instruction's step count would otherwise round `tsteps` up to a full
+`downsample`, inflating the run — so in that case the instruction is given
+exactly one downsampled sample, at its final step.
+"""
+function stepgrid(duration::Real, dt::Real, downsample::Integer = 1)
+    duration <= 0 && return (0, float(dt))
+    tsteps = max(1, round(Int, duration / dt))
+    if downsample > 1
+        # Round up to a whole number of downsample groups, but never inflate a
+        # short instruction to a full group it did not ask for.
+        tsteps = tsteps <= downsample ? downsample : cld(tsteps, downsample) * downsample
+    end
+    return (tsteps, duration / tsteps)
+end
+
+"""
     compile(atoms, inst::MoveRow, dt; resolve_target = identity)
 
 Lower a `MoveRow` instruction into position modifiers that move tweezers
@@ -158,7 +207,7 @@ Lower a `Wait` instruction into an idle time segment. No modifiers are
 produced.
 """
 function compile(atoms, inst::Wait, dt; resolve_target=identity)
-    tsteps = Int(div(inst.duration, dt) + 1)
+    tsteps, _ = stepgrid(inst.duration, dt)
     return AbstractModifier[], _NO_BMODS, tsteps
 end
 
@@ -210,7 +259,8 @@ function compile(atoms, inst::AmplCol, dt; resolve_target = identity)
     for row in eachindex(ta.row_amplitudes)
         beam = ta[row, col]
         ampl = ta.row_amplitudes[row] * ta.col_amplitudes[col]
-        push!(modifiers, AmplitudeModifier(beam, [ampl, ampl]))
+        push!(modifiers, AmplitudeModifier(beam, ComplexF64[ampl, ampl], 1.0;
+                                           interp = :constant))
     end
     return modifiers, _NO_BMODS, 2
 end
@@ -229,7 +279,8 @@ function compile(atoms, inst::AmplRow, dt; resolve_target = identity)
     for col in eachindex(ta.col_amplitudes)
         beam = ta[row, col]
         ampl = ta.row_amplitudes[row] * ta.col_amplitudes[col]
-        push!(modifiers, AmplitudeModifier(beam, [ampl, ampl]))
+        push!(modifiers, AmplitudeModifier(beam, ComplexF64[ampl, ampl], 1.0;
+                                           interp = :constant))
     end
     return modifiers, _NO_BMODS, 2
 end
@@ -282,6 +333,15 @@ end
 # Compile: pulse and simple on/off
 #-----------------------------------------------------------------------------
 
+# Envelope interpolation vocabulary. `:lagrange` and `:piecewise_constant` are
+# the pre-existing spellings and stay valid.
+function _interp_kind(k::Symbol)
+    k === :lagrange           && return :cubic
+    k === :piecewise_constant && return :constant
+    k in (:cubic, :linear, :constant) && return k
+    throw(ArgumentError("interp must be :cubic, :linear or :constant (got $k)"))
+end
+
 # Helpers: build boundary modifier targeting the same coefficient reference
 _reset_modifier(c::GaussianCoupling) = ResetModifier(c._amplitude)
 _reset_modifier(c) = ResetModifier(c)
@@ -299,34 +359,44 @@ at the boundary zeros the field after the instruction completes.
 """
 function compile(atoms, inst::Pulse, dt; resolve_target = identity)
     resolved_couplings = [resolve_target(c) for c in inst.couplings]
-    tsteps = round(Int, inst.duration / dt)
+    tsteps, dt = stepgrid(inst.duration, dt)
     bmods = AbstractBoundaryModifier[_reset_modifier(c) for c in resolved_couplings]
 
-    if isempty(inst.amplitudes)
+    # A NoisyField synthesises its noise inside `AmplitudeModifier`, which is only
+    # built on the shaped-pulse path below. A constant Pulse would therefore set
+    # the amplitude once at the instruction boundary and apply NO noise at all --
+    # silently, with every shot identical. Give noisy couplings a flat per-step
+    # envelope so they take that path.
+    noisy = any(c -> c isa NoisyField, resolved_couplings)
+
+    if isempty(inst.amplitudes) && !noisy
         # Constant pulse: set amplitude at boundary, no per-step modifiers
         prepend!(bmods, [_set_modifier(c, inst.ampl) for c in resolved_couplings])
         return AbstractModifier[], bmods, tsteps
+    elseif isempty(inst.amplitudes)
+        # Constant amplitude, but at least one coupling is noisy: drive them all
+        # through a flat per-step envelope. Only NoisyField takes the 3-argument
+        # AmplitudeModifier (which is where the noise trace is synthesised);
+        # ordinary couplings take the 2-argument form.
+        tspan = collect(range(dt, inst.duration, tsteps))
+        flat  = fill(ComplexF64(inst.ampl), tsteps)
+        modifiers = AbstractModifier[
+            c isa NoisyField ?
+                AmplitudeModifier(c, flat, tspan, inst.duration) :
+                AmplitudeModifier(c, ComplexF64[inst.ampl, inst.ampl],
+                                  inst.duration; interp = :constant)
+            for c in resolved_couplings]
+        return modifiers, bmods, tsteps
     else
-        # Shaped pulse: resample amplitude envelope onto tsteps points
-        scaled = inst.ampl .* inst.amplitudes
-        # A shaped Pulse on a Detuning is the supported way to make a detuning
-        # time-dependent (δ(t) = amplitudes, in rad/s). A detuning operator is
-        # diagonal (no `reverse` part), so its coefficient must stay REAL: a
-        # complex value would apply an anti-Hermitian term and break unitarity /
-        # trace preservation silently. Guard it here.
-        if any(c -> c isa Detuning, resolved_couplings) &&
-           any(a -> abs(imag(a)) > 1e-12 * max(abs(a), 1.0), scaled)
-            error("Pulse on a Detuning must have real amplitudes: a detuning δ(t) is " *
-                  "real (rad/s). A complex amplitude makes the term non-Hermitian and " *
-                  "breaks unitarity. (A complex amplitude is only meaningful for a " *
-                  "coupling, where it is a relative phase.)")
-        end
-        amplitude_vals = if inst.interp == :piecewise_constant
-            interpolate_piecewise_constant(scaled, tsteps)
-        else
-            interpolate(scaled, collect(0.0:dt:inst.duration))[1:tsteps]
-        end
-        modifiers = AbstractModifier[AmplitudeModifier(c, amplitude_vals) for c in resolved_couplings]
+        # Shaped pulse. The envelope is NOT resampled onto the solver grid: the
+        # solver picks its step from `tol` and sub-divides further when the error
+        # estimator asks, so it reads the envelope wherever it lands. Handing the
+        # modifier the user's own samples keeps the envelope's resolution a
+        # property of the pulse rather than of whatever step the solver chose.
+        scaled = ComplexF64.(inst.ampl .* inst.amplitudes)
+        modifiers = AbstractModifier[
+            AmplitudeModifier(c, scaled, inst.duration; interp = _interp_kind(inst.interp))
+            for c in resolved_couplings]
         return modifiers, bmods, tsteps
     end
 end

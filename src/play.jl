@@ -95,6 +95,7 @@ function play(sys::System, seq::Sequence;
                 initial_state=sys.initial_state,
                 density_matrix=false,
                 rng=Random.default_rng(),
+                shots::Int = 1,
                 shot_callback::Union{Nothing,Function}=nothing,
                 kwargs...)
 
@@ -104,9 +105,13 @@ function play(sys::System, seq::Sequence;
         @warn "Initial state not specified. Defaulting to classical dynamics." maxlog=1
     end
 
-    job = compile(sys, seq; initial_state = s, density_matrix=density_matrix, rng=rng, kwargs...)
+    # `shots` reaches `compile` because the derived step depends on it: an unset
+    # `jtol` resolves to `1/sqrt(shots)` (see `resolve_jtol`), which feeds
+    # `_derive_dt`.
+    job = compile(sys, seq; initial_state = s, density_matrix=density_matrix, rng=rng,
+                  shots=shots, kwargs...)
     return play(job, sys; initial_state = s, density_matrix=density_matrix, rng=rng,
-                shot_callback=shot_callback, kwargs...)
+                shots=shots, shot_callback=shot_callback, kwargs...)
 end
 
 function _execute_shot!(shot, local_job, sys, shot_rng, initial_state, all_outputs_vec, 
@@ -146,6 +151,32 @@ function play(job::SimulationJob, sys::System;
 
     @assert shots > 0 "shots must be positive"
 
+    if density_matrix && isempty(job.jumps)
+        @warn """
+        `density_matrix = true` on a system with no dissipation.
+
+        Without jump operators the master equation and the Schrodinger equation
+        give the same answer, but the density matrix is d x d where the state
+        vector is d — typically one to two orders of magnitude slower.
+
+        Drop `density_matrix = true` unless you need the density matrix itself
+        (a reduced state, a purity, a coherence between subsystems).
+        """ maxlog = 1
+    end
+
+    if shots == 1 && !density_matrix && !isempty(job.jumps)
+        @warn """
+        `shots = 1` on a system with dissipation.
+
+        A single wavefunction Monte Carlo trajectory is one stochastic sample,
+        not the ensemble average: it contains discrete quantum jumps and can
+        differ from the mean by O(1).
+
+        Use `shots = N` and average, or `density_matrix = true` for the ensemble
+        directly.
+        """ maxlog = 1
+    end
+
     # Restore the job's trapping beams to their compile-time state before the first
     # shot. Move/Position/Amplitude modifiers mutate beam.r0/_coeff in place, so
     # replaying a job that was already run (or whose beams a prior shot moved) must
@@ -157,7 +188,7 @@ function play(job::SimulationJob, sys::System;
     # Single-shot fast path
     if shots == 1
         shot_seed = rand(rng, UInt)
-        shot_rng = Random.MersenneTwister(shot_seed)
+        shot_rng = Random.Xoshiro(shot_seed)
         result = _play(job; rng=shot_rng, savefinalstate=savefinalstate)
         final_states = savefinalstate ? [result.final_state] : typeof(job.state)[]
         return (
@@ -202,16 +233,26 @@ function play(job::SimulationJob, sys::System;
         end
     end
     
-    # Generate seeds and RNGs
+    # Generate seeds and RNGs.
+    #
+    # One generator is built per shot, and `Xoshiro` constructs ~45x faster than
+    # `MersenneTwister`. The type is internal: `rng` supplies the seeds, so a
+    # caller-supplied generator of any type still seeds the run reproducibly.
     shot_seeds = [rand(rng, UInt) for _ in 1:shots]
-    shot_rngs = [Random.MersenneTwister(shot_seeds[i]) for i in 1:shots]
+    shot_rngs = [Random.Xoshiro(shot_seeds[i]) for i in 1:shots]
     
     # Execute
     if use_parallel
         # Pre-allocate one job copy per thread (reused across shots)
         thread_jobs = [deepcopy(job) for _ in 1:Threads.maxthreadid()]
         
-        Threads.@threads for shot in 1:shots
+        # `:static` pins each task to one thread for the whole body, so
+        # `threadid()` is a stable identity. Bare `@threads` is `:dynamic` on
+        # Julia >= 1.12, where a task may migrate mid-body and two tasks then
+        # share one `thread_jobs` entry -- and likewise one solver workspace
+        # (see `ThreadCache` in Dynamiq/solvers.jl). Migration is observable
+        # even on 1.11.
+        Threads.@threads :static for shot in 1:shots
             tid = Threads.threadid()
             if shot != 1
                 recompile!(thread_jobs[tid], sys;
@@ -246,6 +287,30 @@ end
 
 
 """
+    _propagator_tol(seq_tol) -> Float64
+
+Map a sequence-level `tol` onto the propagator's local-error target.
+
+`Sequence(; tol)` bounds the error of one integration step; the default is 1e-4.
+The exponential propagator's `tol` is a different quantity: it sets the
+Chebyshev degree within a step. That cost is essentially flat in tolerance, so
+there is no reason to propagate a loose value — doing so buys nothing and
+silently caps accuracy.
+
+So `tol` may only *tighten* the propagator beyond its machine-precision default:
+a user asking for `tol = 1e-14` gets it; the default still integrates each step
+as exactly as it would have.
+"""
+_propagator_tol(seq_tol::Float64) = min(seq_tol, 1e-12)
+
+# The two tolerances are different quantities and are passed separately:
+# `tol` (above) bounds the exponential propagator's truncation within a step,
+# while `steptol` -- the user's `tol`, unmodified -- bounds the Strang splitting
+# error of one step and drives the sub-step controller in `strang_substeps!`.
+# Collapsing them would either force the splitting to machine precision (absurd
+# cost) or cap the propagator at a loose value (silent accuracy loss).
+
+"""
     _play(job::SimulationJob; savefinalstate::Bool=false) -> NamedTuple
 
 Execute a compiled simulation job for a single quantum trajectory shot.
@@ -258,7 +323,7 @@ Returns a NamedTuple with:
 function _play(job::SimulationJob;
                 savefinalstate::Bool=false,
                 frozen::Union{Nothing,Bool}=nothing,
-                rng=Random.MersenneTwister())
+                rng=Random.Xoshiro())
 
     n_instructions = length(job.modifiers)
     if job.state === nothing
@@ -266,10 +331,11 @@ function _play(job::SimulationJob;
         @inbounds for i in 1:n_instructions
             isempty(job.local_tspans[i]) && continue
             for m in job.boundary_modifiers[i]; begin_instruction!(m); end
+            for m in job.modifiers[i]; begin_instruction!(m); end
             evolve!(job.atoms, job.local_tspans[i];
                     beams=job.beams, modifiers=job.modifiers[i],
                     detectors=job.detectors[i], rng=rng, frozen=false,
-                    downsample=job.downsamples[i])
+                    downsample=job.downsamples[i], dt=job.inst_dts[i])
             for m in job.boundary_modifiers[i]; end_instruction!(m); end
         end
     else
@@ -284,10 +350,14 @@ function _play(job::SimulationJob;
         @inbounds for i in 1:n_instructions
             isempty(job.local_tspans[i]) && continue
             for m in job.boundary_modifiers[i]; begin_instruction!(m); end
+            for m in job.modifiers[i]; begin_instruction!(m); end
             evolve!((job.state, job.atoms), job.local_tspans[i];
                     fields=job.fields, beams=job.beams, jumps=job.jumps,
                     modifiers=job.modifiers[i], detectors=job.detectors[i],
-                    rng=rng, frozen=frozen, downsample=job.downsamples[i])
+                    rng=rng, frozen=frozen, downsample=job.downsamples[i],
+                    dt=job.inst_dts[i],
+                    tol=_propagator_tol(job.tol), steptol=job.tol, jtol=job.jtol,
+                    integrator=job.integrator)
             for m in job.boundary_modifiers[i]; end_instruction!(m); end
         end
     end

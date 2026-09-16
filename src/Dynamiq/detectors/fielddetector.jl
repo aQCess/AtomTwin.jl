@@ -85,6 +85,18 @@ function write!(d::FieldDetector{<:AbstractField, V, T}, i::Int) where {V,T}
 end
 
 """
+    write!(d::FieldDetector{<:AbstractBeam}, i)
+
+Sample a **beam's** complex amplitude. Tweezer traps are switched on and off
+during a sequence (`AmplRow`/`AmplCol` set `_coeff` to zero), so this is what
+tells a consumer whether a trap is actually present at a given time — position
+alone does not.
+"""
+function write!(d::FieldDetector{<:AbstractBeam, V, T}, i::Int) where {V,T}
+    d.vals[i] = d.obj._coeff[]
+end
+
+"""
     reset!(d::FieldDetector)
 
 Reset all recorded samples to zero while preserving the length and `tspan`.

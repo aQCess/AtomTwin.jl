@@ -186,4 +186,65 @@ export resolve
 # Export analysis
 export process_tomography
 
+#------------------------------------------------------------------------------
+# Load-time initialisation
+#------------------------------------------------------------------------------
+
+# Size the per-thread workspace caches for this session. `ThreadCache` sizes its
+# slot vector at construction, which for a `const` global is package build time.
+# A stale size is safe -- `get_ws!` grows it under lock on first touch -- but
+# doing it here keeps that off the first parallel run's critical path.
+function __init__()
+    Dynamiq.reset!(Dynamiq._GERSH_WS)
+    Dynamiq.reset!(Dynamiq._COMM_WS)
+    Dynamiq.reset!(Dynamiq._STRANG_CTL)
+    Dynamiq.reset!(Dynamiq._DISS_WS2)
+    return nothing
+end
+
+#------------------------------------------------------------------------------
+# Precompilation
+#------------------------------------------------------------------------------
+
+using PrecompileTools: @setup_workload, @compile_workload
+
+# Compile the solver entry points so they are not built afresh in every session.
+#
+# The workload runs at package build time, so anything it leaves in module-level
+# mutable state is serialised into the package image. Dynamiq's `ThreadCache`
+# globals are populated as a side effect of stepping and are cleared afterwards.
+@setup_workload begin
+    # Not `g, e`: `g` is `Units.g` (grams), and assigning to an imported binding
+    # is a precompile error on julia 1.11.
+    lvl_g, lvl_e = Level("g"), Level("e")
+    @compile_workload begin
+        # Statevector, trajectories and density matrix: three solver entry
+        # points and their detector machinery.
+        atoms  = [Atom(; levels = [lvl_g, lvl_e]) for _ in 1:2]
+        system = System(atoms)
+        cs = [add_coupling!(system, a, lvl_g => lvl_e, 2π * 1e6; active = false) for a in atoms]
+        add_interaction!(system, (atoms[1], atoms[2]), (lvl_e, lvl_e) => (lvl_e, lvl_e), 2π * 1e6)
+        add_decay!(system, atoms[1], lvl_e => lvl_g, 2π * 1e5)
+        add_dephasing!(system, atoms[2], lvl_e, 2π * 1e5)
+        add_detector!(system, PopulationDetectorSpec(atoms[1], lvl_e; name = "P"))
+        add_detector!(system, CoherenceDetectorSpec(atoms[1]; levels = 1 => 2, name = "C"))
+
+        seq = Sequence(1e-8; tol = 1e-4)
+        @sequence seq begin
+            Pulse(cs, 1e-7)
+            Wait(1e-8)
+        end
+
+        play(system, seq; initial_state = [lvl_g, lvl_g])
+        play(system, seq; initial_state = [lvl_g, lvl_g], shots = 2)
+        play(system, seq; initial_state = [lvl_g, lvl_g], density_matrix = true)
+    end
+
+    # Drop what the workload left in the thread caches.
+    Dynamiq.reset!(Dynamiq._GERSH_WS)
+    Dynamiq.reset!(Dynamiq._COMM_WS)
+    Dynamiq.reset!(Dynamiq._STRANG_CTL)
+    Dynamiq.reset!(Dynamiq._DISS_WS2)
+end
+
 end # module AtomTwin

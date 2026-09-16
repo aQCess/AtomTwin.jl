@@ -316,6 +316,12 @@ function initialize!(a::AtomWrapper, inner::NLevelAtom;
                      rng          = Random.default_rng(),
                      beams        = AbstractBeam[],
                      param_values = Dict{Symbol,Any}())
+    # 0. Drop any force cached by a previous shot. `fclassical!` (velocity Verlet)
+    #    reuses the last step's force as this step's F_old, so a stale value from
+    #    another shot — or from the position this atom had before re-initialising
+    #    below — would corrupt the first step of the trajectory.
+    Dynamiq.reset_force!(inner)
+
     # 1. position — GaussianPosition uses _resolve_node_value; Vector passes through
     if a.x_init !== nothing
         x = _resolve_node_value(a.x_init, param_values, rng)

@@ -38,9 +38,21 @@ which creates an empty sequence with the given default time step.
 """
 struct Sequence
     instructions::Vector{AbstractInstruction}
-    dt::Float64
+    dt::Union{Float64,Nothing}     # `nothing` ⇒ derive from ‖H‖ and `tol` at build time
     downsample::Int
+    tol::Float64                   # target local error per step (NOT a global bound)
+    jtol::Union{Float64,Nothing}   # target MCWF jump-omission probability (see `_derive_dt`);
+                                   # `nothing` ⇒ derive from the shot count at play time
 end
+
+# Backwards compatibility: `tol` was added after the struct was public, so the
+# original three-field positional form must keep working unchanged.
+Sequence(instructions::Vector{<:AbstractInstruction}, dt, downsample::Int) =
+    Sequence(instructions, dt, downsample, 1e-4, nothing)
+Sequence(instructions::Vector{<:AbstractInstruction}, dt, downsample::Int, tol) =
+    Sequence(instructions, dt, downsample, tol, nothing)
+Sequence(instructions::Vector{<:AbstractInstruction}, dt) =
+    Sequence(instructions, dt, 1, 1e-4, 1e-4)
 
 """
     Sequence(dt::Float64; downsample::Int = 1)
@@ -83,10 +95,76 @@ push!(seq, Wait(1e-6))                # coarse dt (default) for slow evolution
 push!(seq, Ramp(tw, r, a, t; downsample=10))  # sparse output for slow ramp
 ```
 """
-function Sequence(dt::Float64; downsample::Int = 1)
+function Sequence(dt::Float64; downsample::Int = 1, tol::Float64 = 1e-4,
+                  jtol::Union{Float64,Nothing} = nothing)
     dt > 0 || throw(ArgumentError("dt must be positive, got $dt"))
     downsample > 0 || throw(ArgumentError("downsample must be positive, got $downsample"))
-    return Sequence(AbstractInstruction[], dt, downsample)
+    tol > 0 || throw(ArgumentError("tol must be positive, got $tol"))
+    return Sequence(AbstractInstruction[], dt, downsample, tol, jtol)
+end
+
+"""
+    Sequence(; downsample = 1, tol = 1e-6)
+
+Create a `Sequence` with **no explicit time step**. The solver derives one per
+instruction from the Hamiltonian actually present, targeting a local relative
+error of `tol` per step.
+
+The step is chosen from `θ = ‖H‖·dt`, where `‖H‖` is a Gershgorin upper bound
+computed in O(nnz) at build time. The Taylor propagator's error per step is
+O(θ^p), so `θ` is set to `tol^(1/p)` and capped well below the stability limit
+(`2√2` at the default order 4). Because the bound is an upper bound, the derived
+step is conservative — never optimistic.
+
+```julia
+seq = Sequence()                  # solver picks dt for 1e-6 local error
+seq = Sequence(; tol = 1e-9)      # tighter: smaller dt
+seq = Sequence(1e-9)              # explicit dt, unchanged behaviour
+```
+
+**When to set `dt` yourself.** `dt` is also the *control* grid: shaped pulse
+envelopes and moving beams are resampled onto it, so it fixes how finely a
+protocol is resolved, which is a physical choice rather than a numerical one. If
+a pulse has structure the derived step would smooth over, pass `dt` explicitly.
+A derived step targets accuracy of the *propagator*, not fidelity to your
+envelope.
+"""
+function Sequence(; downsample::Int = 1, tol::Float64 = 1e-4,
+                  jtol::Union{Float64,Nothing} = nothing)
+    downsample > 0 || throw(ArgumentError("downsample must be positive, got $downsample"))
+    tol > 0 || throw(ArgumentError("tol must be positive, got $tol"))
+    return Sequence(AbstractInstruction[], nothing, downsample, tol, jtol)
+end
+
+"""
+    Sequence(instruction_duration, tsteps::Integer; downsample = 1)
+
+Create a `Sequence` whose step is `instruction_duration / tsteps`, i.e. specify
+how many steps an instruction of that length should take rather than how long
+each step is.
+
+This is often the clearer way to say it. The duration of an instruction is
+physical; the step is a discretisation choice that only has to divide it. Giving
+a step count makes that relationship explicit and cannot produce a step which
+fails to divide the duration:
+
+```julia
+seq = Sequence(2e-6, 2000)     # a 2 µs pulse in 2000 steps  (dt = 1 ns)
+seq = Sequence(1e-9)           # equivalent, stated as a step
+```
+
+Note `dt` still applies to *every* instruction, so an instruction of a different
+length simply takes proportionally more or fewer steps — `tsteps` is not a
+per-instruction step count. Use the `dt` keyword on an individual instruction to
+override it, or `Sequence(; tol = ...)` to let the solver choose.
+"""
+function Sequence(instruction_duration::Real, tsteps::Integer; downsample::Int = 1,
+                  tol::Float64 = 1e-4, jtol::Union{Float64,Nothing} = nothing)
+    instruction_duration > 0 ||
+        throw(ArgumentError("instruction_duration must be positive, got $instruction_duration"))
+    tsteps > 0 || throw(ArgumentError("tsteps must be positive, got $tsteps"))
+    return Sequence(Float64(instruction_duration) / tsteps; downsample = downsample,
+                    tol = tol, jtol = jtol)
 end
 
 """

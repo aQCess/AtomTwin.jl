@@ -103,7 +103,7 @@ Planar laser coupling between two internal levels with a spatially dependent
 phase and amplitude given by `beam`.
 
 The underlying `Op` `H` encodes the bare coupling in basis `b`, while
-`update!(::PlanarCoupling, ::Int)` updates the complex coefficient using
+`update!(::PlanarCoupling, t)` updates the complex coefficient using
 the instantaneous position of `atom` and the beam wavevector.
 """
 mutable struct PlanarCoupling{A} <: AbstractField
@@ -125,7 +125,7 @@ end
 Update the complex amplitude of a planar coupling using the current atomic
 position and beam wavevector. This is typically called by the time integrator.
 """
-function update!(drive::PlanarCoupling{A}, i::Int) where A
+function update!(drive::PlanarCoupling{A}, ::Real) where A
     k = drive.beam.k
     r = drive.atom.x
     drive._coeff[] = cis(k[1] * r[1] + k[2] * r[2] + k[3] * r[3])
@@ -166,7 +166,7 @@ GlobalCoupling(b, atom, transition, rate::Float64) =
 No-op update for global couplings. The coefficient is assumed to be
 handled externally or remain constant in time.
 """
-update!(d::GlobalCoupling, i::Int) = nothing
+update!(d::GlobalCoupling, ::Real) = nothing
 
 """
     GaussianCoupling
@@ -215,7 +215,7 @@ both the commanded pulse amplitude and the atom's position scale the instantaneo
 
 Cost: one `efield_scalar` evaluation + one complex multiply + one divide — no alloc.
 """
-function update!(f::GaussianCoupling, ::Int)
+function update!(f::GaussianCoupling, ::Real)
     f._coeff[] = f._amplitude[] * efield_scalar(f.beam, f.atom.x) / f.E0
     return nothing
 end
@@ -246,7 +246,7 @@ end
 No-op update for blockade couplings. The blockade effect is encoded in
 the static operator `H`.
 """
-update!(d::BlockadeCoupling, i::Int) = nothing
+update!(d::BlockadeCoupling, ::Real) = nothing
 
 """
     Detuning(b, atom, level, value)
@@ -273,7 +273,7 @@ end
 
 No-op update for static detuning terms. The coefficient remains fixed.
 """
-update!(::Detuning, ::Int) = nothing
+update!(::Detuning, ::Real) = nothing
 
 """
     Hamiltonian(H::Op)
@@ -309,7 +309,7 @@ end
 No-op update: the operator is static and its coefficient is handled by the
 instruction layer (constant `1` unless pulsed).
 """
-update!(::Hamiltonian, ::Int) = nothing
+update!(::Hamiltonian, ::Real) = nothing
 
 """
     StarkShiftAC(b, atom, level, beam)
@@ -344,7 +344,7 @@ Update the AC Stark shift coefficient from the instantaneous beam
 intensity at the atomic position. The stored coefficient is
 \\(\alpha I / \\hbar\\) in angular-frequency units.
 """
-function update!(f::StarkShiftAC{A}, i::Int) where A
+function update!(f::StarkShiftAC{A}, ::Real) where A
     f._coeff[] = 1 / hbar * f.alpha * intensity(f.beam, f.atom.x)
     return nothing
 end
@@ -375,7 +375,7 @@ end
 No-op update for static pairwise interactions. The operator is fixed
 and its coefficient is assumed constant unless modified externally.
 """
-function update!(d::Interaction{A}, i::Int) where A
+function update!(d::Interaction{A}, ::Real) where A
 end
 
 """
@@ -404,7 +404,7 @@ mutable struct VdWInteraction{A} <: AbstractField
 end
 
 """
-    update!(d::VdWInteraction, ::Int)
+    update!(d::VdWInteraction, t)
 
 Recompute the van der Waals coefficient from the current inter-atom separation:
 
@@ -413,7 +413,7 @@ Recompute the van der Waals coefficient from the current inter-atom separation:
 clamped to `V_cap` when finite. Called each solver timestep after `fclassical!`
 has updated positions.
 """
-function update!(d::VdWInteraction, ::Int)
+function update!(d::VdWInteraction, ::Real)
     x1 = d.atom1.x;  x2 = d.atom2.x
     dx = x2[1] - x1[1];  dy = x2[2] - x1[2];  dz = x2[3] - x1[3]
     r2 = dx*dx + dy*dy + dz*dz
@@ -451,6 +451,8 @@ mutable struct NLevelAtom <: AbstractAtom
 
     _P::Vector{Float64}           # populations, used for intermediate computations
     _pidx::Vector{Vector{Int}}    # updated when a basis is constructed
+    _F::Vector{Float64}           # force cached from the previous step (velocity Verlet)
+    _Fvalid::Bool                 # false until _F holds a force for the current x
 
     function NLevelAtom(n;
                         x       = [0.0, 0.0, 0.0],
@@ -458,7 +460,7 @@ mutable struct NLevelAtom <: AbstractAtom
                         m       = 1amu,
                         alphas  = Dict(),
                         lambdas = Dict())
-        new(n, x, v, m, alphas, lambdas, zeros(n), [[0]])
+        new(n, x, v, m, alphas, lambdas, zeros(n), [[0]], zeros(3), false)
     end
 end
 
@@ -479,8 +481,10 @@ function copy(a::NLevelAtom)
         lambdas = copy(a.lambda),
     )
     # Copy internal/derived state
-    b._P    = copy(a._P)
-    b._pidx = [copy(idx) for idx in a._pidx]
+    b._P      = copy(a._P)
+    b._pidx   = [copy(idx) for idx in a._pidx]
+    b._F      = copy(a._F)
+    b._Fvalid = a._Fvalid
     return b
 end
 
