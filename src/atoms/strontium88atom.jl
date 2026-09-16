@@ -96,6 +96,58 @@ const SR88_POLARIZABILITY_3P0 = PolarizabilityModel(
 )
 
 """
+    SR88_POLARIZABILITY_3P1
+
+Polarizability model for the Sr 5s5p ³P₁ state — the upper level of the 689 nm
+narrow-line intercombination transition.
+
+Unlike the `¹S₀`/`³P₀` clock pair this state has `J = 1`, so it carries a **tensor**
+polarizability and its sublevels are shifted differently. Pass `F`/`mF`/`ε_z` to
+[`light_shift_coeff_Hz_per_Wcm2`](@ref) to include that term; for `⁸⁸Sr`, `I = 0`
+and `F = J = 1`.
+
+Line list: Table II of Kestler *et al.*, *Phys. Rev. A* **105**, 012821 (2022) —
+transition energies **from ³P₁** in cm⁻¹ with recommended reduced dipole matrix
+elements. Every listed line lies above ³P₁. The 689 nm line down to `¹S₀` is not
+in that table (it is absorbed into their "Other" row); it is included here
+explicitly with the `dipole_ea0 = 0.158` already used by
+[`SR88_POLARIZABILITY_1S0`](@ref) for the same transition, so the two models stay
+consistent with each other.
+
+This model is AtomTwin's accuracy benchmark for the tensor machinery: it predicts
+the two measured ¹S₀–³P₁ magic wavelengths near 473 nm to within the reference's
+own uncertainty. See `test/unit/test_physics.jl`.
+"""
+const SR88_POLARIZABILITY_3P1 = PolarizabilityModel(
+    "3P1",
+    [
+        # 689 nm intercombination line — BELOW ³P₁, hence the negative frequency.
+        # Γ derived from the D = 0.158 e·a₀ that SR88_POLARIZABILITY_1S0 uses for
+        # this same transition, so the two models cannot drift apart:
+        #   Γ = ω₀³|d|²/(3πε₀ħc³)·(2J_g+1)/(2J_e+1) = 2π × 8.187 kHz  (τ ≈ 19.4 µs;
+        # the accepted value is 7.4 kHz / 21.4 µs — this line is worth ≈1 a.u. here,
+        # so internal consistency matters more than the 10% on its width).
+        (freq_THz = -434.8190, gamma_MHz = 8.187e-3, J_f = 0//1),   # 5s² ¹S₀
+        #      E(cm⁻¹ from ³P₁)  →  THz,  D in e·a₀ (PRA 105, 012821 Table II)
+        (freq_THz =  109.574143, dipole_ea0 = 2.318, Jg = 1//1, J_f = 1//1),  # 5s4d ³D₁
+        (freq_THz =  111.342919, dipole_ea0 = 4.013, Jg = 1//1, J_f = 2//1),  # 5s4d ³D₂
+        (freq_THz =  435.718358, dipole_ea0 = 3.435, Jg = 1//1, J_f = 1//1),  # 5s6s ³S₁  688 nm
+        (freq_THz =  614.664477, dipole_ea0 = 2.005, Jg = 1//1, J_f = 1//1),  # 5s5d ³D₁
+        (freq_THz =  615.114165, dipole_ea0 = 3.671, Jg = 1//1, J_f = 2//1),  # 5s5d ³D₂
+        (freq_THz =  620.240616, dipole_ea0 = 2.658, Jg = 1//1, J_f = 0//1),  # 5p²  ³P₀
+        (freq_THz =  626.446320, dipole_ea0 = 2.363, Jg = 1//1, J_f = 1//1),  # 5p²  ³P₁
+        (freq_THz =  634.660634, dipole_ea0 = 2.867, Jg = 1//1, J_f = 2//1),  # 5p²  ³P₂  472 nm
+        (freq_THz =  673.243923, dipole_ea0 = 0.228, Jg = 1//1, J_f = 2//1),  # 5p²  ¹D₂
+        (freq_THz =  679.209793, dipole_ea0 = 0.291, Jg = 1//1, J_f = 0//1),  # 5p²  ¹S₀
+        (freq_THz =  687.124314, dipole_ea0 = 0.921, Jg = 1//1, J_f = 1//1),  # 5s7s ³S₁
+    ];
+    J = 1//1,                                        # 5s5p ³P₁
+    # Table II "Other" (81) + "Core + vc" (6), in a.u. at the magic wavelengths.
+    offset_Hz_per_Wm2 = _au_to_offset_Hz_per_Wm2(87.0),
+    reference = "Phys. Rev. A 105, 012821 (2022), Table II",
+)
+
+"""
     SR88_POLARIZABILITY
 
 Dictionary of all Sr-88 polarizability models, keyed by state label.
@@ -103,6 +155,7 @@ Dictionary of all Sr-88 polarizability models, keyed by state label.
 const SR88_POLARIZABILITY = Dict(
     "1S0" => SR88_POLARIZABILITY_1S0,
     "3P0" => SR88_POLARIZABILITY_3P0,
+    "3P1" => SR88_POLARIZABILITY_3P1,
 )
 
 

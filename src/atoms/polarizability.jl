@@ -313,11 +313,143 @@ function _U_over_I(model::PolarizabilityModel, λ_nm::Real)
 end
 
 # ======================================================================
+# Tensor polarizability
+# ======================================================================
+#
+# The light shift of a hyperfine state |F, m_F> decomposes into scalar, vector and
+# tensor parts. For LINEARLY polarised light the vector term vanishes, leaving
+#
+#   U/I = -(1/2 eps0 c) [ alpha0 + alpha2 * ((3|e_z|^2-1)/2) * geom(F, mF) ]
+#
+# with geom(F,mF) = (3 mF^2 - F(F+1)) / (F(2F-1)), and e_z the projection of the
+# polarisation onto the quantisation axis. alpha2 vanishes identically for J = 0
+# and J = 1/2 (the 6-j triangle rule) and geom is undefined for F = 0, 1/2 -- two
+# independent reasons the tensor shift is absent for those states.
+#
+# Reference: the AtomTwin polarizability notes (Schmit-Veiler 2026), eqs. (2)-(3);
+# Steck, Quantum and Atom Optics, sec. 7.3.
+
+"""
+    _tensor_prefactor(F) -> Float64
+
+The `sqrt(40 F (2F+1) (2F-1) / (3 (F+1) (2F+3)))` factor of the tensor
+polarizability. Zero for `F = 0` and `F = 1/2`, where the tensor shift is absent.
+"""
+function _tensor_prefactor(F::Rational{Int})
+    (F == 0 || F == 1//2) && return 0.0
+    num = 40 * F * (2F + 1) * (2F - 1)
+    den = 3 * (F + 1) * (2F + 3)
+    return sqrt(Float64(num / den))
+end
+
+"""
+    _alpha2_si(model, λ_nm; F, I) -> Float64
+
+Dynamic **tensor** polarizability `α⁽²⁾(F; ω)` in SI units (C·m²·V⁻¹).
+
+    α⁽²⁾ = 2π ε₀ c³ Σ_J' (−1)^(−2J−J'−F−I) √(40F(2F+1)(2F−1)/(3(F+1)(2F+3))) (2J+1)
+                        × f(J,J') Γ(J,J') / (ω₀² (ω₀² − ω²))
+                        × {1 1 2; J J J'} {J J 2; F F I}
+
+`F` is the hyperfine quantum number of the state and `I` the nuclear spin; for a
+zero-spin isotope `I = 0` and `F = J`.
+
+Returns `0.0` whenever the tensor part is absent — `J ≤ 1/2` (the `{1 1 2; J J J'}`
+triangle rule) or `F ≤ 1/2` (the prefactor). The sum runs over the model's lines
+with the same `f(J,J')` energy-ordering convention as the scalar part.
+
+# Normalisation — read before comparing with a paper
+
+`α⁽²⁾` is defined only up to how the `(3m_F²−F(F+1))/(F(2F−1))` sublevel factor is
+split off, and the literature is not uniform. AtomTwin's matches Kestler *et al.*,
+*Phys. Rev. A* **105**, 012821 (2022): for linear polarisation along the
+quantisation axis,
+
+    α(m_F = 0)   = α⁽⁰⁾ − 2 α⁽²⁾
+    α(|m_F| = 1) = α⁽⁰⁾ +   α⁽²⁾
+
+which is what `_tensor_geometry` × `_polarization_factor` reproduces, and which
+`SR88_POLARIZABILITY_3P1` is validated against.
+
+!!! warning "α⁽²⁾ and U/I must share one convention"
+    The `3π ε₀ c³` here pairs with converting a polarizability to a shift via
+    `1/(c ε₀)` — AtomTwin's own convention, set by `polarizability_si`
+    (`α_SI = −c ε₀ (U/I)`). The notes instead write `U/I = −α/(2 ε₀ c)`, with the
+    missing half absorbed into their `α`. Mixing the two — `3π` with `1/(2 c ε₀)` —
+    silently halves the tensor splitting while leaving `α⁽²⁾` itself looking
+    correct against a published table, which is exactly how this was nearly shipped.
+    The invariant that catches it is
+    `α(m_F=0) − α(|m_F|=1) = −3 α⁽²⁾`, tested in `test/unit/test_physics.jl`.
+"""
+function _alpha2_si(model::PolarizabilityModel, λ_nm::Real;
+                    F::Rational{Int}, I::Rational{Int} = 0//1)
+    J = model.J
+    (J == 0 || J == 1//2) && return 0.0      # tensor rank unreachable
+    pre = _tensor_prefactor(F)
+    pre == 0.0 && return 0.0
+
+    ωL = 2π * c / (λ_nm * 1e-9)
+    α2 = 0.0
+    for t in model.transitions
+        J_f = t.J_f
+        w1 = wigner6j(1, 1, 2, J, J, J_f)
+        w2 = wigner6j(J, J, 2, F, F, I)
+        (w1 == 0 || w2 == 0) && continue
+
+        ω0 = 2π * abs(t.freq_THz) * 1e12
+        Γ  = 2π * t.gamma_MHz     * 1e6
+        # (−1)^(−2J−J'−F−I): the exponent is an integer whenever the 6-j symbols
+        # are non-zero, so round before exponentiating rather than going complex.
+        phase = iseven(round(Int, -2J - J_f - F - I)) ? 1.0 : -1.0
+
+        # The PHYSICAL f(J,J'), never the stored `t.f`. For a `gamma_MHz` line the
+        # two coincide, but a `dipole_ea0` line stores f = 3 because the scalar sum
+        # wants the 1/(2Jg+1) weight that `_dipole_to_gamma_MHz` already folded into
+        # Γ_eff. The tensor sum carries its own angular-momentum algebra in the two
+        # 6-j symbols and the (2J+1), so it needs the true ratio: using the stored 3
+        # inflates a line by 3/f — ×9 for J'=0, ×3 for J'=1, ×9/5 for J'=2. On Sr ³P₁,
+        # dominated by 5p² ³P₂, that aggregated to a deceptively clean ≈×2.
+        f_phys = _line_strength_factor(J, J_f, t.freq_THz)
+
+        α2 += phase * pre * (2J + 1) * f_phys * Γ / (ω0^2 * (ω0^2 - ωL^2)) * w1 * w2
+    end
+    # 2π (not the notes' 3π) because AtomTwin converts α → shift with 1/(c ε₀)
+    # while the notes use 1/(2 ε₀ c). The pair (2π, 1/(cε₀)) is what reproduces
+    # the measured Sr magic wavelengths; see the docstring's warning.
+    return 2π * ε0 * c^3 * α2
+end
+
+"""
+    _tensor_geometry(F, mF) -> Float64
+
+The `(3mF² − F(F+1)) / (F(2F−1))` sublevel factor of the tensor light shift.
+Zero for `F = 0, 1/2`, where the denominator vanishes and there is no tensor shift.
+
+Summed over a complete manifold this is zero: the tensor shift splits sublevels
+without moving the manifold's centre of gravity.
+"""
+function _tensor_geometry(F::Rational{Int}, mF::Rational{Int})
+    den = F * (2F - 1)
+    den == 0 && return 0.0
+    return Float64((3 * mF^2 - F * (F + 1)) / den)
+end
+
+"""
+    _polarization_factor(ε_z) -> Float64
+
+The `(3|ε_z|² − 1)/2` factor, with `ε_z` the projection of the (linear)
+polarisation unit vector onto the quantisation axis. It is `1` for polarisation
+along the axis, `−1/2` for polarisation perpendicular to it, and vanishes at the
+magic angle `acos(1/√3) ≈ 54.7356°`.
+"""
+_polarization_factor(ε_z::Real) = (3 * abs2(ε_z) - 1) / 2
+
+# ======================================================================
 # Public API
 # ======================================================================
 
 """
-    light_shift_coeff_Hz_per_Wcm2(model::PolarizabilityModel, λ_nm::Real) -> Float64
+    light_shift_coeff_Hz_per_Wcm2(model, λ_nm; F = nothing, mF = 0, I = 0, ε_z = 1) -> Float64
 
 Light-shift coefficient Δν/I in Hz/(W/cm²) for the given model and wavelength.
 
@@ -329,9 +461,40 @@ For a beam intensity `I` in W/cm², the light shift is
 # Arguments
 - `model`: Polarizability model for a single atomic state.
 - `λ_nm`: Laser wavelength in nanometres.
+
+# Keyword arguments (tensor light shift)
+Supplying `F` adds the **tensor** contribution for the sublevel `|F, mF⟩`:
+
+- `F`: hyperfine quantum number. Omit (the default) for the scalar shift alone.
+- `mF`: magnetic sublevel, `-F ≤ mF ≤ F`.
+- `I`: nuclear spin; `0` for a zero-spin isotope, where `F = J`.
+- `ε_z`: projection of the (linear) polarisation unit vector on the quantisation
+  axis, i.e. `cos θ`. `1` means polarisation along the axis.
+
+The tensor term vanishes identically for `J ≤ 1/2` or `F ≤ 1/2`, so passing `F`
+for a `¹S₀` or `³P₀` state is harmless and returns the scalar result.
+
+Valid only for linear polarisation: the vector (rank-1) term, which would enter
+for elliptical light, is not included.
 """
-function light_shift_coeff_Hz_per_Wcm2(model::PolarizabilityModel, λ_nm::Real)
+function light_shift_coeff_Hz_per_Wcm2(model::PolarizabilityModel, λ_nm::Real;
+                                       F  = nothing,
+                                       mF = 0//1,
+                                       I  = 0//1,
+                                       ε_z::Real = 1.0)
     U = _U_over_I(model, λ_nm)
+    if F !== nothing
+        Fr, mFr, Ir = Rational{Int}(F), Rational{Int}(mF), Rational{Int}(I)
+        abs(mFr) <= Fr || throw(ArgumentError("need |mF| ≤ F; got mF = $mFr, F = $Fr"))
+        α2 = _alpha2_si(model, λ_nm; F = Fr, I = Ir)
+        if α2 != 0.0
+            # Same U/I ↔ α convention as the scalar part: `polarizability_si` defines
+            # α_SI = −c ε₀ (U/I), so a polarizability converts to a shift with
+            # 1/(c ε₀) — NOT the 1/(2 ε₀ c) of the notes, whose α carries the other
+            # half. Mixing the two silently halves the tensor splitting.
+            U += -α2 * _polarization_factor(ε_z) * _tensor_geometry(Fr, mFr) / (c * ε0)
+        end
+    end
     ν_over_I = U / h              # Hz/(W/m²)
     return ν_over_I * 1e4         # Hz/(W/cm²)
 end

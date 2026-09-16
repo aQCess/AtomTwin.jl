@@ -538,3 +538,124 @@ end
     @test isapprox((lo + hi) / 2, 813.428; atol = 0.1)
 end
 
+
+# ======================================================================
+# Angular momentum: line-strength factor and tensor polarizability
+# ======================================================================
+
+@testset "f(J,J') line-strength factor" begin
+    f = AtomTwin._line_strength_factor
+    # J=0 → J'=1 is the case the kernel assumed implicitly before J was tracked.
+    @test f(0//1, 1//1, +539.0) == 3//1
+    # A line BELOW the state contributes with the opposite sign. This is why the
+    # two states of a two-level atom take opposite light shifts.
+    @test f(1//1, 0//1, -539.0) == -1//1
+    @test f(1//1, 1//1, +440.0) == 1//1
+    @test f(1//1, 2//1, +202.0) == 5//3
+
+    # The sign rule, end to end: a ground state with one line above and an excited
+    # state with that same line below must shift in opposite directions, in the
+    # ratio f(−1)/f(3) = −1/3.
+    above = PolarizabilityModel("g", [(freq_THz = +539.3868, gamma_MHz = 0.183,
+                                       J_f = 1//1)]; J = 0//1)
+    below = PolarizabilityModel("e", [(freq_THz = -539.3868, gamma_MHz = 0.183,
+                                       J_f = 0//1)]; J = 1//1)
+    la = light_shift_coeff_Hz_per_Wcm2(above, 767.0)
+    lb = light_shift_coeff_Hz_per_Wcm2(below, 767.0)
+    @test sign(la) != sign(lb)
+    @test isapprox(lb / la, -1/3; rtol = 1e-12)
+end
+
+@testset "transition provenance round-trips and is validated" begin
+    m = PolarizabilityModel("x", [(freq_THz = 100.0, gamma_MHz = 1.0,
+                                   source = :fitted)])
+    @test m.transitions[1].source == :fitted
+    # default
+    @test PolarizabilityModel("x",
+        [(freq_THz = 100.0, gamma_MHz = 1.0)]).transitions[1].source == :measured
+    @test_throws ErrorException PolarizabilityModel("x",
+        [(freq_THz = 100.0, gamma_MHz = 1.0, source = :guessed)])
+    # a line may not disagree with its model about J
+    @test_throws ErrorException PolarizabilityModel("x",
+        [(freq_THz = 100.0, gamma_MHz = 1.0, J = 2//1)]; J = 1//1)
+end
+
+@testset "tensor polarizability vanishes where it must" begin
+    a2 = AtomTwin._alpha2_si
+    # Two INDEPENDENT reasons the tensor shift is absent; assert both.
+    # (1) J ≤ 1/2 — the {1 1 2; J J J'} triangle rule.
+    @test a2(AtomTwin.SR88_POLARIZABILITY_1S0, 700.0; F = 0//1, I = 0//1) == 0.0
+    @test a2(AtomTwin.YB171_POLARIZABILITY_3P0, 759.0; F = 1//2, I = 1//2) == 0.0
+    # (2) F ≤ 1/2 — the √(…(2F−1)…) prefactor, even for a J=1 state.
+    m3P1 = AtomTwin.SR88_POLARIZABILITY_3P1
+    @test AtomTwin._tensor_prefactor(0//1) == 0.0
+    @test AtomTwin._tensor_prefactor(1//2) == 0.0
+    @test a2(m3P1, 473.3; F = 1//2, I = 1//2) == 0.0
+
+    # The sublevel factor sums to zero over a complete manifold: the tensor shift
+    # splits sublevels without moving the manifold's centre of gravity.
+    for F in (1//1, 3//2, 5//2)
+        @test isapprox(sum(AtomTwin._tensor_geometry(F, mF) for mF in -F:1//1:F),
+                       0.0; atol = 1e-12)
+    end
+
+    # The polarization factor vanishes at the geometric magic angle.
+    @test isapprox(AtomTwin._polarization_factor(cosd(54.735610317245346)), 0.0;
+                   atol = 1e-12)
+    @test AtomTwin._polarization_factor(1.0)  == 1.0    # ∥ quantisation axis
+    @test AtomTwin._polarization_factor(0.0)  == -0.5   # ⊥
+end
+
+@testset "Sr-88 3P1: tensor light shift reproduces the measured magic wavelengths" begin
+    # Kestler et al., Phys. Rev. A 105, 012821 (2022): the 1S0–3P1 intercombination
+    # transition has two magic wavelengths near 473 nm, measured 473.371(6) nm (π,
+    # m=0) and 473.117(15) nm (σ⁻, |m|=1), computed 473.375(22) and 473.145(20).
+    # This is the precision gate on the tensor machinery — the Yb 3P1 model is an
+    # empirical fit good to ~3 nm, so it cannot check α⁽²⁾ at this level.
+    m1S0 = AtomTwin.SR88_POLARIZABILITY_1S0
+    m3P1 = AtomTwin.SR88_POLARIZABILITY_3P1
+
+    # The scalar polarizabilities reproduce the paper's own tables.
+    @test isapprox(polarizability_au(m1S0, 473.1445), 3637; atol = 17)
+    @test isapprox(polarizability_au(m1S0, 473.375),  3573; atol = 16)
+    @test isapprox(polarizability_au(m3P1, 473.1445), 4146; atol = 117)
+    @test isapprox(polarizability_au(m3P1, 473.375),  2805; atol = 91)
+
+    # THE INVARIANT THAT MATTERS. α⁽²⁾ and the U/I conversion must share one
+    # convention: with the geometric factors −2 (m=0) and +1 (|m|=1), the splitting
+    # between the two sublevels is exactly −3α⁽²⁾. Pairing the notes' 3π prefactor
+    # with AtomTwin's 1/(cε₀) conversion halves this while leaving α⁽²⁾ itself
+    # looking right against a published table — a silent error this test exists to
+    # catch.
+    au = 4π * AtomTwin.Units.ε0 * AtomTwin.Units.a0^3
+    for λ in (473.1445, 473.375)
+        s0 = light_shift_coeff_Hz_per_Wcm2(m3P1, λ; F = 1//1, mF = 0//1, I = 0//1,
+                                           ε_z = 1.0)
+        s1 = light_shift_coeff_Hz_per_Wcm2(m3P1, λ; F = 1//1, mF = 1//1, I = 0//1,
+                                           ε_z = 1.0)
+        α2 = AtomTwin._alpha2_si(m3P1, λ; F = 1//1, I = 0//1) / au
+        split_au = -(s0 - s1) * AtomTwin.Units.h * 1e-4 *
+                    AtomTwin.Units.c * AtomTwin.Units.ε0 / au
+        @test isapprox(split_au, -3 * α2; rtol = 1e-10)
+    end
+
+    # The magic wavelengths themselves, by bisection (cf. the 813.428 nm Sr clock
+    # test above). ODT polarisation parallel to the quantisation axis, so ε_z = 1.
+    function magic(mF)
+        f(λ) = light_shift_coeff_Hz_per_Wcm2(m1S0, λ) -
+               light_shift_coeff_Hz_per_Wcm2(m3P1, λ; F = 1//1, mF = mF, I = 0//1,
+                                             ε_z = 1.0)
+        lo, hi = 473.0, 473.6
+        @assert f(lo) * f(hi) < 0
+        for _ in 1:200
+            m = (lo + hi) / 2
+            f(lo) * f(m) <= 0 ? (hi = m) : (lo = m)
+        end
+        (lo + hi) / 2
+    end
+    # Tolerance is the reference's own: the crossing runs at ≈5000 a.u./nm, so the
+    # paper's ±117 a.u. on α(3P1) is already ±23 pm of wavelength. 0.03 nm keeps
+    # this honest without pinning noise.
+    @test isapprox(magic(0//1), 473.375; atol = 0.03)
+    @test isapprox(magic(1//1), 473.145; atol = 0.03)
+end
