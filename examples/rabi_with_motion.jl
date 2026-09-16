@@ -9,8 +9,12 @@
 
 
 using AtomTwin
-using AtomTwin.Units
-using StatsBase
+# Explicit import: a blanket `using AtomTwin.Units` puts e, g and G into Main,
+# and runtests.jl includes every file into the SAME Main — which then breaks
+# every example using the `g, e = Level(...)` idiom. Everything except those
+# three names is safe to bring in.
+using AtomTwin.Units: MHz, kHz, GHz, Hz, s, ms, µs, ns, m, cm, mm, µm, nm, mW, µW, W, µK, mK, nK, K, hbar, kb, c, a0, amu
+using Statistics
 using Plots
 
 # ## Parameters
@@ -19,7 +23,6 @@ using Plots
 temperature    = 5µK           # Initial temperature (K)
 
 pulse_duration = 200µs          # Pulse duration (s)
-dt             = 10ns            # Time step (s)
 
 
 # ## System construction
@@ -60,7 +63,11 @@ coupling = add_coupling!(system, atom, g => e, Ω; beam = beam, active = false)
 add_detector!(system, PopulationDetectorSpec(atom, e; name = "P_e"))
 add_detector!(system, MotionDetectorSpec(atom; dims = [1, 2], name = "atom"))
 
-seq = Sequence(dt)
+# `dt` is the OUTPUT grid, not the accuracy knob -- the solver picks its own
+# sub-steps from `tol`. Twenty points per Rabi period resolves the
+# oscillation cleanly; without a `dt` a sequence records one sample per
+# instruction.
+seq = Sequence(2π / (20Ω); tol = 1e-4)
 @sequence seq begin
     Pulse(coupling, pulse_duration)
 end

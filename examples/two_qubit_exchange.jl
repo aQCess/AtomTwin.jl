@@ -12,16 +12,9 @@
 #
 # reaching full transfer (a √iSWAP → iSWAP) at g t = π.
 
-# Internal notes for test scripts (not included in docs/examples):         #src
-# - Files in `test/examples_src/` are run as tests and also used to        #src
-#   generate docs and runnable examples.                                   #src
-# - Lines containing `#src` are removed by `make.jl` when generating       #src
-#   docs/examples, but are present when running tests.                     #src
 
 using AtomTwin
-if false    #src
 using Plots
-end         #src
 
 # ## Physical parameters
 
@@ -29,7 +22,6 @@ g  = 2π * 1.0e6                    # exchange rate (rad/s)
 dt = 1e-9                          # time step (s)
 T  = 2π / g                        # one full exchange period
 
-descriptor = "Two-qubit exchange (iSWAP): g/2π = $(g/2π/1e6) MHz" #src
 
 # ## System definition
 #
@@ -65,26 +57,13 @@ seq = Sequence(T / 200; tol = 1e-4)
 end
 
 # ## Run simulation
-runtime = @elapsed begin                                    #src
 out = play(system, seq; initial_state = [l0, l1], density_matrix = true)
-end                                                         #src
-checksum_data = out.detectors["P1"]                         #src
 
 t  = out.times
 P1 = out.detectors["P1"]
 P2 = out.detectors["P2"]
 
-## Validate physical correctness                            #src
-# 1. Populations bounded in [0, 1]                          #src
-@assert all(x -> -1e-6 ≤ x ≤ 1.0 + 1e-6, P1) "P1 out of [0,1]" #src
-# 2. Full excitation transfer at gt = π (a complete iSWAP)  #src
-@assert maximum(P1) > 0.999 "exchange should fully transfer the excitation" #src
-# 3. Matches the analytic swap P₁ = sin²(gt/2)              #src
-@assert maximum(abs.(P1 .- sin.(g .* t ./ 2).^2)) < 1e-3 "exchange dynamics deviate from sin²(gt/2)" #src
-# 4. Single excitation conserved: P1 + P2 ≈ 1              #src
-@assert maximum(abs.(P1 .+ P2 .- 1.0)) < 1e-3 "excitation number not conserved" #src
 
-if false #src
 plt = Plots.plot(
     t .* 1e6,
     [P1 P2];
@@ -95,4 +74,3 @@ plt = Plots.plot(
     linewidth = 2.0,
 )
 plt
-end #src

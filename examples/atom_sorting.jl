@@ -10,7 +10,11 @@
 
 
 using AtomTwin
-using AtomTwin.Units
+# Explicit import: a blanket `using AtomTwin.Units` puts e, g and G into Main,
+# and runtests.jl includes every file into the SAME Main — which then breaks
+# every example using the `g, e = Level(...)` idiom. Everything except those
+# three names is safe to bring in.
+using AtomTwin.Units: MHz, kHz, GHz, Hz, s, ms, µs, ns, m, cm, mm, µm, nm, mW, µW, W, µK, mK, nK, K, hbar, kb, c, a0, amu
 using GLMakie
 using AtomTwin.Visualization: animate
 
@@ -24,7 +28,8 @@ occ =  [0  1  0  1  0  1  1  0  0  1;
 
 temperature = 5e-6
 
-dt     = 0.50e-6     # simulation timestep 500 ns
+dt     = 0.50e-6     # output grid: also quantises instruction durations, so it
+                     # cannot simply be raised to the animation frame interval
 T_sort = 100e-6      # sorting time within each row (horizontal)
 
 
@@ -75,11 +80,17 @@ system = System(atoms, [static, dynamic])
 for (i, atom) in enumerate(atoms)
     add_detector!(system, MotionDetectorSpec(atom; dims=[1,2], name = "atom_$i"))
 end
+# Traps are switched on and off during the sort, so record each beam's
+# amplitude alongside its position. `animate` looks for the "<name>_ampl"
+# companion detector and hides a trap in frames where it is off -- otherwise
+# every trap is drawn at all times, including ones that do not currently exist.
 for (i, beam) in enumerate(static)
     add_detector!(system, MotionDetectorSpec(beam; dims=[1,2], name = "static_$i"))
+    add_detector!(system, FieldDetectorSpec(beam; name = "static_$(i)_ampl"))
 end
 for (i, beam) in enumerate(dynamic)
     add_detector!(system, MotionDetectorSpec(beam; dims=[1,2], name = "dynamic_$i"))
+    add_detector!(system, FieldDetectorSpec(beam; name = "dynamic_$(i)_ampl"))
 end
 
 # ## Build sequence
@@ -163,7 +174,17 @@ seq = let
 
         nrows, _ = size(occ)
 
-        seq = Sequence(dt)
+        # `dt` is the output grid, not the accuracy knob -- the solver picks its
+        # own sub-steps from `tol`. Without it a sequence records one sample per
+        # instruction and the traps jump between frames.
+        #
+        # It cannot be set straight to the animation's frame interval, though:
+        # instruction durations are rounded up to whole multiples of `dt`, and
+        # the sort is built from many short `Wait`s and moves. Measured, raising
+        # `dt` from 0.5 µs to the 20 µs frame interval padded the sequence from
+        # 1.083 ms to 4.300 ms -- a different protocol, not a coarser recording
+        # of the same one. So `dt` stays fine and the animation strides down.
+        seq = Sequence(dt; tol = 1e-4)
         push!(seq, AmplRow(dynamic, 1, 0.0))
         push!(seq, Wait(0.25ms))
 
@@ -198,14 +219,25 @@ out = play(system, seq)
 #
 tlist = out.times
 
-plot_options = Dict(
-           "atom"   => (marker=:circle, color=:black),
-           "static"   => (marker=:rect, strokecolor=:gray, strokewidth=1, 
-                            alpha=0.0, markersize=20),
-           "dynamic"   => (marker=:rect, strokecolor=:red, strokewidth=1, 
-                            alpha=0.0, markersize=12),
-       )
+# Order matters: groups are drawn in the order declared here, so later entries
+# are painted on top. Static traps are the background, then the moving dynamic
+# traps, then the atoms. (A Dict would not preserve this -- its key order is
+# arbitrary, which previously let the large static markers hide the dynamic
+# ones.)
+plot_options = [
+           "static"  => (marker=:rect, strokecolor=:gray, strokewidth=1,
+                            color=:transparent, markersize=20),
+           "dynamic" => (marker=:rect, strokecolor=:red, strokewidth=1,
+                            color=:transparent, markersize=12),
+           "atom"    => (marker=:circle, color=:black),
+       ]
 
-animate(out; 
-        options=plot_options, 
-        limits = ((-20, 20), (-12, 12)),)
+# Record the sorting sequence to a GIF. Pass `gifname = nothing` instead to
+# animate interactively in a window (requires a display).
+animate(out;
+        options   = plot_options,
+        limits    = ((-20, 20), (-12, 12)),
+        gifname   = "atom_sorting.gif",
+        framerate = 30,
+        stride    = 40,)   # one frame per 20 µs of sort; see the `dt` note above
+                           # for why the recording is finer than the animation

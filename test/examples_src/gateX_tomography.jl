@@ -20,7 +20,7 @@
 #       end                 #src                                           #src
 
 using AtomTwin
-using StatsBase, LinearAlgebra
+using Statistics, LinearAlgebra
 if false    #src
 using GLMakie, Colors 
 end         #src
@@ -56,7 +56,7 @@ coupling = add_coupling!(system, atom, g => e, Ω; active = true)
 
 add_detector!(system, PopulationDetectorSpec(atom, e; name = "P_e"))
 
-seq = Sequence(dt)
+seq = Sequence(; tol = 1e-4)
 @sequence seq begin
     Pulse(coupling, pulse_duration)
 end

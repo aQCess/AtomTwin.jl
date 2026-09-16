@@ -21,7 +21,7 @@
 #       end                 #src                                           #src
 
 using AtomTwin
-using StatsBase
+using Statistics
 if false            #src
 using Plots      
 end                 #src
@@ -56,7 +56,11 @@ deph = add_dephasing!(system, atom, e, gamma; active = true)
 # Register population detector on |e⟩
 add_detector!(system, PopulationDetectorSpec(atom, e; name = "P_e")) 
 
-seq = Sequence(dt)
+# `dt` is the OUTPUT grid, not the accuracy knob -- the solver picks its own
+# sub-steps from `tol`. Twenty points per Rabi period resolves the
+# oscillation cleanly; without a `dt` a sequence records one sample per
+# instruction.
+seq = Sequence(2π / (20Ω); tol = 1e-4)
 @sequence seq begin
     Pulse(coupling, pulse_duration)
 end 
@@ -65,7 +69,7 @@ end
 runtime = @elapsed begin                                    #src
 out_me = play(system, seq; initial_state = g, density_matrix = true) # master equation
 out_qt = play(system, seq; initial_state = g, shots = 400) # quantum trajectories
-end     
+end                                                         #src
 checksum_data  = out_me.detectors["P_e"]                    #src
                                                             #src
 ## Validate physical correctness                           #src
@@ -78,8 +82,27 @@ pe_me = out_me.detectors["P_e"]                           #src
 peak_idx = argmax(pe_me)                                  #src
 @assert pe_me[end] < pe_me[peak_idx] "Dissipation should reduce late-time peak population" #src
 # 3. QT mean should track master equation result (mean absolute deviation < 5%) #src
+#    The two solvers choose their own steps -- MCWF additionally bounds its step #src
+#    by the jump probability, which the master equation does not need -- so the  #src
+#    grids need not match. Compare on the coarser of the two by interpolating    #src
+#    the finer trace onto its times.                                             #src
 pe_qt_mean = vec(mean(out_qt.detectors["P_e"], dims = 2))                        #src
-@assert mean(abs.(pe_qt_mean .- pe_me)) < 0.05 "QT mean deviates from master equation by more than 5% on average" #src
+function _on_grid(t_from, y_from, t_to)                                          #src
+    length(t_from) == length(t_to) && return y_from                              #src
+    [begin                                                                        #src
+         j = searchsortedfirst(t_from, t)                                         #src
+         j <= 1 ? y_from[1] :                                                     #src
+         j > length(t_from) ? y_from[end] :                                       #src
+         (w = (t - t_from[j-1]) / (t_from[j] - t_from[j-1]);                      #src
+          y_from[j-1] * (1 - w) + y_from[j] * w)                                  #src
+     end for t in t_to]                                                           #src
+end                                                                               #src
+if length(out_me.times) <= length(out_qt.times)                                   #src
+    _ref, _cmp = pe_me, _on_grid(out_qt.times, pe_qt_mean, out_me.times)          #src
+else                                                                              #src
+    _ref, _cmp = _on_grid(out_me.times, pe_me, out_qt.times), pe_qt_mean          #src
+end                                                                               #src
+@assert mean(abs.(_cmp .- _ref)) < 0.05 "QT mean deviates from master equation by more than 5% on average" #src
 
 # ## Plot results
 

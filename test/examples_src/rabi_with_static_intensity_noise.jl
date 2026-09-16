@@ -21,7 +21,7 @@
 #       end                 #src                                           #src
 
 using AtomTwin
-using StatsBase
+using Statistics
 if false    #src
 using Plots
 end         #src
@@ -31,7 +31,6 @@ end         #src
 Ω = Parameter(:Ω, 2π * 0.5e6; std = 2π * 0.05e6)   # Rabi frequency (rad/s)
 
 pulse_duration = 10e-6   # Total pulse duration (s)
-dt             = 5e-9    # Time step (s)
 
 descriptor = "Rabi with static intensity noise: Ω/2π = $(Ω.default/2π/1e6) MHz, std = $(Ω.std/2π/1e6) MHz" #src
 
@@ -58,7 +57,11 @@ coupling = add_coupling!(system, atom, g => e, Ω; active = true)
 add_detector!(system, PopulationDetectorSpec(atom, e; name = "P_e"))
 add_detector!(system, MotionDetectorSpec(atom; dims = [1, 2], name = "atom"))
 
-seq = Sequence(dt)
+# `dt` is the OUTPUT grid, not the accuracy knob -- the solver picks its own
+# sub-steps from `tol`. Twenty points per Rabi period resolves the
+# oscillation cleanly; without a `dt` a sequence records one sample per
+# instruction.
+seq = Sequence(2π / (20 * Ω.default); tol = 1e-4)
 @sequence seq begin
     Pulse(coupling, pulse_duration)
 end

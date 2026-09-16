@@ -26,7 +26,7 @@ using Plots
 A_hfs  = 2π * 4.5e9    # Hyperfine splitting between excited manifolds
 Γ_3D1  = 2π * 6.9e6    # ³D₁ natural linewidth (~23 ns lifetime)
 η_leak = 0.36          # Branching to ³P₁,₂ (leakage fraction)
-B      = 0.0G          # Magnetic field in Gauss
+B      = 0.0Units.G    # Magnetic field in Gauss (Units exported by AtomTwin)
 
 dt      = 0.005e-9
 T_total = 1.31e-6    # Total evolution time (s)
@@ -80,7 +80,12 @@ for (i, level) in enumerate(ground)
     add_detector!(system, PopulationDetectorSpec(yb, level; name = "pop_$i"))
 end
 
-seq = Sequence(dt)
+# `tol` bounds the error of one integration step; the error accumulated over
+# the run is larger. This value targets a global error of about 1e-4 and is the
+# loosest that stays under it: measured against a tol = 1e-9 reference the error
+# is 1.8e-05 here and jumps past 1e-4 at the next step, because `tol` selects an
+# integer number of sub-steps and several tolerances map to the same one.
+seq = Sequence(; tol = 1e-3)
 @sequence seq begin
     Pulse(couplings, T_total)   # nominal π/2–like Raman pulse
 end
