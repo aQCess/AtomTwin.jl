@@ -99,17 +99,17 @@ states, `³P₁` has no precision magic- or tune-out-wavelength measurements to
 constrain the fit. Treat a predicted `³P₁` magic wavelength as indicative.
 
 Concretely, at the model's own fit targets the differential shift comes out near
-but not at zero — ≈ −1.4 Hz/(W/cm²) at the 759.3 nm / 38.5° triple-magic
-condition — and the magic *angle* predicted for `F=1, m_F=0` at 767 nm is 44.3°
-against the report's 40.9°. Both are that same few-nm-scale error expressed in
-different coordinates.
+but not at zero, and the magic *angle* predicted for `F=1, m_F=0` at 767 nm is
+44.3° against the report's 40.9°. Both are the same few-nm-scale error expressed
+in different coordinates.
 
-This is the **model's** accuracy, not the tensor machinery's. Digitized `³P₁`
-curves from the thesis figures are fit best by scaling α⁽²⁾ to ≈ 0.75, but that
-scaling pushes both *measured* Sr-88 magic wavelengths outside their experimental
-uncertainty (−27 pm and +27 pm, against +14 pm and +8 pm at unit scale). The
-picometre-precision measurement wins over a figure read off a model with a stated
-3 nm error, so the kernel is unscaled and the residual is carried here.
+The residual is the **model's**, not the tensor machinery's. AtomTwin's α⁽²⁾ is
+`1/(2J+1)` of the notes' — they normalise the reduced matrix elements the other
+way (see [`_alpha2_si`](@ref)) — so reproducing the report's own fit residuals
+requires that rescaling, and the report's fitted empirical linewidths partly
+absorb it. Refitting `γ_eff` against the magic-wavelength table in AtomTwin's
+convention would sharpen these predictions; the line list here is the report's
+unaltered.
 
 For a tensor model constrained by precision measurements, see
 [`SR88_POLARIZABILITY_3P1`](@ref).

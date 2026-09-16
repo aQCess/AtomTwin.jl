@@ -371,15 +371,23 @@ quantisation axis,
 which is what `_tensor_geometry` × `_polarization_factor` reproduces, and which
 `SR88_POLARIZABILITY_3P1` is validated against.
 
-!!! warning "α⁽²⁾ and U/I must share one convention"
-    The `3π ε₀ c³` here pairs with converting a polarizability to a shift via
-    `1/(c ε₀)` — AtomTwin's own convention, set by `polarizability_si`
-    (`α_SI = −c ε₀ (U/I)`). The notes instead write `U/I = −α/(2 ε₀ c)`, with the
-    missing half absorbed into their `α`. Mixing the two — `3π` with `1/(2 c ε₀)` —
-    silently halves the tensor splitting while leaving `α⁽²⁾` itself looking
-    correct against a published table, which is exactly how this was nearly shipped.
-    The invariant that catches it is
-    `α(m_F=0) − α(|m_F|=1) = −3 α⁽²⁾`, tested in `test/unit/test_physics.jl`.
+!!! warning "Do not import α⁽²⁾ from a paper without checking its convention"
+    α⁽²⁾ as a *number* is convention dependent: it and the geometric factor can be
+    rescaled reciprocally. The AtomTwin polarizability notes write this sum with a
+    `3π ε₀ c³` prefactor and an explicit `(2J+1)`, which makes their α⁽²⁾ exactly
+    `(2J+1)×` the one here — they normalise the reduced matrix elements the other
+    way (Steck §7.3.4 covers the two conventions). Our scalar already matches
+    Kestler's table, which pins the mapping and leaves α⁽²⁾ no freedom.
+
+    Two things are convention **free**, and both are what to test against:
+
+    - the measured magic wavelengths, which are physical zero crossings;
+    - the sublevel splitting `α(m_F=0) − α(|m_F|=1) = −3α⁽²⁾`, an absolute energy.
+
+    Note the splitting identity holds under *any* rescaling of α⁽²⁾, so it checks
+    the geometry but **cannot** catch a wrong normalisation. Only an absolute
+    comparison does — hence the α₀ and α₂ anchors in `test/unit/test_physics.jl`.
+
 """
 function _alpha2_si(model::PolarizabilityModel, λ_nm::Real;
                     F::Rational{Int}, I::Rational{Int} = 0//1)
@@ -413,9 +421,12 @@ function _alpha2_si(model::PolarizabilityModel, λ_nm::Real;
 
         α2 += phase * pre * (2J + 1) * f_phys * Γ / (ω0^2 * (ω0^2 - ωL^2)) * w1 * w2
     end
-    # 2π (not the notes' 3π) because AtomTwin converts α → shift with 1/(c ε₀)
-    # while the notes use 1/(2 ε₀ c). The pair (2π, 1/(cε₀)) is what reproduces
-    # the measured Sr magic wavelengths; see the docstring's warning.
+    # 2π, not the notes' 3π. Their α⁽²⁾ carries an explicit (2J+1) on top of
+    # matrix elements already normalised the other way — Steck §7.3.4's two
+    # reduced-matrix-element conventions — so it double-counts (2J+1). Our scalar
+    # already agrees with Kestler (4195 vs 4146(117)), which pins the mapping and
+    # leaves α⁽²⁾ no remaining freedom. Net effect 3/2, not 3, because the
+    # 3π-with-1/(2cε₀) pairing absorbs a compensating 2.
     return 2π * ε0 * c^3 * α2
 end
 
@@ -488,10 +499,8 @@ function light_shift_coeff_Hz_per_Wcm2(model::PolarizabilityModel, λ_nm::Real;
         abs(mFr) <= Fr || throw(ArgumentError("need |mF| ≤ F; got mF = $mFr, F = $Fr"))
         α2 = _alpha2_si(model, λ_nm; F = Fr, I = Ir)
         if α2 != 0.0
-            # Same U/I ↔ α convention as the scalar part: `polarizability_si` defines
-            # α_SI = −c ε₀ (U/I), so a polarizability converts to a shift with
-            # 1/(c ε₀) — NOT the 1/(2 ε₀ c) of the notes, whose α carries the other
-            # half. Mixing the two silently halves the tensor splitting.
+            # One convention across the whole file: `polarizability_si` defines
+            # α_SI = −c ε₀ (U/I), so every α converts with 1/(c ε₀).
             U += -α2 * _polarization_factor(ε_z) * _tensor_geometry(Fr, mFr) / (c * ε0)
         end
     end

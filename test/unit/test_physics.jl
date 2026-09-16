@@ -590,12 +590,18 @@ end
     @test isapprox(polarizability_au(m1S0, 473.1445), 3637; atol = 17)
     @test isapprox(polarizability_au(m3P1, 473.1445), 4146; atol = 117)
     @test isapprox(AtomTwin._alpha2_si(m3P1, 473.1445; F = 1//1, I = 0//1) / au,
-                   -509; atol = 15)
+                   -509; atol = 15)     # Kestler Table II, an independent CI+all-orders value
+    @test isapprox(AtomTwin._alpha2_si(m3P1, 473.375; F = 1//1, I = 0//1) / au,
+                   -384; atol = 25)
 
-    # THE INVARIANT. With geometric factors −2 (m=0) and +1 (|m|=1) the splitting
-    # is exactly −3α⁽²⁾. α⁽²⁾ and the U/I conversion must share one convention:
-    # pairing the notes' 3π prefactor with AtomTwin's 1/(cε₀) halves this while
-    # leaving α⁽²⁾ itself looking right against a published table.
+    # ABSOLUTE ANCHOR. α⁽²⁾ as a number is convention dependent, so the splitting
+    # identity below (which holds under ANY rescaling of α⁽²⁾) cannot catch a wrong
+    # normalisation — only comparing the magnitude to an independent calculation
+    # can. The notes' α⁽²⁾ is (2J+1)× this one; that surplus (2J+1) reads as 16σ
+    # here and passed every ratio test before this anchor existed.
+    #
+    # The splitting identity is kept because it checks the GEOMETRY: with factors
+    # −2 (m=0) and +1 (|m|=1) the splitting is exactly −3α⁽²⁾.
     s0 = light_shift_coeff_Hz_per_Wcm2(m3P1, 473.1445; F = 1//1, mF = 0//1,
                                        I = 0//1, ε_z = 1.0)
     s1 = light_shift_coeff_Hz_per_Wcm2(m3P1, 473.1445; F = 1//1, mF = 1//1,
