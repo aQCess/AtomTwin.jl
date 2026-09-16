@@ -716,6 +716,75 @@ end
 node_output(n::BeamNode) = n._compiled[]
 
 """
+    LightShiftNode <: AbstractNode
+
+AC Stark shift of one level in a trap beam, added by [`add_light_shift!`](@ref).
+
+Compiles to a [`StarkShiftAC`](@ref) field, which reads `atom.alpha` — the same
+per-level polarizability the dipole force uses, tensor contribution included. The
+node is built late (Phase 3), by which time `initialize!` has filled that array.
+"""
+mutable struct LightShiftNode <: AbstractNode
+    atom::AbstractAtom
+    level::AbstractLevel
+    beam::Any                       # AbstractBeam or BeamNode
+    reference::Union{Nothing, AbstractLevel}
+    active::Bool
+    _field::Any
+end
+
+LightShiftNode(atom, level, beam; reference=nothing, active=true) =
+    LightShiftNode(atom, level, beam, reference, active, nothing)
+
+node_output(n::LightShiftNode) = n._field
+
+# A beam given as a BeamNode must be resolved first.
+node_dependencies(n::LightShiftNode) = n.beam isa BeamNode ? AbstractNode[n.beam] :
+                                                             AbstractNode[]
+
+_lightshift_beam(n::LightShiftNode) = n.beam isa BeamNode ? n.beam._compiled[] : n.beam
+
+function _build_lightshift(node::LightShiftNode, basis::Basis)
+    beam = _lightshift_beam(node)
+    beam === nothing && error("LightShiftNode: beam not resolved yet")
+    idx  = node.atom.level_indices[node.level]
+    ref  = node.reference === nothing ? nothing :
+           node.atom.level_indices[node.reference]
+    λ = getwavelength(beam)
+    haskey(node.atom.inner.alpha, λ) || error(
+        "no polarizability for λ = $(λ*1e9) nm on this atom. add_light_shift! needs " *
+        "the beam to be part of the system (pass it to `System`), so that " *
+        "`initialize!` computes α at its wavelength.")
+    f = StarkShiftAC(basis, node.atom.inner, idx, beam; reference = ref)
+    f._coeff[] = ComplexF64(node.active ? 1.0 : 0.0)
+    node._field = f
+    return f
+end
+
+build_node!(node::LightShiftNode, basis::Basis) =
+    node._field === nothing ? _build_lightshift(node, basis) : node._field
+
+function compile_node!(node::LightShiftNode, basis::Basis, rng, param_values)
+    node._field = nothing          # α and the beam may both have changed
+    return _build_lightshift(node, basis)
+end
+
+# Per shot, `initialize!` refreshes atom.alpha (sampled positions, resampled
+# parameters) and the beam may have been re-resolved. `StarkShiftAC` caches α at
+# construction, so refresh that rather than rebuild the Op — the basis and the
+# operator are unchanged.
+function recompile_node!(node::LightShiftNode, f::StarkShiftAC, rng, param_values)
+    beam = _lightshift_beam(node)
+    beam === nothing && return f
+    alphas = node.atom.inner.alpha[getwavelength(beam)]
+    idx = node.atom.level_indices[node.level]
+    α = node.reference === nothing ? alphas[idx] :
+        alphas[idx] - alphas[node.atom.level_indices[node.reference]]
+    node._field = StarkShiftAC(f, α)      # same Op, refreshed α
+    return node._field
+end
+
+"""
     QuantizationAxisNode <: AbstractNode
 
 The system's quantization axis — the direction magnetic sublevels are defined

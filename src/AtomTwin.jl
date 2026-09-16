@@ -36,6 +36,7 @@ import .Dynamiq: GaussianBeam, GeneralGaussianBeam
 using .Dynamiq: PlanarBeam
 using .Dynamiq: GlobalCoupling, PlanarCoupling, Detuning, Interaction, VdWInteraction, GaussianCoupling
 using .Dynamiq: Hamiltonian
+using .Dynamiq: StarkShiftAC
 using .Dynamiq: Jump, AbstractAtom, NLevelAtom, Basis
 import .Dynamiq: Op   # extended with an (Operator, sys, atom) materialisation method in operators.jl
 using .Dynamiq: productstate, build_detector, evolve!
@@ -84,6 +85,7 @@ include("tomography.jl")
 # Export beams and fields
 export GaussianBeam, GeneralGaussianBeam, PlanarBeam
 export GlobalCoupling, PlanarCoupling, Detuning, Interaction, VdWInteraction, GaussianCoupling
+export StarkShiftAC
 
 # Export quantum types
 export Jump, AbstractAtom, NLevelAtom, Basis
@@ -153,6 +155,7 @@ export play
 # Export physics utilities
 export add_zeeman_detunings!
 export add_quantization_axis!, getquantizationaxis
+export add_light_shift!
 export add_coupling!, add_detuning!, rabi_frequencies
 export add_decay!, add_dephasing!
 export add_interaction!, add_vdwinteraction!

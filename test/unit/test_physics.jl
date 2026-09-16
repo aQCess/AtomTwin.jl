@@ -737,3 +737,76 @@ end
     b3 = GaussianBeam(λ = 520e-9, w0 = 1e-6, P = 5e-3, pol = [0, 0, 1])
     @test AtomTwin.initialize!(sr, inner; beams = [b1, b3]) isa Any
 end
+
+# ======================================================================
+# Trap light shift in the Hamiltonian (add_light_shift!)
+# ======================================================================
+
+@testset "add_light_shift! puts the trap shift in the Hamiltonian" begin
+    # StarkShiftAC existed but was never constructed anywhere: a trap moved an
+    # atom without shifting its levels. This wires it up.
+    g  = Level("g"; term = l"1S0")
+    e  = Level("e"; term = l"3P1")
+    sr = Strontium88Atom(; levels = [g, e])
+    tw = GaussianBeam(λ = 520e-9, w0 = 1e-6, P = 1e-3, pol = [0, 0, 1])
+    sys = System(sr, tw)
+    add_quantization_axis!(sys, [0, 0, 1])
+    nodes = add_light_shift!(sys, sr, [g, e], tw; reference = g)
+    @test length(nodes) == 2
+
+    seq = Sequence(1e-9)
+    @sequence seq begin
+        Wait(1e-6)
+    end
+    job = compile(sys, seq)
+    fields = [f for f in job.fields if f isa StarkShiftAC]
+    @test length(fields) == 2
+
+    # The coefficient is α·I/ħ at the atom's position, an angular frequency.
+    f = fields[2]
+    AtomTwin.Dynamiq.update!(f, 1)
+    I_here = AtomTwin.Dynamiq.intensity(tw, sr.inner.x)
+    @test isapprox(real(f._coeff[]), f.alpha * I_here / AtomTwin.Units.hbar;
+                   rtol = 1e-12)
+    # reference = g puts the ground state at zero
+    @test fields[1].alpha == 0.0
+end
+
+@testset "the trap shift moves a resonance (Ramsey)" begin
+    # The physical end-to-end check: a π/2 – wait – π/2 sequence fringes at the
+    # differential light shift, and the fringe inverts at T = π/Δ.
+    function ramsey(T; P = 1e-3)
+        g  = Level("g"; term = l"1S0")
+        e  = Level("e"; term = l"3P1")
+        sr = Strontium88Atom(; levels = [g, e])
+        tw = GaussianBeam(λ = 520e-9, w0 = 1e-6, P = P, pol = [0, 0, 1])
+        sys = System(sr, tw)
+        add_quantization_axis!(sys, [0, 0, 1])
+        Ω = 2π * 1e6
+        c = add_coupling!(sys, sr, g => e, Ω; active = false)
+        P > 0 && add_light_shift!(sys, sr, [g, e], tw; reference = g)
+        add_detector!(sys, PopulationDetectorSpec(sr, e; name = "Pe"))
+        seq = Sequence(2e-10)
+        @sequence seq begin
+            Pulse(c, π / (2Ω)); Wait(T); Pulse(c, π / (2Ω))
+        end
+        play(sys, seq; initial_state = g).detectors["Pe"][end]
+    end
+
+    # Predict Δ from the stored α, then check the fringe follows it.
+    sr0 = Strontium88Atom(; levels = [Level("g"; term = l"1S0"),
+                                      Level("e"; term = l"3P1")])
+    tw0 = GaussianBeam(λ = 520e-9, w0 = 1e-6, P = 1e-3, pol = [0, 0, 1])
+    inner = AtomTwin.Dynamiq.NLevelAtom(2)
+    AtomTwin.initialize!(sr0, inner; beams = [tw0], q_axis = [0.0, 0.0, 1.0])
+    αs = inner.alpha[520e-9]
+    Δ  = (αs[2] - αs[1]) * tw0.I0 / AtomTwin.Units.hbar
+    @test Δ != 0
+
+    Tπ = π / abs(Δ)
+    @test ramsey(0.0)     > 0.999    # no time to dephase
+    @test isapprox(ramsey(Tπ / 2), 0.5; atol = 0.02)
+    @test ramsey(Tπ)      < 0.001    # fringe fully inverted
+    # Without the trap the fringe does not move at all.
+    @test ramsey(Tπ; P = 0.0) > 0.999
+end

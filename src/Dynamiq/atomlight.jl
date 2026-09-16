@@ -312,14 +312,28 @@ instruction layer (constant `1` unless pulsed).
 update!(::Hamiltonian, ::Real) = nothing
 
 """
-    StarkShiftAC(b, atom, level, beam)
+    StarkShiftAC(b, atom, level, beam; reference = nothing)
 
 AC Stark shift on a single internal level induced by an optical `beam`.
 
-The constructor computes the differential polarizability of the chosen
-`level` from `atom.alpha` at the beam wavelength and stores it in `alpha`.
-The `update!` method evaluates the local intensity and updates the
-time-dependent energy shift.
+The stored `alpha` is read from `atom.alpha` at the beam's wavelength — the same
+array the dipole force uses, so the shift an atom feels and the force that moves it
+come from one number.
+
+`update!` evaluates the local intensity at the atom's position and sets the
+coefficient to `α I / ħ`, an angular frequency.
+
+# Reference level
+
+By default the shift is **absolute**: level `lvl` is shifted by its own `α I/ħ`.
+Pass `reference = i` to shift by `(α[lvl] − α[i]) I/ħ` instead, which puts level
+`i` at zero — convenient when only a transition frequency matters.
+
+!!! note "Changed behaviour"
+    This previously subtracted `mean(alphas)`, the mean over *every* level in the
+    basis. That made the shift on one level depend on which other levels happened
+    to be present, so adding a leakage level silently changed every shift in the
+    system. Use `reference` to name the level you actually mean.
 """
 struct StarkShiftAC{A} <: AbstractField
     atom::A
@@ -329,13 +343,23 @@ struct StarkShiftAC{A} <: AbstractField
     alpha::Float64
     _coeff::Base.RefValue{ComplexF64}
 
-    function StarkShiftAC(b, atom, lvl, beam)
+    function StarkShiftAC(b, atom, lvl, beam; reference = nothing)
         H = Op(b, atom, lvl => lvl, 1.0)
         alphas = atom.alpha[getwavelength(beam)]
-        alpha = alphas[lvl] - mean(alphas)
+        alpha = reference === nothing ? alphas[lvl] :
+                                        alphas[lvl] - alphas[reference]
         new{typeof(atom)}(atom, lvl, H, beam, alpha, Ref(Complex(0.0)))
     end
+
+    # All-field form, for rebuilding with a refreshed α (see below).
+    StarkShiftAC{A}(atom::A, lvl, H, beam, alpha, coeff) where {A} =
+        new{A}(atom, lvl, H, beam, alpha, coeff)
 end
+
+# Rebuild with a refreshed α, reusing the operator and basis. Used per shot, when
+# `initialize!` has recomputed `atom.alpha` but nothing structural has changed.
+StarkShiftAC(f::StarkShiftAC{A}, α::Float64) where {A} =
+    StarkShiftAC{A}(f.atom, f.level, f.H, f.beam, α, Ref(f._coeff[]))
 
 """
     update!(f::StarkShiftAC, step)

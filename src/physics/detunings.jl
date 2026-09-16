@@ -144,3 +144,71 @@ function getquantizationaxis(system)
     end
     return [0.0, 0.0, 1.0]
 end
+
+#------------------------------------------------------------------------------
+# Trap light shifts
+#------------------------------------------------------------------------------
+
+"""
+    add_light_shift!(system, atom, levels, beam; reference = nothing, active = true)
+
+Add the AC Stark shift that `beam` imposes on `levels` to the Hamiltonian, so a
+trap shifts the atom's internal energies as well as pushing it around.
+
+    trap = GaussianBeam(λ = 767nm, w0 = 1µm, P = 20mW, pol = [sind(θ), 0, cosd(θ)])
+    sys  = System(yb, trap)
+    add_light_shift!(sys, yb, [g, e...], trap)
+
+`levels` may be a single level, a manifold, or a vector of either. The shift is
+taken from the same per-level `α` that drives the dipole force, tensor
+contribution included — so in a non-magic trap the sublevels of a manifold shift
+by different amounts, and the transition frequency moves with the local intensity.
+That is what makes trap-depth spectroscopy work.
+
+`beam` must already belong to the system (pass it to `System`), because α is
+computed at the wavelengths the system's beams use.
+
+# Reference level
+
+By default each level is shifted by its own `α I/ħ`. Pass `reference` to measure
+against one level instead, which sets that level's shift to zero and leaves the
+others as differences — convenient when only a transition frequency matters.
+
+Returns the created nodes, so they can be switched with `On`/`Off` like a coupling.
+"""
+function add_light_shift!(system, atom::AbstractAtom, levels, beam;
+                          reference = nothing, active::Bool = true)
+    lvls = _lightshift_levels(levels)
+
+    # α is normally filled by `initialize!` during `compile`, but the node has to
+    # build now so that `gethamiltonian(sys)` can be inspected before any `play`.
+    # Fill it on demand if this is the first light shift added.
+    b = beam isa BeamNode ? beam._compiled[] : beam
+    if b !== nothing && !haskey(atom.inner.alpha, getwavelength(b))
+        initialize!(atom, atom.inner; beams = [b],
+                    q_axis = getquantizationaxis(system))
+    end
+
+    nodes = LightShiftNode[]
+    for l in lvls
+        node = LightShiftNode(atom, l, beam; reference = reference, active = active)
+        build_node!(node, system.basis)
+        push!(system, node)
+        push!(nodes, node)
+    end
+    return nodes
+end
+
+add_light_shift!(system, atom::AbstractAtom, level::AbstractLevel, beam; kwargs...) =
+    add_light_shift!(system, atom, [level], beam; kwargs...)
+
+# Accept a level, a manifold, or any mixed collection of them.
+_lightshift_levels(l::AbstractLevel)  = AbstractLevel[l]
+_lightshift_levels(m::AbstractManifold) = AbstractLevel[l for l in m.levels]
+function _lightshift_levels(v)
+    out = AbstractLevel[]
+    for x in v
+        append!(out, _lightshift_levels(x))
+    end
+    return out
+end
