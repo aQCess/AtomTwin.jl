@@ -715,6 +715,48 @@ end
 
 node_output(n::BeamNode) = n._compiled[]
 
+"""
+    QuantizationAxisNode <: AbstractNode
+
+The system's quantization axis — the direction magnetic sublevels are defined
+against. Added with [`add_quantization_axis!`](@ref); defaults to `ẑ` when no node
+is present.
+
+The tensor light shift depends on the angle between the trap polarization and this
+axis, so it must be known before atom polarizabilities are computed. Like
+[`BeamNode`](@ref) it is therefore resolved in compile Phase 1, ahead of
+`initialize!`.
+
+The axis may be a `Parameter` or `ParametricExpression`, which is what makes a
+magic-angle sweep — or a shot-to-shot B-field misalignment — a `play` keyword
+rather than a rebuild.
+"""
+mutable struct QuantizationAxisNode <: AbstractNode
+    axis::Any                                    # 3-vector, possibly parametric
+    _compiled::Ref{Union{Nothing, Vector{Float64}}}
+    QuantizationAxisNode(axis) = new(axis, Ref{Union{Nothing, Vector{Float64}}}(nothing))
+end
+
+node_output(n::QuantizationAxisNode) = n._compiled[]
+
+# Normalise to a unit 3-vector; a zero axis has no direction to define m against.
+function _unit_axis(v)
+    a = Float64.(collect(v))
+    length(a) == 3 || error("quantization axis must be a 3-vector; got length $(length(a))")
+    n = sqrt(sum(abs2, a))
+    n == 0 && error("quantization axis must be nonzero")
+    return a ./ n
+end
+
+build_node!(node::QuantizationAxisNode) =
+    node._compiled[] = _unit_axis(_resolve_node_default(node.axis))
+
+compile_node!(node::QuantizationAxisNode, basis, rng, param_values) =
+    node._compiled[] = _unit_axis(_resolve_node_value(node.axis, param_values, rng))
+
+recompile_node!(node::QuantizationAxisNode, ::Any, rng, param_values) =
+    compile_node!(node, nothing, rng, param_values)
+
 #=============================================================================
 FALLBACK RECOMPILE (non-parametric nodes need no update)
 =============================================================================#

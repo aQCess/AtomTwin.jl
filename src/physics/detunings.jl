@@ -91,3 +91,56 @@ function add_zeeman_detunings!(system, atom::AbstractAtom, manifold::AbstractMan
 
     return detunings
 end
+
+#------------------------------------------------------------------------------
+# Quantization axis
+#------------------------------------------------------------------------------
+
+"""
+    add_quantization_axis!(system, axis)
+
+Set the system's quantization axis — the direction magnetic sublevels are defined
+against, normally the magnetic bias field. Defaults to `ẑ` if never called.
+
+    add_quantization_axis!(sys, [0, 0, 1])
+    add_quantization_axis!(sys, B_vec)          # need not be normalised
+
+This is what gives the **tensor light shift** its geometry: the shift depends on
+`ε_z`, the projection of a trap beam's polarization onto this axis, so a linearly
+polarized trap at the magic angle `acos(1/√3) ≈ 54.74°` produces no tensor shift
+at all. Each beam's `pol` is projected onto the axis automatically — no angle is
+passed by hand.
+
+`axis` may be a `Parameter` or `ParametricExpression`, so a magic-angle scan or a
+shot-to-shot field misalignment is a `play` keyword rather than a rebuilt system.
+
+Only one axis may be set per system.
+
+See also [`add_zeeman_detunings!`](@ref), which currently takes the field
+*magnitude* separately.
+"""
+function add_quantization_axis!(system, axis)
+    for n in system.nodes
+        n isa QuantizationAxisNode && error(
+            "the system already has a quantization axis; only one may be set")
+    end
+    node = QuantizationAxisNode(axis)
+    build_node!(node)
+    push!(system, node)
+    return node
+end
+
+"""
+    getquantizationaxis(system) -> Vector{Float64}
+
+The system's quantization axis as a unit vector, or `ẑ` if none was set.
+"""
+function getquantizationaxis(system)
+    for n in system.nodes
+        if n isa QuantizationAxisNode
+            ax = node_output(n)
+            ax === nothing || return ax
+        end
+    end
+    return [0.0, 0.0, 1.0]
+end

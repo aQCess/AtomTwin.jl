@@ -252,37 +252,84 @@ _level_term(l::AbstractLevel) = hasproperty(l, :term) ? getproperty(l, :term) :
                                 hasproperty(l, :label) ? getproperty(l, :label) : ""
 
 """
-    _init_species_data!(a::AtomWrapper, inner::NLevelAtom, beams)
+    _beam_epsilon_z(beam, q_axis) -> Float64
+
+`ε_z`, the projection of a beam's polarization onto the quantization axis. `1`
+when the polarization lies along the axis, `0` when perpendicular. Beams with no
+`pol` field are treated as polarised along the axis (`ε_z = 1`), which reproduces
+their pre-existing behaviour.
+"""
+function _beam_epsilon_z(beam, q_axis)
+    hasproperty(beam, :pol) || return 1.0
+    p = getproperty(beam, :pol)
+    n = sqrt(sum(abs2, p))
+    n == 0 && return 1.0
+    return abs(sum(conj(p[i]) * q_axis[i] for i in 1:3)) / n
+end
+
+"""
+    _init_species_data!(a::AtomWrapper, inner::NLevelAtom, beams; q_axis)
 
 Fill `inner.alpha[λ]` with one polarizability per level, for every wavelength the
 `beams` use. Levels are matched to the species' models (see
 [`getpolarizabilitymodels`](@ref)) by [`_level_term`](@ref).
 
+For a level that carries `F` and `mF`, the **tensor** contribution is folded in
+here, using each beam's polarization against `q_axis`. It vanishes identically for
+`J ≤ 1/2` or `F ≤ 1/2`, so every ¹S₀/³P₀ state is unaffected. Sublevels of one
+manifold therefore no longer share an `α`.
+
+`α` is cached per wavelength, so beams sharing a wavelength must agree on their
+polarization relative to `q_axis`; they are checked, and a disagreement is an error
+rather than an arbitrary choice.
+
 A level with no matching model gets `α = 0`. That is legitimate — a leakage level
 or a Rydberg state has no model here — so it is not an error, but it IS reported
 once per atom listing every unmatched term together, because the consequence is
-silent: an untrapped atom, and a `frozen` heuristic in `play` that then declines
-to move anything at all.
-
-Tensor polarizability is not applied here. `α` is the state's scalar response;
-the sublevel- and polarisation-dependent part needs the trap's own geometry and is
-applied where that is known.
+otherwise silent: an untrapped atom, and a `frozen` heuristic in `play` that then
+declines to move anything at all.
 """
-function _init_species_data!(a::AtomWrapper, inner::NLevelAtom, beams)
+function _init_species_data!(a::AtomWrapper, inner::NLevelAtom, beams;
+                             q_axis = [0.0, 0.0, 1.0])
     models = getpolarizabilitymodels(a)
     isempty(models) && return nothing
     wavelengths = unique([getwavelength(b) for b in beams])
 
     missing_terms = String[]
     for λ in wavelengths
+        # α is stored per wavelength, but the tensor term depends on the beam's
+        # own polarization. Beams sharing a wavelength must therefore agree on it —
+        # a tweezer array does, being one beam replicated. Rather than silently
+        # picking one, say so.
+        same_λ = [b for b in beams if getwavelength(b) == λ]
+        εs = [_beam_epsilon_z(b, q_axis) for b in same_λ]
+        if !all(e -> isapprox(e, first(εs); atol = 1e-12), εs)
+            error("beams at λ = $(λ*1e9) nm have different polarizations relative " *
+                  "to the quantization axis (ε_z = $(round.(εs; digits=6))). The " *
+                  "tensor light shift differs between them, but α is cached per " *
+                  "wavelength. Give them a common polarization, or separate them " *
+                  "in wavelength.")
+        end
+        ε_z = first(εs)
+
         α_si = map(a.levels) do l
             key = _level_term(l)
-            if haskey(models, key)
-                polarizability_si(models[key], λ * 1e9)
-            else
+            if !haskey(models, key)
                 key in missing_terms || push!(missing_terms, key)
-                0.0
+                return 0.0
             end
+            model = models[key]
+            α = polarizability_si(model, λ * 1e9)
+            # Tensor part: needs F and mF, so only a level that carries them gets
+            # it. It vanishes identically for J ≤ 1/2 or F ≤ 1/2, so this is a
+            # no-op for every ¹S₀/³P₀ state.
+            if hasproperty(l, :F) && hasproperty(l, :mF)
+                α2 = _alpha2_si(model, λ * 1e9; F = l.F, I = a.I)
+                if α2 != 0.0
+                    α += α2 * _polarization_factor(ε_z) * _tensor_geometry(l.F, l.mF)
+                end
+            end
+            return α
         end
         inner.alpha[λ] = α_si
     end
@@ -345,7 +392,8 @@ initialize!(atom, inner)
 function initialize!(a::AtomWrapper, inner::NLevelAtom;
                      rng          = Random.default_rng(),
                      beams        = AbstractBeam[],
-                     param_values = Dict{Symbol,Any}())
+                     param_values = Dict{Symbol,Any}(),
+                     q_axis       = [0.0, 0.0, 1.0])
     # 0. Drop any force cached by a previous shot. `fclassical!` (velocity Verlet)
     #    reuses the last step's force as this step's F_old, so a stale value from
     #    another shot — or from the position this atom had before re-initialising
@@ -373,7 +421,7 @@ function initialize!(a::AtomWrapper, inner::NLevelAtom;
     end
 
     # 3. species-specific atomic physics (fallback does nothing)
-    _init_species_data!(a, inner, beams)
+    _init_species_data!(a, inner, beams; q_axis = q_axis)
     return inner
 end
 
@@ -386,9 +434,10 @@ This forwards to initialize!(::AtomWrapper, ::NLevelAtom), passing atom.inner
 and the supplied beams and rng.
 """
 function initialize!(atom::AbstractAtom;
-                     beams = AbstractBeam[],  # or atom.beams if you store them
-                     rng   = Random.default_rng())
-    initialize!(atom, atom.inner; beams = beams, rng = rng)
+                     beams  = AbstractBeam[],  # or atom.beams if you store them
+                     rng    = Random.default_rng(),
+                     q_axis = [0.0, 0.0, 1.0])
+    initialize!(atom, atom.inner; beams = beams, rng = rng, q_axis = q_axis)
     return atom
 end
 

@@ -274,8 +274,12 @@ function compile(sys::System, seq::Sequence;
     # === PHASE 1: COMPILE BEAM NODES FIRST ===
     # BeamNodes must be compiled before CouplingNodes (which read beam_node._compiled[])
     # and before atom initialization (which uses beams for polarizability computation).
+    # The quantization axis joins this phase for the same reason beams do: the
+    # tensor light shift needs it, and atom polarizabilities are computed in
+    # Phase 2.
     for node in sorted_nodes
-        node isa BeamNode && compile_node!(node, sys.basis, rng, param_values)
+        (node isa BeamNode || node isa QuantizationAxisNode) &&
+            compile_node!(node, sys.basis, rng, param_values)
     end
 
     # Collect all beams: trapping beams from sys.beams + coupling beams from BeamNodes
@@ -284,8 +288,10 @@ function compile(sys::System, seq::Sequence;
     resolved_beams    = vcat(resolved_trapping, resolved_coupling)
 
     # === PHASE 2: INITIALIZE ATOMS (uses resolved beams, may sample positions/velocities) ===
+    q_axis = getquantizationaxis(sys)
     atoms = [initialize!(sys.atoms[i], sys.atoms[i].inner;
-                         beams=resolved_beams, rng=rng, param_values=param_values)
+                         beams=resolved_beams, rng=rng, param_values=param_values,
+                         q_axis=q_axis)
              for i in 1:length(sys.atoms)]
 
     # === PHASE 3: COMPILE REMAINING NODES (CouplingNode, DetuningNode, etc.) ===
@@ -295,7 +301,7 @@ function compile(sys::System, seq::Sequence;
     clicks_jumps    = Dict{String,Jump}()   # PhotoDetector name -> the jump it counts
 
     for node in sorted_nodes
-        node isa BeamNode && continue  # already compiled
+        (node isa BeamNode || node isa QuantizationAxisNode) && continue  # Phase 1
         obj = compile_node!(node, sys.basis, rng, param_values)
         if obj isa AtomTwin.Dynamiq.AbstractField
             push!(resolved_fields, obj)

@@ -659,3 +659,81 @@ end
     @test isapprox(magic(0//1), 473.375; atol = 0.03)
     @test isapprox(magic(1//1), 473.145; atol = 0.03)
 end
+
+# ======================================================================
+# Quantization axis and state-dependent trap polarizability
+# ======================================================================
+
+@testset "GaussianBeam carries a polarization" begin
+    b = GaussianBeam(λ = 767e-9, w0 = 1e-6, P = 20e-3)
+    @test b.pol == ComplexF64[1, 0, 0]                 # x̂ by default
+    @test GaussianBeam(λ = 767e-9, w0 = 1e-6, P = 20e-3,
+                       pol = [0, 0, 5]).pol == ComplexF64[0, 0, 1]   # normalised
+    b2 = GaussianBeam(λ = 767e-9, w0 = 1e-6, P = 20e-3, pol = [0, 1, 1])
+    @test copy(b2).pol == b2.pol                        # survives copy
+    @test_throws ErrorException GaussianBeam(λ = 767e-9, w0 = 1e-6, P = 20e-3,
+                                             pol = [0, 0, 0])
+end
+
+@testset "quantization axis" begin
+    sys() = System(Ytterbium171Atom(; levels = [Level("1S0")]))
+    @test getquantizationaxis(sys()) == [0.0, 0.0, 1.0]   # ẑ by default
+    s = sys()
+    add_quantization_axis!(s, [1, 0, 1])
+    @test isapprox(sum(abs2, getquantizationaxis(s)), 1.0; atol = 1e-12)
+    # only one axis, and it must have a direction
+    @test_throws ErrorException add_quantization_axis!(s, [0, 1, 0])
+    @test_throws ErrorException add_quantization_axis!(sys(), [0, 0, 0])
+end
+
+@testset "trap α is per-sublevel and tracks the magic angle" begin
+    # THE DELIVERABLE: sublevels of one manifold no longer share a polarizability.
+    # Sr-88 ³P₁ has J=1 and I=0, so F=1 and the tensor term is live.
+    function trap_alphas(θ_deg)
+        e  = HyperfineManifold(1//1, 1; label = "³P₁", term = l"3P1")
+        sr = Strontium88Atom(; levels = [e...])
+        tw = GaussianBeam(λ = 520e-9, w0 = 1e-6, P = 10e-3,
+                          pol = [sind(θ_deg), 0, cosd(θ_deg)])
+        s  = System(sr, tw)
+        add_quantization_axis!(s, [0, 0, 1])
+        inner = AtomTwin.Dynamiq.NLevelAtom(length(sr.levels))
+        AtomTwin.initialize!(sr, inner; beams = [tw],
+                             q_axis = getquantizationaxis(s))
+        inner.alpha[520e-9]
+    end
+
+    α0 = trap_alphas(0.0)
+    @test maximum(α0) - minimum(α0) > 0            # polarisation ∥ axis: split
+    @test isapprox(α0[1], α0[3]; rtol = 1e-12)     # mF = ±1 degenerate (geometry ∝ mF²)
+
+    # At the magic angle acos(1/√3) the (3cos²θ−1)/2 factor vanishes and the
+    # manifold is degenerate again — the whole point of a magic-angle trap.
+    αm = trap_alphas(54.735610317245346)
+    @test maximum(αm) - minimum(αm) < 1e-48
+
+    # The ordering inverts between ∥ and ⊥, as (3cos²θ−1)/2 changes sign.
+    α90 = trap_alphas(90.0)
+    @test (α0[2] - α0[1]) * (α90[2] - α90[1]) < 0
+
+    # A J=0 state has no tensor part, so its sublevels stay identical.
+    g  = HyperfineManifold(0//1, 0; label = "¹S₀", term = l"1S0")
+    sr = Strontium88Atom(; levels = [g...])
+    tw = GaussianBeam(λ = 520e-9, w0 = 1e-6, P = 10e-3, pol = [1, 0, 0])
+    inner = AtomTwin.Dynamiq.NLevelAtom(length(sr.levels))
+    AtomTwin.initialize!(sr, inner; beams = [tw])
+    @test length(unique(inner.alpha[520e-9])) == 1
+end
+
+@testset "beams sharing a wavelength must share a polarization" begin
+    # α is cached per wavelength but the tensor term is per-beam, so a
+    # disagreement has no single right answer. Say so rather than pick one.
+    e  = HyperfineManifold(1//1, 1; label = "³P₁", term = l"3P1")
+    sr = Strontium88Atom(; levels = [e...])
+    b1 = GaussianBeam(λ = 520e-9, w0 = 1e-6, P = 10e-3, pol = [0, 0, 1])
+    b2 = GaussianBeam(λ = 520e-9, w0 = 1e-6, P = 10e-3, pol = [1, 0, 0])
+    inner = AtomTwin.Dynamiq.NLevelAtom(length(sr.levels))
+    @test_throws ErrorException AtomTwin.initialize!(sr, inner; beams = [b1, b2])
+    # the same wavelength with a shared polarization is fine
+    b3 = GaussianBeam(λ = 520e-9, w0 = 1e-6, P = 5e-3, pol = [0, 0, 1])
+    @test AtomTwin.initialize!(sr, inner; beams = [b1, b3]) isa Any
+end
