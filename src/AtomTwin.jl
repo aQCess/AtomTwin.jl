@@ -67,6 +67,7 @@ include("system.jl")
 include("atoms/polarizability.jl")
 include("atoms/atoms.jl")
 include("atoms/ytterbium171atom.jl")
+include("atoms/ytterbium174atom.jl")   # reuses the Yb-171 1S0/3P0 models
 include("atoms/rubidium87atom.jl")
 include("atoms/strontium88atom.jl")
 include("detectors.jl")
@@ -172,9 +173,9 @@ export Parallel
 
 # Export atoms
 export Atom
-export Ytterbium171Atom
+export Ytterbium171Atom, Ytterbium174Atom
 # Species term-symbol namespaces (Ytterbium171._3P1, or l"3P1")
-export Ytterbium171, Strontium88
+export Ytterbium171, Ytterbium174, Strontium88
 export Potassium39Atom, Rubidium87Atom, Strontium88Atom
 export getspecies
 

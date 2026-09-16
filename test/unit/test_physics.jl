@@ -754,3 +754,44 @@ end
     a = iyb.alpha[759e-9]
     @test abs((a[2] - a[1]) / a[1]) < 0.01
 end
+
+@testset "Yb-174: corrected 3P1 model and its documented accuracy" begin
+    yb   = Ytterbium174Atom(; levels = [Level("1S0")])
+    m1S0 = AtomTwin.YB174_POLARIZABILITY_1S0
+    m3P1 = AtomTwin.YB174_POLARIZABILITY_3P1
+
+    @test yb.I == 0//1                            # spin-zero: F = J
+    @test m1S0 === AtomTwin.YB171_POLARIZABILITY_1S0   # shared electronic structure
+
+    # The two corrections to the published line list.
+    ls = m3P1.transitions
+    i1S0 = findfirst(t -> t.freq_THz < 0, ls)
+    @test ls[i1S0].J_f == 0//1                    # (1) J′ = 0, not 1
+    i3S1 = findfirst(t -> isapprox(t.freq_THz, 440.775408), ls)
+    @test ls[i3S1].gamma_MHz == 3.604             # (2) Porsev β, not the LS estimate
+    # Provenance survives, so a refit can find the free parameters.
+    @test count(t -> t.source == :fitted, ls) == 2
+    @test sum(t.gamma_MHz for t in ls if t.source == :fitted) ≈ 53.761
+
+    # The scalar part is solid — the 1S0 control against digitised thesis curves
+    # is RMS 0.075 Hz/(W/cm²) — so the tensor angular dependence is what matters:
+    # red-shifted along the axis, blue-shifted across it, crossing in between.
+    dV(θ) = light_shift_coeff_Hz_per_Wcm2(m1S0, 767.0) -
+            light_shift_coeff_Hz_per_Wcm2(m3P1, 767.0; F = 1//1, mF = 0//1,
+                                          I = 0//1, ε_z = cosd(θ))
+    @test dV(0.0)  < 0
+    @test dV(90.0) > 0
+
+    # ACCURACY, asserted so a regression is visible: this model predicts the
+    # 767 nm magic angle at ≈44.3° against the report's 40.9°, and leaves ≈1 Hz
+    # residual at its own fit targets. That is the ³P₁ model's documented ~3 nm
+    # accuracy — it has no precision magic-wavelength data to constrain it, unlike
+    # the Sr-88 ³P₁ model tested above. Do not "fix" this by scaling α⁽²⁾: 0.75
+    # fits these curves but breaks both measured Sr magic wavelengths.
+    lo, hi = 0.0, 90.0
+    for _ in 1:200
+        m = (lo + hi) / 2
+        sign(dV(m)) == sign(dV(lo)) ? (lo = m) : (hi = m)
+    end
+    @test isapprox((lo + hi) / 2, 44.3; atol = 0.5)
+end

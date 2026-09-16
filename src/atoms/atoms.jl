@@ -202,6 +202,7 @@ Each entry stores a named tuple `(mass, polarizabilities, I)` used by
 """
 const ATOM_DEFAULTS = Dict{Symbol, NamedTuple}(
     :Ytterbium171 => (mass = 171amu, I = 1//2),
+    :Ytterbium174 => (mass = 174amu, I = 0//1),
     :Rubidium87 => (mass = 87amu, I = 3//2),
     :Strontium88 => (mass = 88amu, I = 0//1),
     :Potassium39 => (mass = 39amu, I = 3//2),
