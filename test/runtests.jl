@@ -134,6 +134,19 @@ examples = [
 
 RUN_EXAMPLES = get(ENV, "ATOMTWIN_RUN_EXAMPLES", "false") == "true"
 
+# `Pkg.test` forces `--check-bounds=yes`, which overrides every `@inbounds` in
+# the package -- including the solver hot loops -- so the runtimes below come out
+# roughly 2.5x their real value. Harmless for the checksums, misleading for the
+# timings, and silent unless we say so.
+if RUN_EXAMPLES && Base.JLOptions().check_bounds == 1
+    @info """
+    Bounds checking is forced on; the example runtimes below are ~2.5x inflated.
+    For real timings:
+
+        Pkg.test("AtomTwin"; julia_args = ["--check-bounds=auto"])
+    """
+end
+
 if RUN_EXAMPLES; @testset "Example scripts" begin
     rows = String[]
     for path in examples
