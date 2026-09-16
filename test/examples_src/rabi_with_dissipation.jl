@@ -87,22 +87,25 @@ peak_idx = argmax(pe_me)                                  #src
 #    grids need not match. Compare on the coarser of the two by interpolating    #src
 #    the finer trace onto its times.                                             #src
 pe_qt_mean = vec(mean(out_qt.detectors["P_e"], dims = 2))                        #src
-function _on_grid(t_from, y_from, t_to)                                          #src
-    length(t_from) == length(t_to) && return y_from                              #src
-    [begin                                                                        #src
-         j = searchsortedfirst(t_from, t)                                         #src
-         j <= 1 ? y_from[1] :                                                     #src
-         j > length(t_from) ? y_from[end] :                                       #src
-         (w = (t - t_from[j-1]) / (t_from[j] - t_from[j-1]);                      #src
-          y_from[j-1] * (1 - w) + y_from[j] * w)                                  #src
-     end for t in t_to]                                                           #src
+# Wrapped in a `let`: `run_example` re-includes this file once per timing shot,  #src
+# and a bare top-level `function` would be redefined in `Main` every time --     #src
+# 100 "method overwritten" warnings per run, and the method's compiled code      #src
+# invalidated on each one.                                                       #src
+let                                                                              #src
+    on_grid(t_from, y_from, t_to) =                                              #src
+        length(t_from) == length(t_to) ? y_from :                                #src
+        [begin                                                                    #src
+             j = searchsortedfirst(t_from, t)                                     #src
+             j <= 1 ? y_from[1] :                                                 #src
+             j > length(t_from) ? y_from[end] :                                   #src
+             (w = (t - t_from[j-1]) / (t_from[j] - t_from[j-1]);                  #src
+              y_from[j-1] * (1 - w) + y_from[j] * w)                              #src
+         end for t in t_to]                                                       #src
+    ref, cmp = length(out_me.times) <= length(out_qt.times) ?                     #src
+        (pe_me, on_grid(out_qt.times, pe_qt_mean, out_me.times)) :                #src
+        (on_grid(out_me.times, pe_me, out_qt.times), pe_qt_mean)                  #src
+    @assert mean(abs.(cmp .- ref)) < 0.05 "QT mean deviates from master equation by more than 5% on average" #src
 end                                                                               #src
-if length(out_me.times) <= length(out_qt.times)                                   #src
-    _ref, _cmp = pe_me, _on_grid(out_qt.times, pe_qt_mean, out_me.times)          #src
-else                                                                              #src
-    _ref, _cmp = _on_grid(out_me.times, pe_me, out_qt.times), pe_qt_mean          #src
-end                                                                               #src
-@assert mean(abs.(_cmp .- _ref)) < 0.05 "QT mean deviates from master equation by more than 5% on average" #src
 
 # ## Plot results
 
