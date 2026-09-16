@@ -810,3 +810,74 @@ end
     # Without the trap the fringe does not move at all.
     @test ramsey(Tπ; P = 0.0) > 0.999
 end
+
+@testset "a trapping beam shifts levels automatically" begin
+    # Passing a beam to `System` is the whole user action: the trap that holds an
+    # atom also shifts its levels, and that is one physical effect, not an opt-in.
+    function ramsey(T; P = 1e-3)
+        g  = Level("g"; term = l"1S0")
+        e  = Level("e"; term = l"3P1")
+        sr = Strontium88Atom(; levels = [g, e])
+        tw = GaussianBeam(λ = 520e-9, w0 = 1e-6, P = P, pol = [0, 0, 1])
+        sys = System(sr, tw)                 # no add_light_shift! anywhere
+        add_quantization_axis!(sys, [0, 0, 1])
+        Ω = 2π * 1e6
+        c = add_coupling!(sys, sr, g => e, Ω; active = false)
+        add_detector!(sys, PopulationDetectorSpec(sr, e; name = "Pe"))
+        seq = Sequence(2e-10)
+        @sequence seq begin
+            Pulse(c, π / (2Ω)); Wait(T); Pulse(c, π / (2Ω))
+        end
+        play(sys, seq; initial_state = g).detectors["Pe"][end]
+    end
+
+    sr0 = Strontium88Atom(; levels = [Level("g"; term = l"1S0"),
+                                      Level("e"; term = l"3P1")])
+    tw0 = GaussianBeam(λ = 520e-9, w0 = 1e-6, P = 1e-3, pol = [0, 0, 1])
+    inner = AtomTwin.Dynamiq.NLevelAtom(2)
+    AtomTwin.initialize!(sr0, inner; beams = [tw0], q_axis = [0.0, 0.0, 1.0])
+    αs = inner.alpha[520e-9]
+    Tπ = π / abs((αs[2] - αs[1]) * tw0.I0 / AtomTwin.Units.hbar)
+
+    @test ramsey(Tπ)          < 0.01     # the trap alone inverts the fringe
+    @test ramsey(Tπ; P = 0.0) > 0.99     # without it, nothing moves
+end
+
+@testset "an explicit light shift replaces the automatic one" begin
+    g  = Level("g"; term = l"1S0")
+    e  = Level("e"; term = l"3P1")
+    function n_shift_fields(explicit)
+        sr = Strontium88Atom(; levels = [g, e])
+        tw = GaussianBeam(λ = 520e-9, w0 = 1e-6, P = 1e-3, pol = [0, 0, 1])
+        sys = System(sr, tw)
+        add_quantization_axis!(sys, [0, 0, 1])
+        explicit && add_light_shift!(sys, sr, [g, e], tw; reference = g)
+        seq = Sequence(1e-9)
+        @sequence seq begin
+            Wait(1e-9)
+        end
+        count(f -> f isa StarkShiftAC, compile(sys, seq).fields)
+    end
+    @test n_shift_fields(false) == 2      # one per level, automatically
+    @test n_shift_fields(true)  == 2      # explicit wins; NOT 4
+end
+
+@testset "a magic-wavelength trap leaves the transition alone" begin
+    # 759 nm is magic for the Yb clock pair, so the automatic shift is applied to
+    # both levels but the DIFFERENTIAL shift is negligible — which is why the
+    # shipped motion examples are unaffected by making this automatic.
+    g, e = Level("1S0"), Level("3P0")
+    yb = Ytterbium171Atom(; levels = [g, e])
+    tw = GaussianBeam(λ = 759e-9, w0 = 1.0e-6, P = 50e-3)
+    sys = System(yb, tw)
+    seq = Sequence(1e-9)
+    @sequence seq begin
+        Wait(1e-9)
+    end
+    @test count(f -> f isa StarkShiftAC, compile(sys, seq).fields) == 2
+
+    inner = AtomTwin.Dynamiq.NLevelAtom(2)
+    AtomTwin.initialize!(yb, inner; beams = [tw])
+    αs = inner.alpha[759e-9]
+    @test abs((αs[2] - αs[1]) / αs[1]) < 0.01     # magic to better than 1%
+end

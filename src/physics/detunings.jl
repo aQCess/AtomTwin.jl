@@ -152,12 +152,19 @@ end
 """
     add_light_shift!(system, atom, levels, beam; reference = nothing, active = true)
 
-Add the AC Stark shift that `beam` imposes on `levels` to the Hamiltonian, so a
-trap shifts the atom's internal energies as well as pushing it around.
+Override the automatic trap light shift on `levels`.
 
-    trap = GaussianBeam(λ = 767nm, w0 = 1µm, P = 20mW, pol = [sind(θ), 0, cosd(θ)])
-    sys  = System(yb, trap)
-    add_light_shift!(sys, yb, [g, e...], trap)
+!!! note "You usually do not need this"
+    A trapping beam shifts the levels it traps **automatically** — just pass the
+    beam to `System` and give the atom polarizability data:
+
+        trap = GaussianBeam(λ = 767nm, w0 = 1µm, P = 20mW, pol = [sind(θ), 0, cosd(θ)])
+        sys  = System(yb, trap)          # the shift is already included
+
+    Reach for `add_light_shift!` only to change the default: to reference the
+    shift against a particular level, or to make it switchable with `On`/`Off`.
+    Levels named here are excluded from the automatic shift, so nothing is
+    counted twice.
 
 `levels` may be a single level, a manifold, or a vector of either. The shift is
 taken from the same per-level `α` that drives the dipole force, tensor
@@ -211,4 +218,58 @@ function _lightshift_levels(v)
         append!(out, _lightshift_levels(x))
     end
     return out
+end
+
+"""
+    _auto_light_shifts(sys, atoms, trapping_beams) -> Vector{AbstractField}
+
+The AC Stark shifts every trapping beam imposes on every level it can shift.
+
+A trap that holds an atom also shifts the atom's levels; that is one physical
+effect, not two, so it needs no `add_*!` call. `compile` calls this after the
+atoms are initialised (α is filled) and folds the result into the field list
+beside the coupling and detuning terms.
+
+Scope and omissions, all deliberate:
+
+- Only `sys.beams` — the beams handed to `System`. A coupling beam's effect on the
+  atom is already its coupling term; adding a Stark shift for it too would
+  double-count.
+- A level with `α = 0` at a beam's wavelength contributes nothing, so it is
+  skipped rather than given a zero operator.
+- A level explicitly given an `add_light_shift!` node is skipped here, so an
+  explicit request wins over the automatic one and the shift is never applied
+  twice.
+
+The shift is **absolute**: each level takes its own `α I/ħ`. The common-mode part
+is a global phase, and the Chebyshev propagator sets its degree from the spectral
+half-width `(Emax−Emin)/2` after recentering on `Ē`, so an offset costs nothing.
+"""
+function _auto_light_shifts(sys, atoms, trapping_beams)
+    fields = Dynamiq.AbstractField[]
+    isempty(trapping_beams) && return fields
+
+    # Levels already covered by an explicit add_light_shift!: (atom, level index).
+    explicit = Set{Tuple{UInt, Int}}()
+    for n in sys.nodes
+        n isa LightShiftNode || continue
+        push!(explicit, (objectid(n.atom), n.atom.level_indices[n.level]))
+    end
+
+    for (k, a) in enumerate(sys.atoms)
+        inner = atoms[k]
+        for beam in trapping_beams
+            λ = getwavelength(beam)
+            haskey(inner.alpha, λ) || continue
+            αs = inner.alpha[λ]
+            for idx in eachindex(αs)
+                αs[idx] == 0.0 && continue
+                (objectid(a), idx) in explicit && continue
+                f = StarkShiftAC(sys.basis, inner, idx, beam)
+                f._coeff[] = ComplexF64(1.0)
+                push!(fields, f)
+            end
+        end
+    end
+    return fields
 end

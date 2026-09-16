@@ -298,6 +298,16 @@ function compile(sys::System, seq::Sequence;
     # Atom positions are now set; BeamNodes already compiled.
     resolved_fields = AtomTwin.Dynamiq.AbstractField[]
     resolved_jumps  = Jump[]
+
+    # A trapping beam shifts the levels it traps. That is physics, not an option,
+    # so it needs no `add_*!` call: every atom level with a polarizability at a
+    # trapping beam's wavelength gets its AC Stark shift automatically.
+    #
+    # Only `sys.beams` — the beams the user handed to `System` — are included.
+    # A coupling beam's effect on the atom is already the coupling term; adding a
+    # Stark shift for it too would double-count.
+    append!(resolved_fields,
+            _auto_light_shifts(sys, atoms, resolved_trapping))
     clicks_jumps    = Dict{String,Jump}()   # PhotoDetector name -> the jump it counts
 
     for node in sorted_nodes
