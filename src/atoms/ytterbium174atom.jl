@@ -92,24 +92,27 @@ width was refit against the tabulated magic wavelengths after correction 1.
 
 # Accuracy — read before trusting a magic wavelength
 
-Mean deviation from the tabulated magic wavelengths is **3.19 nm** (2.07 nm
-excluding the poorly reproduced 532 nm point). That is far worse than the
-`¹S₀`/`³P₀` models, and the cause is the data, not the method: unlike the clock
-states, `³P₁` has no precision magic- or tune-out-wavelength measurements to
-constrain the fit. Treat a predicted `³P₁` magic wavelength as indicative.
+Mean deviation from the tabulated magic wavelengths is **3.19 nm**, and the magic
+*angle* predicted for `F=1, m_F=0` at 767 nm is 44.3° against the report's 40.9°.
+Treat a predicted `³P₁` magic wavelength or angle as indicative, good for the
+existence and rough location of a magic condition but not for its value.
 
-Concretely, at the model's own fit targets the differential shift comes out near
-but not at zero, and the magic *angle* predicted for `F=1, m_F=0` at 767 nm is
-44.3° against the report's 40.9°. Both are the same few-nm-scale error expressed
-in different coordinates.
+The cause is **not** the measurements, which are far better than that (a magic
+wavelength is routinely determined to ≪0.1 nm), and **not** this line list, which
+is the Aidelsburger-group model. It is that a single effective resonance standing
+in for the whole high-lying manifold cannot reproduce the true dispersion across
+483–784 nm. Two independently measured magic wavelengths for the *same* Yb-171
+state at the *same* geometry (483 nm and 783.8 nm) demand effective widths of 48.6
+and 61.1 MHz — incompatible within a one-parameter model.
 
-The residual is the **model's**, not the tensor machinery's. AtomTwin's α⁽²⁾ is
-`1/(2J+1)` of the notes' — they normalise the reduced matrix elements the other
-way (see [`_alpha2_si`](@ref)) — so reproducing the report's own fit residuals
-requires that rescaling, and the report's fitted empirical linewidths partly
-absorb it. Refitting `γ_eff` against the magic-wavelength table in AtomTwin's
-convention would sharpen these predictions; the line list here is the report's
-unaltered.
+The same code applied to the **clock pair**, which is what Aidelsburger actually
+fitted and validated, reproduces the ¹S₀–³P₀ magic wavelength at **759.395 nm**
+against 759.35 nm measured — 70× better than the ³P₁ spread. `³P₁` here is an
+extrapolation of that model: the effective-resonance idea reused with a refitted
+width, on LS-coupling branching ratios never validated against ³P₁ data.
+
+See `studies/polarizability-refit/` in the harness for the analysis, and for why
+adopting a refitted width would trade one arbitrary compromise for another.
 
 For a tensor model constrained by precision measurements, see
 [`SR88_POLARIZABILITY_3P1`](@ref).
