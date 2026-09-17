@@ -63,25 +63,59 @@ function jump_rate_bound(jumps)
 end
 
 """
-    jump_substeps(dt, Γmax, jtol) -> Int
+    THETA_JUMP
 
-How many equal sub-steps of `dt` the MCWF jump test needs to keep the omitted
-two-jump probability within `jtol`. Returns 1 when there is nothing to bound.
-
-At most one jump fires per sub-step, so the probability of missing a second is
-`Δp²` where `Δp` bounds the per-sub-step jump probability (Dörner et al.,
-Comput. Phys. Commun. 234 (2019) 44). `Δp = √jtol` bounds the omission by `jtol`
-with no fitted constant.
-
-This is why `dt` is a sampling resolution on the MCWF path, not an accuracy
-knob: the deterministic flow is spectrally exact at any step, so the jump test
-is the only step error and it is bounded here.
+Rotation `ΔE·h` tolerated between MCWF jump tests. See [`jump_substeps`](@ref).
 """
-@inline function jump_substeps(dt::Float64, Γmax::Float64, jtol::Float64)
-    (Γmax > 0 && dt > 0) || return 1
-    Δp    = sqrt(min(jtol, 0.25))
-    h_max = -log1p(-Δp) / Γmax
-    h_max >= dt && return 1
+const THETA_JUMP = 0.5
+
+"""
+    jump_substeps(dt, Γmax, jtol, ΔE = 0.0) -> Int
+
+How many equal sub-steps of `dt` the MCWF jump test needs. Returns 1 when there
+is nothing to bound.
+
+Two separate errors set the sub-step `h`, and the smaller bound wins:
+
+1. **Two-jump omission.** At most one jump fires per sub-step, so the
+   probability of missing a second is `Δp²` where `Δp` bounds the per-sub-step
+   jump probability (Dörner et al., Comput. Phys. Commun. 234 (2019) 44).
+   `Δp = √jtol` bounds the omission by `jtol` with no fitted constant, giving
+   `h ≤ −log1p(−√jtol)/Γmax`.
+
+2. **Jump-time resolution.** A jump is applied at the END of the sub-step it is
+   detected in, so its time carries an error of order `h`. What makes that
+   matter is not the decay rate but how far the state rotates meanwhile: the
+   error is `O(ΔE·h)` with `ΔE` the spectral half-width of `H_eff`. This needs
+   `ΔE·h ≲ 1` and is the binding constraint whenever `ΔE ≫ Γmax` — a
+   far-detuned drive, a large Zeeman or light shift.
+
+Bounding only (1) makes the trajectory mean depend on the user's sampling `dt`,
+which it must not: with `Γmax = 2π×182 kHz` and a 2 MHz detuning, `jtol = 1e-2`
+permits `ΔE·h = 3.3` and overestimates the off-resonant population **7×**, while
+the master equation is exact at every `dt`. See `bugs/mcwf-jtol-underresolves.jl`
+in the harness. `ΔE = 0` recovers the old behaviour for callers that have no
+spectral estimate.
+
+`THETA_JUMP` is the tolerated rotation per sub-step. It is not a fitted
+constant: at `ΔE·h = 1` the timing error is a radian, and the measured bias is
+already below shot noise there.
+"""
+@inline function jump_substeps(dt::Float64, Γmax::Float64, jtol::Float64,
+                               ΔE::Float64 = 0.0)
+    dt > 0 || return 1
+    h_max = Inf
+
+    # (1) two-jump omission
+    if Γmax > 0
+        Δp    = sqrt(min(jtol, 0.25))
+        h_max = -log1p(-Δp) / Γmax
+    end
+
+    # (2) jump-time resolution: the state must not rotate far between tests.
+    ΔE > 0 && (h_max = min(h_max, THETA_JUMP / ΔE))
+
+    (isfinite(h_max) && h_max < dt) || return 1
     return max(1, ceil(Int, dt / h_max))
 end
 

@@ -676,3 +676,62 @@ end
     end
 
 end
+
+@testset "MCWF is independent of the sampling step" begin
+    # `dt` is a SAMPLING resolution on the MCWF path, so the trajectory mean must
+    # not depend on it. It did: `jump_substeps` bounded only the two-jump omission
+    # probability (√jtol against Γmax) and ignored how far the state rotates
+    # between jump tests, letting the sub-step reach ΔE·h = 3 and overestimating
+    # the off-resonant population 7×.
+    #
+    # The configuration matters: a plain two-level atom does NOT show this (its
+    # H_eff spectral width is set by Ω, so the new bound never binds). It needs a
+    # manifold with several jump channels and a detuning ≫ Γ — verified by
+    # mutation that removing the spectral bound fails this testset.
+    gm = HyperfineManifold(0//1, 0; label = "g", term = l"1S0", g_F = 0.0)
+    ex = HyperfineManifold(1//1, 1; label = "e", term = l"3P1", g_F = 1.5)
+    Ω, Γ = 2π * 50e3, 2π * 182e3
+    θ  = 54.7356
+    # The trap's ~10 MHz light shift is what pushes ΔE far above Γ; without it
+    # the spectral bound never binds and this testset cannot see the bug.
+    tw = GaussianBeam(λ = 767e-9, w0 = 1e-6, P = 50e-3,
+                      pol = [sind(θ), 0.0, cosd(θ)])
+    δ0 = 2π * 9.537e6                         # the light shift itself
+
+    function run(dt, δ; dm = false, shots = 600)
+        yb  = Ytterbium174Atom(; levels = [gm..., ex...], x_init = [0.0, 0.0, 0.0])
+        sys = System(yb, tw)
+        add_quantization_axis!(sys, [0.0, 0.0, 1.0])
+        add_zeeman_detunings!(sys, yb, ex; B = 2.0Units.G, delta = δ0 + δ)
+        c = add_coupling!(sys, yb, gm => ex, Ω, Ω, Ω; active = false)
+        add_decay!(sys, yb, ex => gm, Γ)
+        for (k, lv) in enumerate(ex.levels)
+            add_detector!(sys, PopulationDetectorSpec(yb, lv; name = "P$k"))
+        end
+        seq = Sequence(dt)
+        @sequence seq begin
+            Pulse(c, 100e-6)
+        end
+        if dm
+            o = play(sys, seq; initial_state = gm[0], density_matrix = true)
+            sum(o.detectors["P$k"][end] for k in 1:3)
+        else
+            o = play(sys, seq; initial_state = gm[0], shots = shots,
+                     rng = MersenneTwister(5))
+            sum(mean(o.detectors["P$k"][end, :]) for k in 1:3)
+        end
+    end
+
+    # Far off resonance the population is small and most sensitive to jump timing.
+    for δ in (2π * 1e6, 2π * 2e6)
+        exact = run(1e-9, δ; dm = true)
+        @test exact > 0                      # a real, non-trivial population
+        # The master equation itself must not care about dt. Its adaptive Strang
+        # splitter controls error to `tol`, so compare at that level.
+        @test isapprox(run(200e-9, δ; dm = true), exact; rtol = 1e-3)
+        # …and neither may MCWF, across a 40× range of sampling step.
+        for dt in (5e-9, 50e-9, 200e-9)
+            @test isapprox(run(dt, δ), exact; rtol = 0.25)
+        end
+    end
+end

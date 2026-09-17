@@ -478,10 +478,13 @@ function wfmc(psi::Vector{ComplexF64},
     # Built once, not per step: `vcat` in the loop would allocate every step.
     Heff_terms = vcat(H, Hnh)
     # `dt` is the SAMPLING resolution; the jump test needs its own, possibly
-    # finer, step, sized from `jtol`.
-    nsub = jump_substeps(dt, jump_rate_bound(jumps), jtol)
+    # finer, step, bounded BOTH by `jtol` (two-jump omission) and by the
+    # spectral width of H_eff (jump-time resolution) -- see `jump_substeps`.
+    spec = spectral_spec(Heff_terms)
+    ΔE   = (spec.Emax - spec.Emin) / 2
+    nsub = jump_substeps(dt, jump_rate_bound(jumps), jtol, ΔE)
     h    = dt / nsub
-    plan = plan_step(integrator, psi, h, spectral_spec(Heff_terms); tol = tol)
+    plan = plan_step(integrator, psi, h, spec; tol = tol)
 
     @inbounds for i in 1:steps
         if has_modifiers
@@ -564,9 +567,11 @@ function wfmc_semiclassical(psi::Vector{ComplexF64},
     has_detectors   = !isempty(state_detectors)
 
     Heff_terms = vcat(H, Hnh)          # see `wfmc`
-    nsub = jump_substeps(dt, jump_rate_bound(jumps), jtol)
+    spec = spectral_spec(Heff_terms)
+    ΔE   = (spec.Emax - spec.Emin) / 2
+    nsub = jump_substeps(dt, jump_rate_bound(jumps), jtol, ΔE)
     h    = dt / nsub
-    plan = plan_step(integrator, psi, h, spectral_spec(Heff_terms); tol = tol)
+    plan = plan_step(integrator, psi, h, spec; tol = tol)
 
     @inbounds for i in 1:steps
         if has_modifiers
