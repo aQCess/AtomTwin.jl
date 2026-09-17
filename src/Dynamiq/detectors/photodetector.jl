@@ -18,9 +18,13 @@ onto the detector's `tspan`.
 - `vals::V`: Per-timestep integer count of detected events.
 - `tspan::T`: Time vector for the bins in `vals`.
 - `name::String`: Optional detector name.
-- `jump::Union{Nothing,Jump}`: The jump this detector counts. Set at build time
-  from the `add_decay!(...; clicks = spec)` binding; the solver increments the
-  detector only when *this* jump fires. `nothing` until bound.
+- `jumps::Vector{Jump}`: The jumps this detector counts. Filled at build time from
+  the `add_decay!(...; clicks = spec)` bindings; the solver increments the detector
+  whenever *any* of them fires. Empty until bound.
+
+  A manifold decay expands into one jump per sublevel channel, and a detector bound
+  to it must count them all -- a detector holding a single jump silently reports the
+  photons of one channel and discards the rest.
 
 # Constructors
 
@@ -31,17 +35,17 @@ mutable struct PhotoDetector{V,T} <: AbstractDetector
     vals::V
     tspan::T
     name::String
-    jump::Union{Nothing,Jump}
+    jumps::Vector{Jump}
 
     function PhotoDetector(tspan::Vector{Float64}; name::AbstractString = "")
-        new{Vector{Int},Vector{Float64}}(zeros(Int, length(tspan)), tspan, name, nothing)
+        new{Vector{Int},Vector{Float64}}(zeros(Int, length(tspan)), tspan, name, Jump[])
     end
 
     function PhotoDetector(tspan::AbstractVector{Float64},
                            vals::AbstractVector{<:Integer};
                            name::AbstractString = "")
         @assert length(tspan) == length(vals) "tspan and vals must have same length"
-        new{typeof(vals),typeof(tspan)}(vals, tspan, name, nothing)
+        new{typeof(vals),typeof(tspan)}(vals, tspan, name, Jump[])
     end
 end
 

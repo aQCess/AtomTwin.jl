@@ -27,7 +27,15 @@ are attributed to that bin, so no click is lost or written out of bounds.
     if n^2 < rand(rng)
         fired = jump!(psi, jumps, _prob, _q1, _q2, rng)
         @inbounds for d in photo_detectors
-            d.jump === fired && write!(d, min(cld(i, downsample), length(d.vals)))
+            ## `any(===(fired), d.jumps)` rather than a single identity test: a
+            ## manifold decay has one jump per sublevel channel and all of them
+            ## belong to this detector.
+            for j in d.jumps
+                if j === fired
+                    write!(d, min(cld(i, downsample), length(d.vals)))
+                    break
+                end
+            end
         end
         n = norm(psi)
     end

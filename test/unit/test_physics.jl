@@ -862,3 +862,49 @@ end
         @test isapprox(resonance(x0), Δ0 / 1e6 * exp(-2 * x0^2 / w0^2); rtol = 0.02)
     end
 end
+
+@testset "PhotoDetector counts every channel of a manifold decay" begin
+    # `clicks_jumps` was a Dict{String,Jump}: each channel of a manifold decay
+    # overwrote the previous one, and the detector was bound to the single survivor.
+    # Photons on every other channel went uncounted, silently — a pi-driven
+    # 1S0<->3P1 atom reported ZERO clicks while visibly cycling, because the jump
+    # that happened to survive was a sigma channel.
+    Γ = 2π * 182e3
+    g = HyperfineManifold(0//1, 0; label = "1S0", term = l"1S0")
+    e = HyperfineManifold(1//1, 1; label = "3P1", term = l"3P1", g_F = 1.493)
+
+    function run(; Ω_π, Ω_p, Ω_m, shots = 16)
+        yb  = Ytterbium174Atom(; levels = [g..., e...])
+        sys = System(yb)
+        add_quantization_axis!(sys, [1.0, 0.0, 0.0])
+        add_zeeman_detunings!(sys, yb, e; B = 0.0, delta = 0.0)
+        cp = add_coupling!(sys, yb, g => e; Ω_π = Ω_π, Ω_p = Ω_p, Ω_m = Ω_m,
+                           active = false)
+        pd = PhotoDetectorSpec(name = "clicks")
+        add_detector!(sys, pd)
+        add_decay!(sys, yb, e => g, Γ; clicks = pd, λ = 556e-9)
+        add_detector!(sys, PopulationDetectorSpec(yb, g[0]; name = "Pg"))
+        seq = Sequence(2e-7; downsample = 50)
+        @sequence seq begin
+            Pulse(cp, 4e-4)
+        end
+        out = play(sys, seq; initial_state = g[0], shots = shots)
+        (mean(sum(out.detectors["clicks"], dims = 1)),
+         mean(out.detectors["Pg"][end, :]))
+    end
+
+    Ω = 2π * 180e3
+    n_pi,  Pg_pi  = run(Ω_π = Ω,   Ω_p = 0.0, Ω_m = 0.0)
+    n_sig, Pg_sig = run(Ω_π = 0.0, Ω_p = Ω,   Ω_m = Ω)
+
+    # Both drives cycle the atom, so both must report photons.
+    @test Pg_pi  < 0.95        # it really is decaying
+    @test Pg_sig < 0.95
+    @test n_pi  > 10           # …and the pi channel is counted (was exactly 0)
+    @test n_sig > 10
+
+    # Every excited sublevel decays at the same total rate Γ, so driving one
+    # sublevel or two should give comparable counts — not a factor of the number of
+    # channels that happen to survive a Dict insertion.
+    @test 0.3 < n_pi / n_sig < 3.0
+end
