@@ -699,7 +699,7 @@ end
     # passing the beam to `System` is the whole user action. Ramsey is the
     # end-to-end check — the fringe follows the differential shift.
     g, e = Level("g"; term = l"1S0"), Level("e"; term = l"3P1")
-    function ramsey(T; P = 1e-3, explicit = false)
+    function ramsey(T; P = 2e-5, explicit = false)
         sr = Strontium88Atom(; levels = [g, e])
         tw = GaussianBeam(λ = 520e-9, w0 = 1e-6, P = P, pol = [0, 0, 1])
         sys = System(sr, tw)
@@ -717,11 +717,13 @@ end
 
     # Predict the differential shift from the stored α, then check the fringe.
     sr0 = Strontium88Atom(; levels = [g, e])
-    tw0 = GaussianBeam(λ = 520e-9, w0 = 1e-6, P = 1e-3, pol = [0, 0, 1])
+    tw0 = GaussianBeam(λ = 520e-9, w0 = 1e-6, P = 2e-5, pol = [0, 0, 1])
     inner = AtomTwin.Dynamiq.NLevelAtom(2)
     AtomTwin.initialize!(sr0, inner; beams = [tw0], q_axis = [0.0, 0.0, 1.0])
     αs = inner.alpha[520e-9]
-    Tπ = π / abs((αs[2] - αs[1]) * tw0.I0 / AtomTwin.Units.hbar)
+    # U = -α I/(c ε₀), so the angular frequency is α I/(c ε₀ ħ).
+    Tπ = π / abs((αs[2] - αs[1]) * tw0.I0 /
+                 (AtomTwin.Units.c * AtomTwin.Units.ε0 * AtomTwin.Units.hbar))
 
     @test ramsey(Tπ)                   < 0.01    # automatic: the trap alone
     @test ramsey(Tπ; P = 0.0)          > 0.99    # no trap, no shift
@@ -740,11 +742,22 @@ end
         end
         job = compile(sys, seq)
         fs = [f for f in job.fields if f isa StarkShiftAC]
-        # The coefficient is α·I/ħ at the atom — an angular frequency.
+        # The coefficient is α I/(c ε₀ ħ) at the atom — an angular frequency.
+        # NOT α I/ħ: this assertion previously encoded that error, which is why
+        # it never caught it. Anchored to the trap depth instead, below.
         AtomTwin.Dynamiq.update!(fs[end], 1)
         @test isapprox(real(fs[end]._coeff[]),
                        fs[end].alpha * AtomTwin.Dynamiq.intensity(tw, sr.inner.x) /
-                       AtomTwin.Units.hbar; rtol = 1e-12)
+                       (AtomTwin.Units.c * AtomTwin.Units.ε0 * AtomTwin.Units.hbar);
+                       rtol = 1e-12)
+        # Absolute anchor: the ground-state shift IS the trap depth in rad/s.
+        if !explicit
+            U0 = AtomTwin.polarizability_si(AtomTwin.SR88_POLARIZABILITY_1S0, 520.0) *
+                 tw.I0 / (AtomTwin.Units.c * AtomTwin.Units.ε0)
+            AtomTwin.Dynamiq.update!(fs[1], 1)
+            @test isapprox(abs(real(fs[1]._coeff[])), U0 / AtomTwin.Units.hbar;
+                           rtol = 1e-9)
+        end
         explicit && @test fs[1].alpha == 0.0      # reference = g sits at zero
         length(fs)
     end
@@ -800,4 +813,52 @@ end
         sign(dV(m)) == sign(dV(lo)) ? (lo = m) : (hi = m)
     end
     @test isapprox((lo + hi) / 2, 44.3; atol = 0.5)
+end
+
+@testset "the trap light shift follows the local intensity" begin
+    # The resonance of a trapped atom sits at its LOCAL differential light shift,
+    # so it must track the Gaussian intensity profile as the atom moves off centre.
+    # This is the check that caught StarkShiftAC's missing 1/(cε₀): the shift
+    # scaled with position correctly but was ~380× too small in absolute terms,
+    # which no relative test would have found.
+    gm = HyperfineManifold(0//1, 0; label = "¹S₀", term = l"1S0", g_F = 0.0)
+    e  = HyperfineManifold(1//1, 1; label = "³P₁", term = l"3P1", g_F = 1.5)
+    θ  = 54.7356                      # tensor-free angle: all three mF degenerate
+    w0 = 1e-6
+    tw = GaussianBeam(λ = 767e-9, w0 = w0, P = 50e-3,
+                      pol = [sind(θ), 0.0, cosd(θ)])
+    I0 = 2 * 50e-3 / (π * w0^2)
+
+    # Analytic differential shift at the trap centre.
+    Δ0 = (light_shift_coeff_Hz_per_Wcm2(AtomTwin.YB174_POLARIZABILITY_1S0, 767.0) -
+          light_shift_coeff_Hz_per_Wcm2(AtomTwin.YB174_POLARIZABILITY_3P1, 767.0;
+                F = 1//1, mF = 0//1, I = 0//1, ε_z = cosd(θ))) * I0 * 1e-4
+
+    "Detuning of the peak excitation for a static atom held at x₀."
+    function resonance(x0)
+        yb = Ytterbium174Atom(; levels = [gm..., e...], x_init = [x0, 0.0, 0.0])
+        ds = range(-2.0, 12.0; length = 141)
+        y = map(ds) do d
+            sys = System(yb, tw)
+            add_quantization_axis!(sys, [0.0, 0.0, 1.0])
+            add_zeeman_detunings!(sys, yb, e; B = 0.0, delta = 2π * d * 1e6)
+            cp = add_coupling!(sys, yb, gm => e, 2π * 20e3, 0.0, 0.0; active = false)
+            add_decay!(sys, yb, e => gm, 2π * 182e3)
+            add_detector!(sys, PopulationDetectorSpec(yb, e.levels[2]; name = "P"))
+            seq = Sequence(2e-9)
+            @sequence seq begin
+                Pulse(cp, 20e-6)
+            end
+            play(sys, seq; initial_state = gm[0], shots = 1,
+                 density_matrix = true).detectors["P"][end]
+        end
+        ds[argmax(y)]
+    end
+
+    # At the centre the resonance is the full differential shift…
+    @test isapprox(resonance(0.0), Δ0 / 1e6; rtol = 0.02)
+    # …and off centre it follows the Gaussian intensity profile.
+    for x0 in (0.4e-6, 0.8e-6)
+        @test isapprox(resonance(x0), Δ0 / 1e6 * exp(-2 * x0^2 / w0^2); rtol = 0.02)
+    end
 end

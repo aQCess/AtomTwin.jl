@@ -369,7 +369,12 @@ intensity at the atomic position. The stored coefficient is
 \\(\alpha I / \\hbar\\) in angular-frequency units.
 """
 function update!(f::StarkShiftAC{A}, ::Real) where A
-    f._coeff[] = 1 / hbar * f.alpha * intensity(f.beam, f.atom.x)
+    # U = -α I/(c ε₀) is the convention `polarizability_si` sets, so the angular
+    # frequency is α I/(c ε₀ ħ) -- NOT α I/ħ. The missing 1/(c ε₀) is the vacuum
+    # impedance, 376.73, and it made every trap light shift ~380x too small.
+    # This was unexercised until `add_light_shift!` existed: StarkShiftAC shipped
+    # in v0.1.0 but was never constructed anywhere.
+    f._coeff[] = f.alpha * intensity(f.beam, f.atom.x) / (c * ε0 * hbar)
     return nothing
 end
 
