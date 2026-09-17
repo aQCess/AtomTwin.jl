@@ -108,3 +108,53 @@ end
     @test isapprox(out2.detectors["twz"][end], x_target; atol = 1e-9)
     @test isapprox(tw[1].r0[1], x0; atol = 1e-12)
 end
+
+@testset "spontaneous emission carries a recoil kick" begin
+    # `recoil!` shipped in v0.1.0 but was never called, and `atom.lambda` — which
+    # it reads — was never populated. So decay was radiatively correct but
+    # momentum-free: an atom could scatter thousands of photons without heating.
+    # `add_decay!(...; λ)` now records the photon wavelength and enables the kick.
+    g = Level("g"; term = l"1S0")
+    e = Level("e"; term = l"3P1")
+    m    = 174 * AtomTwin.Units.amu
+    vrec = AtomTwin.Units.hbar * (2π / 556e-9) / m
+
+    function run(; λ = nothing, shots = 60)
+        yb = Ytterbium174Atom(; levels = [g, e], x_init = [0.0, 0.0, 0.0],
+                              v_init = [0.0, 0.0, 0.0])
+        # Wide and weak, so the dipole force is negligible and the velocity is
+        # set by the kicks alone.
+        tw  = GaussianBeam(λ = 767e-9, w0 = 50e-6, P = 1e-3, pol = [0, 0, 1])
+        sys = System(yb, tw)
+        add_quantization_axis!(sys, [0.0, 0.0, 1.0])
+        cp = add_coupling!(sys, yb, g => e, 2π * 200e3; active = false)
+        pd = PhotoDetectorSpec(name = "clicks")
+        add_detector!(sys, pd)
+        if λ === nothing
+            add_decay!(sys, yb, e => g, 2π * 182e3; clicks = pd)
+        else
+            add_decay!(sys, yb, e => g, 2π * 182e3; clicks = pd, λ = λ)
+        end
+        add_detector!(sys, MotionDetectorSpec(yb; dims = [1, 2, 3], name = "x"))
+        seq = Sequence(20e-9; downsample = 1000)
+        @sequence seq begin
+            Pulse(cp, 400e-6)
+        end
+        o = play(sys, seq; initial_state = g, shots = shots)
+        x  = o.detectors["x"]
+        dt = o.times[end] - o.times[end-1]
+        v  = [sqrt(sum(((x[end, :, s] .- x[end-1, :, s]) ./ dt).^2))
+              for s in 1:size(x, 3)]
+        (mean(sum(o.detectors["clicks"], dims = 1)), mean(v))
+    end
+
+    # Without λ the atom scatters but never moves.
+    N0, v0 = run()
+    @test N0 > 50                  # it really is scattering
+    @test v0 < 1e-4                # …and going nowhere
+
+    # With λ the speed follows the isotropic random walk, |v| = √N·v_rec.
+    N, v = run(λ = 556e-9)
+    @test N > 50
+    @test isapprox(v, sqrt(N) * vrec; rtol = 0.15)
+end

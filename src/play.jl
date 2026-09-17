@@ -340,13 +340,21 @@ function _play(job::SimulationJob;
         end
     else
         # Quantum/semiclassical evolution
-        # Semi-classical (frozen=false) only when atoms are moving AND beams have
-        # wavelengths matching atom polarizabilities; otherwise atoms stay fixed.
+        # Semi-classical (frozen=false) when the atoms can actually move: they
+        # need a force (a beam at a wavelength they have a polarizability for)
+        # AND some way to have momentum -- either they start with it, or a decay
+        # channel carries a recoil kick (`add_decay!(...; λ)`).
+        #
+        # The recoil clause matters: an atom released at rest in a tweezer and
+        # then illuminated heats out of the trap purely by its own fluorescence,
+        # and without it that atom would sit frozen at the centre forever.
+        #
         # `frozen` kwarg overrides the automatic detection when provided.
-        frozen = something(frozen, !(
-            any(a -> !isapprox(sum(abs2, a.v), 0.0; atol=1e-14), job.atoms) &&
-            any(b -> any(a -> haskey(a.alpha, getwavelength(b)), job.atoms), job.beams)
-        ))
+        _has_force  = any(b -> any(a -> haskey(a.alpha, getwavelength(b)), job.atoms),
+                          job.beams)
+        _has_motion = any(a -> !isapprox(sum(abs2, a.v), 0.0; atol=1e-14), job.atoms) ||
+                      any(a -> !isempty(a.lambda), job.atoms)
+        frozen = something(frozen, !(_has_motion && _has_force))
         @inbounds for i in 1:n_instructions
             isempty(job.local_tspans[i]) && continue
             for m in job.boundary_modifiers[i]; begin_instruction!(m); end
