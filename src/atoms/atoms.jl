@@ -401,15 +401,23 @@ function initialize!(a::AtomWrapper, inner::NLevelAtom;
     #    below — would corrupt the first step of the trajectory.
     Dynamiq.reset_force!(inner)
 
-    # 1. position — GaussianPosition uses _resolve_node_value; Vector passes through
+    # 1. position — GaussianPosition uses _resolve_node_value; Vector passes through.
+    #    With no initializer the atom starts at the origin, and zeroing it is not
+    #    optional: `inner` is reused across shots, so leaving it would start shot n
+    #    where shot n-1 ended — an ensemble silently becomes one long trajectory.
     if a.x_init !== nothing
         x = _resolve_node_value(a.x_init, param_values, rng)
         @assert length(x) == 3
         @inbounds for i in 1:3; inner.x[i] = Float64(x[i]); end
+    else
+        @inbounds for i in 1:3; inner.x[i] = 0.0; end
     end
 
-    # 2. velocity — MaxwellBoltzmann requires mass, handled specially
-    if a.v_init !== nothing
+    # 2. velocity — MaxwellBoltzmann requires mass, handled specially. Same
+    #    cross-shot reasoning as the position above.
+    if a.v_init === nothing
+        @inbounds for i in 1:3; inner.v[i] = 0.0; end
+    else
         v = if a.v_init isa MaxwellBoltzmann
             T_val = _resolve_node_value(a.v_init.T, param_values, rng)
             σ = sqrt(kb * T_val / inner.m)

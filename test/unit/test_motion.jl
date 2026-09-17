@@ -145,7 +145,9 @@ end
         dt = o.times[end] - o.times[end-1]
         v  = [sqrt(sum(((x[end, :, s] .- x[end-1, :, s]) ./ dt).^2))
               for s in 1:size(x, 3)]
-        (mean(sum(o.detectors["clicks"], dims = 1)), mean(v))
+        ## RMS, not mean: <|v|^2> = N*v_rec^2 exactly for an isotropic walk, while
+        ## <|v|> carries a Maxwell-distribution factor sqrt(8/3pi) = 0.921.
+        (mean(sum(o.detectors["clicks"], dims = 1)), sqrt(mean(v .^ 2)))
     end
 
     # Without λ the atom scatters but never moves.
@@ -156,5 +158,37 @@ end
     # With λ the speed follows the isotropic random walk, |v| = √N·v_rec.
     N, v = run(λ = 556e-9)
     @test N > 50
-    @test isapprox(v, sqrt(N) * vrec; rtol = 0.15)
+    @test isapprox(v, sqrt(N) * vrec; rtol = 0.05)
+end
+
+@testset "shots start from a fresh atom, not where the last one stopped" begin
+    # `initialize!` reset the atom's position only when `x_init` was given (and its
+    # velocity only when `v_init` was), but `inner` is reused across shots. An atom
+    # with a thermal velocity and no explicit position therefore began shot n where
+    # shot n-1 ended: an ensemble was silently one continuous trajectory, and a
+    # bound atom appeared to escape once a few shots of drift had accumulated.
+    #
+    # The same function already carried a `reset_force!` for exactly this hazard,
+    # so the omission was an oversight.
+    g  = HyperfineManifold(0//1, 0; label = "1S0", term = l"1S0")
+    yb = Ytterbium174Atom(; levels = [g...], v_init = maxwellboltzmann(T = 5e-6))
+    tw  = GaussianBeam(λ = 767e-9, w0 = 1e-6, P = 1e-3, pol = [1.0, 0.0, 0.0])
+    sys = System(yb, tw)
+    add_quantization_axis!(sys, [1.0, 0.0, 0.0])
+    add_detector!(sys, MotionDetectorSpec(yb; dims = [1, 2, 3], name = "x"))
+
+    seq = Sequence(5e-8; downsample = 20)
+    @sequence seq begin
+        Wait(2e-4)
+    end
+    x = play(sys, seq; initial_state = g[0], shots = 6).detectors["x"]
+
+    # Every shot starts at the origin; 1 µs of thermal drift is ~0.02 µm, so 0.1 µm
+    # is loose enough not to be a noise test and tight enough to catch the leak
+    # (which put later shots at 0.2–0.8 µm).
+    r0 = [sqrt(x[1, 1, s]^2 + x[1, 2, s]^2) for s in 1:size(x, 3)]
+    @test maximum(r0) < 0.1e-6
+
+    # …and the atom really is bound, so the test is not passing on a frozen atom.
+    @test maximum(abs, x[:, 1, :]) > 1e-8
 end
