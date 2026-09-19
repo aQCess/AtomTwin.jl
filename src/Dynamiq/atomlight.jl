@@ -352,6 +352,8 @@ struct StarkShiftAC{A} <: AbstractField
             tensor_shift = false
             hyperfine_coeff = 0//1
         end
+        
+        @info "Beam polarisation $(beam.pol), quant. axis $(q_axis)"
 
 
         new{typeof(atom)}(atom, lvl, H, beam, alpha, alpha2, tensor_shift, hyperfine_coeff, Ref(Complex(0.0)), q_axis)
@@ -375,12 +377,8 @@ function update!(f::StarkShiftAC{A}, i::Int) where A
     if f.tensor_shift
         # vectors are normalised
         costheta = abs(dot(f.beam.pol, f.q_axis))
-
-        #@info "costheta = $(costheta), $(f.beam.pol), $(f.q_axis)" maxlog=10
-
         tensor_part = f.alpha2 * 0.5 * (3 * costheta^2 - 1) * f.hyperfine_coeff
     end
-    #@info "tensor part = $(tensor_part), tensor_on = $(f.tensor_shift)" maxlog=10
 
     f._coeff[] = ((scalar_part + tensor_part) / (- 2 * ε0 * c * hbar)) * intensity(f.beam, f.atom.x)
     return nothing
