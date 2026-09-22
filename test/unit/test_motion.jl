@@ -119,7 +119,7 @@ end
     m    = 174 * AtomTwin.Units.amu
     vrec = AtomTwin.Units.hbar * (2π / 556e-9) / m
 
-    function run(; λ = nothing, shots = 60)
+    function run(; λ = nothing, shots = 60, seed = 20260917)
         yb = Ytterbium174Atom(; levels = [g, e], x_init = [0.0, 0.0, 0.0],
                               v_init = [0.0, 0.0, 0.0])
         # Wide and weak, so the dipole force is negligible and the velocity is
@@ -140,7 +140,8 @@ end
         @sequence seq begin
             Pulse(cp, 400e-6)
         end
-        o = play(sys, seq; initial_state = g, shots = shots)
+        o = play(sys, seq; initial_state = g, shots = shots,
+                 rng = MersenneTwister(seed))
         x  = o.detectors["x"]
         dt = o.times[end] - o.times[end-1]
         v  = [sqrt(sum(((x[end, :, s] .- x[end-1, :, s]) ./ dt).^2))
@@ -158,7 +159,11 @@ end
     # With λ the speed follows the isotropic random walk, |v| = √N·v_rec.
     N, v = run(λ = 556e-9)
     @test N > 50
-    @test isapprox(v, sqrt(N) * vrec; rtol = 0.05)
+    ## Seeded, because the ratio's shot-to-shot spread is 5.4% (1 sigma, measured
+    ## over 12 seeds at 60 shots): an unseeded 5% tolerance fails about half the
+    ## time. 20% covers the full observed 0.885-1.039 range with margin, and is
+    ## still far tighter than the 0/1 distinction this test exists to make.
+    @test isapprox(v, sqrt(N) * vrec; rtol = 0.20)
 end
 
 @testset "shots start from a fresh atom, not where the last one stopped" begin
