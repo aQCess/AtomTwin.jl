@@ -42,6 +42,7 @@ const RB87_POLARIZABILITY_5S12 = PolarizabilityModel(
         (freq_THz = 834.474, dipole_ea0 = 0.118, Jg = 1//2),  #     5S1/2 → 7P1/2  (359 nm)
         (freq_THz = 835.526, dipole_ea0 = 0.207, Jg = 1//2),  #     5S1/2 → 7P3/2  (359 nm)
     ];
+    J = 1//2,                       # 5S₁/₂ ground state
     # Static ionic-core (Rb⁺) + valence-tail polarizability, α_core ≈ 9.08 a.u.:
     #   offset_Hz_per_Wm2 = -α_core·(4πε₀a₀³) / (c ε₀ h).
     offset_Hz_per_Wm2 = -8.5118e-5,
@@ -64,44 +65,3 @@ const RB87_POLARIZABILITY = Dict(
 # ======================================================================
 
 getpolarizabilitymodels(::Rubidium87Atom) = RB87_POLARIZABILITY
-
-"""
-    light_shift_coeff_Hz_per_Wcm2(atom::Rubidium87Atom, state, λ_nm) -> Float64
-
-Light-shift coefficient for an Rb-87 atom in the given state at wavelength λ_nm (nm).
-
-Returns Δν/I in Hz/(W/cm²).
-"""
-function light_shift_coeff_Hz_per_Wcm2(atom::Rubidium87Atom,
-                                       state::String,
-                                       λ_nm::Real)
-    model = RB87_POLARIZABILITY[state]
-    return light_shift_coeff_Hz_per_Wcm2(model, λ_nm)
-end
-
-"""
-    scattering_rate_per_Wcm2(atom::Rubidium87Atom, state, λ_nm) -> Float64
-
-Off-resonant photon-scattering-rate coefficient Γ_sc/I in (1/s)/(W/cm²) for an
-Rb-87 atom in the given state at wavelength λ_nm (nm). See the model-level
-[`scattering_rate_per_Wcm2`](@ref) for the physics.
-"""
-function scattering_rate_per_Wcm2(atom::Rubidium87Atom,
-                                  state::String,
-                                  λ_nm::Real)
-    model = RB87_POLARIZABILITY[state]
-    return scattering_rate_per_Wcm2(model, λ_nm)
-end
-
-"""
-    polarizability_au(atom::Rubidium87Atom, state, λ_nm) -> Float64
-
-Dynamic polarizability in atomic units for an Rb-87 atom in the given state
-at wavelength λ_nm (nm).
-"""
-function polarizability_au(atom::Rubidium87Atom,
-                           state::String,
-                           λ_nm::Real)
-    model = RB87_POLARIZABILITY[state]
-    return polarizability_au(model, λ_nm)
-end

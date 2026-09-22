@@ -511,6 +511,10 @@ Base.@inline function jump!(psi::Vector{ComplexF64},
     if norm(_psi1) != 0.0   # guard: a vanishing jump would blow up the renorm
         psi .= _psi1
     end
+    # Spontaneous emission carries momentum: kick the atom by ħk in a random
+    # direction. Only when the photon wavelength is known -- `add_decay!(...; λ)`
+    # records it. Without λ the decay stays radiatively correct but momentum-free.
+    haskey(jump.atom.lambda, jump.transition) && recoil!(jump, rng)
     return jump
 end
 

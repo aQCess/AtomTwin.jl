@@ -68,3 +68,47 @@ end
     b.peer = a
     @test_throws ErrorException AtomTwin._topological_sort(AtomTwin.AbstractNode[a, b])
 end
+
+@testset "recompile! rebinds Parameters when auto light shifts are present" begin
+    # `compile` builds job.fields as [auto light shifts..., then one per DAG node],
+    # but `recompile!` walked nodes while indexing job.fields from 1 — so every node
+    # updated the field `n_auto_fields` earlier than its own (a DetuningNode writing
+    # into a StarkShiftAC). Nothing errored; a Parameter simply stopped responding,
+    # on any system with a trapping beam and polarizability data.
+    #
+    # Tested through behaviour rather than field internals: detuning far off
+    # resonance must switch the scattering off, whether the job is reused or rebuilt.
+    g = HyperfineManifold(0//1, 0; label = "1S0", term = l"1S0")
+    e = HyperfineManifold(1//1, 1; label = "3P1", term = l"3P1", g_F = 1.493)
+    δ = Parameter(:δ_img, -2.595)
+
+    yb  = Ytterbium174Atom(; levels = [g..., e...],
+                           v_init = maxwellboltzmann(T = 5e-6))
+    tw  = GaussianBeam(λ = 767e-9, w0 = 1e-6, P = 2e-3, pol = [1.0, 0.0, 0.0])
+    sys = System(yb, tw)
+    add_quantization_axis!(sys, [1.0, 0.0, 0.0])
+    add_zeeman_detunings!(sys, yb, e; B = 7.18e-5, delta = -2π * 1e6 * δ)
+    cp = add_coupling!(sys, yb, g => e; Ω_π = 0.0, Ω_p = 2π*90e3, Ω_m = 2π*90e3,
+                       active = false)
+    pd = PhotoDetectorSpec(name = "clicks")
+    add_detector!(sys, pd)
+    add_decay!(sys, yb, e => g, 2π * 182e3; clicks = pd, λ = 556e-9)
+
+    seq = Sequence(2e-7; downsample = 200)
+    @sequence seq begin
+        Pulse(cp, 5e-4)
+    end
+    st  = AtomTwin._tovector(g[0])
+    job = compile(sys, seq; initial_state = st, shots = 32, δ_img = -2.595)
+
+    # The trap contributes light-shift fields that have no node behind them; that
+    # offset is precisely what used to be missing.
+    @test job.n_auto_fields > 0
+
+    photons(o) = mean(sum(o.detectors["clicks"], dims = 1))
+    on  = photons(play(job, sys; shots = 32, initial_state = st, δ_img = -2.595))
+    off = photons(play(job, sys; shots = 32, initial_state = st, δ_img = -3.5))
+
+    @test on > 20                # on resonance it really is scattering
+    @test off < 0.2 * on         # …and the Parameter change actually took effect
+end

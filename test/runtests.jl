@@ -130,6 +130,7 @@ examples = [
     joinpath(ex_path, "gateX_tomography.jl"),
     joinpath(ex_path, "eit_with_dissipation.jl"),
     joinpath(ex_path, "atom_sorting.jl"),
+    joinpath(ex_path, "yb174_lightshift_spectroscopy.jl"),
 ]
 
 RUN_EXAMPLES = get(ENV, "ATOMTWIN_RUN_EXAMPLES", "false") == "true"

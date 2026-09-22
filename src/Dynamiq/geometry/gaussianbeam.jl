@@ -30,6 +30,7 @@ mutable struct GaussianBeam <: AbstractBeam
     I0::Float64     # peak intensity
     w0z::Float64    # axial waist (harmonic approx.)
     r0::Vector{Float64}
+    pol::Vector{ComplexF64}   # polarization (unit); default x̂
     _coeff::Base.RefValue{ComplexF64}
 end
 
@@ -45,10 +46,21 @@ Construct a `GaussianBeam` from wavelength, transverse waist, and power.
 
 `I0` and `w0z` are derived automatically from these parameters.
 """
-function GaussianBeam(λ::Float64, w0::Float64, P::Float64; r0 = [0.0, 0.0, 0.0])
+# Normalise a user polarization to a unit complex 3-vector.
+function _unit_pol(pol)
+    p = ComplexF64.(pol)
+    length(p) == 3 || error("polarization must be a 3-vector; got length $(length(p))")
+    n = sqrt(sum(abs2, p))
+    n == 0 && error("polarization vector must be nonzero")
+    return p ./ n
+end
+
+function GaussianBeam(λ::Float64, w0::Float64, P::Float64;
+                      r0 = [0.0, 0.0, 0.0],
+                      pol = ComplexF64[1.0, 0.0, 0.0])
     I0  = 2 * P / (π * w0^2)
     w0z = sqrt(2) * π * w0^2 / λ  # effective axial "waist" from quadratic expansion
-    return GaussianBeam(λ, w0, P, I0, w0z, r0, Ref(ComplexF64(1.0)))
+    return GaussianBeam(λ, w0, P, I0, w0z, r0, _unit_pol(pol), Ref(ComplexF64(1.0)))
 end
 
 """
@@ -60,10 +72,11 @@ as the positional constructor.
 function GaussianBeam(; λ::Float64,
                       w0::Float64,
                       P::Float64,
-                      r0::Vector{Float64} = [0.0, 0.0, 0.0])
+                      r0::Vector{Float64} = [0.0, 0.0, 0.0],
+                      pol = ComplexF64[1.0, 0.0, 0.0])
     I0  = 2 * P / (π * w0^2)
     w0z = sqrt(2) * π * w0^2 / λ
-    return GaussianBeam(λ, w0, P, I0, w0z, r0, Ref(ComplexF64(1.0)))
+    return GaussianBeam(λ, w0, P, I0, w0z, r0, _unit_pol(pol), Ref(ComplexF64(1.0)))
 end
 
 """
@@ -80,6 +93,7 @@ function copy(b::GaussianBeam)
         b.I0,
         b.w0z,
         copy(b.r0),
+        copy(b.pol),
         Ref(b._coeff[]),
     )
 end

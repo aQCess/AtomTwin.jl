@@ -55,3 +55,37 @@
     @test abs(ψ[atom.level_indices[g2]]) ≈ 0 atol=1e-12
     @test ψ'ψ ≈ 1
 end
+
+# ======================================================================
+# Term symbols
+# ======================================================================
+
+@testset "term symbols bind levels to species data" begin
+    # `label` is display text — the shipped examples write "³P₀" — while model
+    # dictionaries are keyed ASCII "3P0". Matching one against the other silently
+    # missed and the level took α = 0. Terms are resolved at parse time instead.
+    @test (l"3P1").J == 1//1
+    @test (l"1S0").J == 0//1
+    @test AtomTwin.Ytterbium171._3P1 === l"3P1"   # species-qualified: same object
+    @test AtomTwin.Strontium88._1S0  === l"1S0"   # a term is the state, not the atom
+    @test_throws Exception eval(:(@l_str "3Q9"))  # unknown term fails where written
+
+    # A term propagates to every sublevel, and `label` stays cosmetic.
+    e = HyperfineManifold(1//1, 1; label = "³P₁", term = l"3P1")
+    @test e.term == "3P1"
+    @test all(l -> l.term == "3P1" && l.label == "³P₁", e.levels)
+    @test FineManifold(1//1; term = l"3P1").term == "3P1"
+
+    # A term knows its own J, so HyperfineManifold(F, J) with the arguments
+    # swapped is an error at the point of declaration.
+    @test_throws ErrorException HyperfineManifold(1//1, 0; term = l"3P1")
+
+    # Nothing pre-term changes: a bare Level's label doubles as its term, the
+    # positional constructors still work, and a String is still accepted.
+    @test AtomTwin._level_term(Level("1S0")) == "1S0"
+    @test AtomTwin._level_term(Level("ground"; term = l"1S0")) == "1S0"
+    @test copy(Level("g"; term = l"1S0")).term == "1S0"
+    @test HyperfineLevel(1//1, 1//1, 0//1, 1.0, "x").term == ""
+    @test FineLevel(1//1, 0//1, 1.0, "x").term == ""
+    @test HyperfineManifold(1//1, 1; term = "3P1").term == "3P1"
+end

@@ -36,6 +36,10 @@ struct SimulationJob{S}
     beams::Vector{AbstractBeam}
     initial_beams::Vector{AbstractBeam}  # copies of trapping beams at compile time; restore moved/ramped beam state between shots
     fields::Vector{<:Dynamiq.AbstractField}
+    n_auto_fields::Int       # leading entries of `fields` with no DAG node behind
+                             # them (automatic light shifts). `recompile!` walks
+                             # nodes, so it must skip these or it updates the
+                             # wrong field -- see the offset in `recompile!`.
     jumps::Vector{Jump}
     modifiers::Vector{Any}          # Vector{Vector{AbstractModifier}} — inner-loop, passed to evolve!
     boundary_modifiers::Vector{Any} # Vector{Vector{AbstractBoundaryModifier}} — called at instruction boundaries only
@@ -274,8 +278,12 @@ function compile(sys::System, seq::Sequence;
     # === PHASE 1: COMPILE BEAM NODES FIRST ===
     # BeamNodes must be compiled before CouplingNodes (which read beam_node._compiled[])
     # and before atom initialization (which uses beams for polarizability computation).
+    # The quantization axis joins this phase for the same reason beams do: the
+    # tensor light shift needs it, and atom polarizabilities are computed in
+    # Phase 2.
     for node in sorted_nodes
-        node isa BeamNode && compile_node!(node, sys.basis, rng, param_values)
+        (node isa BeamNode || node isa QuantizationAxisNode) &&
+            compile_node!(node, sys.basis, rng, param_values)
     end
 
     # Collect all beams: trapping beams from sys.beams + coupling beams from BeamNodes
@@ -284,18 +292,34 @@ function compile(sys::System, seq::Sequence;
     resolved_beams    = vcat(resolved_trapping, resolved_coupling)
 
     # === PHASE 2: INITIALIZE ATOMS (uses resolved beams, may sample positions/velocities) ===
+    q_axis = getquantizationaxis(sys)
     atoms = [initialize!(sys.atoms[i], sys.atoms[i].inner;
-                         beams=resolved_beams, rng=rng, param_values=param_values)
+                         beams=resolved_beams, rng=rng, param_values=param_values,
+                         q_axis=q_axis)
              for i in 1:length(sys.atoms)]
 
     # === PHASE 3: COMPILE REMAINING NODES (CouplingNode, DetuningNode, etc.) ===
     # Atom positions are now set; BeamNodes already compiled.
     resolved_fields = AtomTwin.Dynamiq.AbstractField[]
     resolved_jumps  = Jump[]
-    clicks_jumps    = Dict{String,Jump}()   # PhotoDetector name -> the jump it counts
+
+    # A trapping beam shifts the levels it traps. That is physics, not an option,
+    # so it needs no `add_*!` call: every atom level with a polarizability at a
+    # trapping beam's wavelength gets its AC Stark shift automatically.
+    #
+    # Only `sys.beams` — the beams the user handed to `System` — are included.
+    # A coupling beam's effect on the atom is already the coupling term; adding a
+    # Stark shift for it too would double-count.
+    append!(resolved_fields,
+            _auto_light_shifts(sys, atoms, resolved_trapping))
+    n_auto_fields = length(resolved_fields)   # these have no node; see `recompile!`
+    # PhotoDetector name -> every jump it counts. A manifold decay expands into one
+    # jump per sublevel channel and they all share the detector, so this must
+    # accumulate; keying a single Jump per name silently counted only the last.
+    clicks_jumps    = Dict{String,Vector{Jump}}()
 
     for node in sorted_nodes
-        node isa BeamNode && continue  # already compiled
+        (node isa BeamNode || node isa QuantizationAxisNode) && continue  # Phase 1
         obj = compile_node!(node, sys.basis, rng, param_values)
         if obj isa AtomTwin.Dynamiq.AbstractField
             push!(resolved_fields, obj)
@@ -304,7 +328,7 @@ function compile(sys::System, seq::Sequence;
             AtomTwin.Dynamiq.precompute!(obj, Matrix)
             push!(resolved_jumps, obj)
             if node isa DecayNode && node.clicks !== nothing
-                clicks_jumps[node.clicks] = obj
+                push!(get!(clicks_jumps, node.clicks, Jump[]), obj)
             end
         end
     end
@@ -456,10 +480,10 @@ function compile(sys::System, seq::Sequence;
     if !isempty(clicks_jumps)
         for i in 1:n_instructions, d in detectors[i]
             d isa Dynamiq.PhotoDetector || continue
-            j = get(clicks_jumps, d.name, nothing)
-            j === nothing && error("PhotoDetector \"$(d.name)\" is attached but not " *
+            js = get(clicks_jumps, d.name, nothing)
+            js === nothing && error("PhotoDetector \"$(d.name)\" is attached but not " *
                 "bound to a decay; pass it to add_decay!(...; clicks = spec).")
-            d.jump = j
+            d.jumps = js
         end
     end
 
@@ -475,7 +499,8 @@ function compile(sys::System, seq::Sequence;
     initial_beams = AbstractBeam[copy(b) for b in resolved_trapping]
 
     return SimulationJob(qstate, qstate === nothing ? nothing : copy(qstate),
-                        atoms, resolved_beams, initial_beams, resolved_fields, resolved_jumps,
+                        atoms, resolved_beams, initial_beams, resolved_fields,
+                        n_auto_fields, resolved_jumps,
                         modifiers, boundary_modifiers, detectors, local_tspans,
                         detector_outputs, times, inst_ds, inst_dts, seq.tol,
                         resolve_jtol(seq.jtol, shots),
@@ -527,8 +552,14 @@ function recompile!(job::SimulationJob, sys::System;
         initialize!(sys.atoms[i], job.atoms[i]; beams=all_beams, rng=rng, param_values=param_values)
     end
 
-    # Phase 3: recompile remaining nodes
-    field_counter = 0
+    # Phase 3: recompile remaining nodes.
+    #
+    # `job.fields` begins with `n_auto_fields` automatic light shifts that have no
+    # DAG node behind them, so the node walk below must start past them. Without
+    # the offset every node updates the field `n_auto_fields` earlier than its own
+    # -- a DetuningNode writing into a StarkShiftAC -- which silently freezes every
+    # Parameter on any system with a trapping beam.
+    field_counter = job.n_auto_fields
     jump_counter  = 0
 
     for node in sorted_nodes

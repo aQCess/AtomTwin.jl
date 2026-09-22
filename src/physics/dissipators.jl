@@ -13,12 +13,30 @@ and appends it to `system.nodes`. Returns the compiled `Jump` object.
 Pass `clicks = spec`, where `spec` is a `PhotoDetectorSpec` already attached with
 `add_detector!`, to count this jump's firings as photon clicks in that detector
 (statevector / wavefunction Monte Carlo runs only).
+
+Pass `λ` (metres) — the wavelength of the emitted photon — to include the
+**recoil kick** `ħk` the atom takes on each spontaneous emission, with
+`k = 2π/λ` in a random direction. Without it the decay is radiatively correct
+but momentum-free, so an atom never heats from its own fluorescence. Recoil
+matters whenever the recoil energy is not negligible against the trap depth:
+131 scattering events at 556 nm eject a Yb-174 atom from a 23 µK tweezer.
+
+```julia
+add_decay!(sys, yb, e => g, Γ; λ = 556e-9, clicks = pd)
+```
 """
 function add_decay!(system, atom::AbstractAtom, level::Pair{<:AbstractLevel, <:AbstractLevel}, Gamma;
-                    active=true, clicks=nothing)
+                    active=true, clicks=nothing, λ=nothing)
     node = DecayNode(Gamma, atom, level; active=active, clicks=_clicks_name(clicks))
     build_node!(node, system.basis)
     push!(system, node)
+    if λ !== nothing
+        # `recoil!` reads the photon wavelength from the atom, keyed by the
+        # transition's level-index pair, the same key `Jump` carries.
+        e_idx = atom.level_indices[level.first]
+        g_idx = atom.level_indices[level.second]
+        atom.inner.lambda[e_idx => g_idx] = Float64(λ)
+    end
     return node._field
 end
 
@@ -79,7 +97,7 @@ Add spontaneous decay from an excited hyperfine manifold to a ground manifold,
 with branching ratios set by Clebsch-Gordan coefficients.
 """
 function add_decay!(system, atom::AbstractAtom, levels::Pair{HyperfineManifold,HyperfineManifold},
-                    rate; active=true, tol=1e-10)
+                    rate; active=true, tol=1e-10, clicks=nothing, λ=nothing)
     excited, ground = levels
     for e in excited
         transitions = [(g, abs2(clebschgordan(e.F, e.mF, 1, g.mF - e.mF, g.F, g.mF)))
@@ -88,7 +106,8 @@ function add_decay!(system, atom::AbstractAtom, levels::Pair{HyperfineManifold,H
         total_strength = sum(strength for (_, strength) in transitions)
         for (g, strength) in transitions
             jump_rate = rate * strength / total_strength
-            jump_rate > tol && add_decay!(system, atom, e => g, jump_rate; active=active)
+            jump_rate > tol && add_decay!(system, atom, e => g, jump_rate;
+                                          active=active, clicks=clicks, λ=λ)
         end
     end
 end
@@ -98,10 +117,11 @@ end
 
 Add decay from an excited hyperfine manifold to a single leak level.
 """
-function add_decay!(system, atom::AbstractAtom, levels::Pair{HyperfineManifold,<:AbstractLevel}, rate; active=true)
+function add_decay!(system, atom::AbstractAtom, levels::Pair{HyperfineManifold,<:AbstractLevel}, rate;
+                    active=true, clicks=nothing, λ=nothing)
     excited, leak_level = levels
     for e in excited
-        add_decay!(system, atom, e => leak_level, rate; active=active)
+        add_decay!(system, atom, e => leak_level, rate; active=active, clicks=clicks, λ=λ)
     end
 end
 
@@ -112,7 +132,7 @@ Add spontaneous decay with Clebsch-Gordan branching ratios between fine-structur
 """
 function add_decay!(system, atom::AbstractAtom,
                     levels::Pair{FineManifold,FineManifold},
-                    rate; active=true, tol=1e-10)
+                    rate; active=true, tol=1e-10, clicks=nothing, λ=nothing)
     excited, ground = levels
     for e in excited
         transitions = [(g, abs2(clebschgordan(e.J, e.mJ, 1, g.mJ - e.mJ, g.J, g.mJ)))
@@ -121,7 +141,8 @@ function add_decay!(system, atom::AbstractAtom,
         total_strength = sum(strength for (_, strength) in transitions)
         for (g, strength) in transitions
             jump_rate = rate * strength / total_strength
-            jump_rate > tol && add_decay!(system, atom, e => g, jump_rate; active=active)
+            jump_rate > tol && add_decay!(system, atom, e => g, jump_rate;
+                                          active=active, clicks=clicks, λ=λ)
         end
     end
 end
@@ -133,9 +154,9 @@ Add decay from an excited fine-structure manifold into a single leak level.
 """
 function add_decay!(system, atom::AbstractAtom,
                     levels::Pair{FineManifold,<:AbstractLevel},
-                    rate; active=true)
+                    rate; active=true, clicks=nothing, λ=nothing)
     excited, leak_level = levels
     for e in excited
-        add_decay!(system, atom, e => leak_level, rate; active=active)
+        add_decay!(system, atom, e => leak_level, rate; active=active, clicks=clicks, λ=λ)
     end
 end

@@ -36,6 +36,7 @@ import .Dynamiq: GaussianBeam, GeneralGaussianBeam
 using .Dynamiq: PlanarBeam
 using .Dynamiq: GlobalCoupling, PlanarCoupling, Detuning, Interaction, VdWInteraction, GaussianCoupling
 using .Dynamiq: Hamiltonian
+using .Dynamiq: StarkShiftAC
 using .Dynamiq: Jump, AbstractAtom, NLevelAtom, Basis
 import .Dynamiq: Op   # extended with an (Operator, sys, atom) materialisation method in operators.jl
 using .Dynamiq: productstate, build_detector, evolve!
@@ -66,6 +67,7 @@ include("system.jl")
 include("atoms/polarizability.jl")
 include("atoms/atoms.jl")
 include("atoms/ytterbium171atom.jl")
+include("atoms/ytterbium174atom.jl")   # reuses the Yb-171 1S0/3P0 models
 include("atoms/rubidium87atom.jl")
 include("atoms/strontium88atom.jl")
 include("detectors.jl")
@@ -84,6 +86,7 @@ include("tomography.jl")
 # Export beams and fields
 export GaussianBeam, GeneralGaussianBeam, PlanarBeam
 export GlobalCoupling, PlanarCoupling, Detuning, Interaction, VdWInteraction, GaussianCoupling
+export StarkShiftAC
 
 # Export quantum types
 export Jump, AbstractAtom, NLevelAtom, Basis
@@ -123,6 +126,7 @@ export LaserPhaseNoiseModel
 # Export levels
 export HyperfineManifold, FineManifold
 export Level, FineLevel, HyperfineLevel
+export TermSymbol, @term, @l_str
 export Superposition
 # `Operator` is exported; the `transition`/`projector` constructors are NOT, because
 # they collide with QuantumOptics' exports (AtomTwin is routinely `using`-ed alongside
@@ -151,6 +155,8 @@ export play
 
 # Export physics utilities
 export add_zeeman_detunings!
+export add_quantization_axis!, getquantizationaxis
+export add_light_shift!
 export add_coupling!, add_detuning!, rabi_frequencies
 export add_decay!, add_dephasing!
 export add_interaction!, add_vdwinteraction!
@@ -167,7 +173,9 @@ export Parallel
 
 # Export atoms
 export Atom
-export Ytterbium171Atom
+export Ytterbium171Atom, Ytterbium174Atom
+# Species term-symbol namespaces (Ytterbium171._3P1, or l"3P1")
+export Ytterbium171, Ytterbium174, Strontium88
 export Potassium39Atom, Rubidium87Atom, Strontium88Atom
 export getspecies
 

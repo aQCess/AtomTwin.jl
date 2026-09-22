@@ -8,6 +8,133 @@ const BOHR_MAGNETON_RAD_S_TESLA = 2π * 1.39962e10  # ~1.4 MHz/Gauss in rad/s
 import Base: +, -, *, /
 
 #=============================================================================
+TERM SYMBOLS
+=============================================================================#
+"""
+    TermSymbol
+
+Identifies an atom's electronic state — `¹S₀`, `³P₁`, `5S₁/₂` — as a value rather
+than a string, so a level can be matched to species data without guessing.
+
+# Fields
+- `name::String`: canonical ASCII name, e.g. `"1S0"`, `"3P1"`, `"5S1/2"`.
+- `J::Rational{Int}`: total electronic angular momentum of the state.
+
+# Why not a plain `String`
+
+A level's `label` is display text — the shipped examples write `"³P₀"` with
+unicode subscripts — while species data is keyed on ASCII `"3P0"`. Matching one
+against the other silently misses, and the failure is quiet: the level takes
+`α = 0`, the atom is never trapped, and at most one warning is logged. Terms are
+predeclared and looked up at parse time (`l"3P1"`), so a typo fails where it is
+written rather than becoming a wrong number much later.
+
+Carrying `J` lets a manifold check its own declaration against the term, which
+catches an `F`/`J` mix-up immediately.
+
+# Usage
+
+```julia
+e = HyperfineManifold(1//1, 1; label = "³P₁", term = l"3P1")
+```
+
+A `String` is still accepted wherever a term is, and resolves by name — existing
+scripts keep working.
+"""
+struct TermSymbol
+    name::String
+    J::Rational{Int}
+end
+
+TermSymbol(name::AbstractString, J) = TermSymbol(String(name), Rational{Int}(J))
+
+Base.show(io::IO, t::TermSymbol) = print(io, "TermSymbol(\"", t.name, "\", J=", t.J, ")")
+Base.String(t::TermSymbol) = t.name
+
+"""
+    termname(x) -> String
+
+The lookup key for a term, a `String`, or `nothing` (which gives `""`). Used to
+match a level against a species' polarizability models.
+"""
+termname(t::TermSymbol)      = t.name
+termname(s::AbstractString)  = String(s)
+termname(::Nothing)          = ""
+
+"""
+    termJ(x) -> Union{Rational{Int}, Nothing}
+
+The electronic `J` a term asserts, or `nothing` when it does not carry one (a bare
+`String`, or no term at all).
+"""
+termJ(t::TermSymbol)     = t.J
+termJ(::AbstractString)  = nothing
+termJ(::Nothing)         = nothing
+
+"""
+    TERM_REGISTRY
+
+Every [`TermSymbol`](@ref) a species has declared, keyed by name. Populated by
+[`@term`](@ref); read by the `l"..."` string macro so a term can be written
+without naming its species.
+
+Terms are shared across species on purpose: `"3P1"` denotes the same electronic
+state whichever alkaline-earth-like atom carries it, and the species-specific part
+— the line list — lives in the polarizability model, not the term. Redeclaring a
+name with a different `J` is an error.
+"""
+const TERM_REGISTRY = Dict{String, TermSymbol}()
+
+"""
+    @term name J
+
+Declare a [`TermSymbol`](@ref), binding it as `_name` in the enclosing module and
+registering it for the `l"..."` macro.
+
+    @term "3P1" 1//1      # binds `_3P1`, registers "3P1"
+
+The leading underscore is why this is a macro: `3P1` is not a legal Julia
+identifier, and `Mod.:3P1` silently parses as `Mod.:(3) * P1` — valid syntax with
+the wrong meaning.
+"""
+macro term(name, J)
+    nm  = name isa String ? name : string(name)
+    sym = Symbol("_", nm)
+    quote
+        local t = TermSymbol($nm, $(esc(J)))
+        local prev = get(TERM_REGISTRY, $nm, nothing)
+        if prev !== nothing && prev.J != t.J
+            error("term \"", $nm, "\" is already registered with J = ", prev.J,
+                  "; cannot redeclare it with J = ", t.J)
+        end
+        TERM_REGISTRY[$nm] = t
+        const $(esc(sym)) = t
+    end
+end
+
+"""
+    l"3P1"
+
+The [`TermSymbol`](@ref) named `3P1`, resolved when the code is parsed — so an
+unknown term fails where it is written rather than becoming a silent `α = 0` at
+run time.
+
+```julia
+g = Level("ground"; term = l"1S0")
+e = HyperfineManifold(1//1, 1; label = "³P₁", term = l"3P1")
+```
+
+Terms are declared with [`@term`](@ref); the species-qualified constants
+(`Ytterbium171._3P1`) name the same objects.
+"""
+macro l_str(name)
+    t = get(TERM_REGISTRY, name, nothing)
+    t === nothing && error("unknown term \"", name, "\"; known terms: ",
+                           join(sort(collect(keys(TERM_REGISTRY))), ", "))
+    return t
+end
+
+#=============================================================================
 CORE TYPES
 =============================================================================#
 """
@@ -30,9 +157,13 @@ struct FineLevel <: AbstractLevel
     mJ::Rational{Int}
     g_J::Float64
     label::String
+    term::String
 end
 
-FineLevel(J, mJ; g_J=1.0, label="") = FineLevel(J, mJ, convert(Float64, g_J), String(label))
+# `term` is appended, so the 4-argument positional form keeps working.
+FineLevel(J, mJ, g_J, label) = FineLevel(J, mJ, g_J, label, "")
+FineLevel(J, mJ; g_J=1.0, label="", term=nothing) =
+    FineLevel(J, mJ, convert(Float64, g_J), String(label), termname(term))
 
 """
     HyperfineLevel <: AbstractLevel
@@ -56,9 +187,13 @@ struct HyperfineLevel <: AbstractLevel
     mF::Rational{Int}
     g_F::Float64
     label::String
+    term::String
 end
 
-HyperfineLevel(F, J, mF; g_F=1.0, label="") = HyperfineLevel(F, J, mF, convert(Float64, g_F), String(label))
+# `term` is appended, so the 5-argument positional form keeps working.
+HyperfineLevel(F, J, mF, g_F, label) = HyperfineLevel(F, J, mF, g_F, label, "")
+HyperfineLevel(F, J, mF; g_F=1.0, label="", term=nothing) =
+    HyperfineLevel(F, J, mF, convert(Float64, g_F), String(label), termname(term))
 
 """
     Level <: AbstractLevel
@@ -70,10 +205,16 @@ Represents a generic atomic level without hyperfine structure (e.g., leak states
 """
 struct Level <: AbstractLevel
     label::String
-    Level(; label="") = new(label)
-    Level(label::AbstractString) = new(label)
+    term::String
+    # A bare Level carries no quantum numbers, so its label doubles as the term
+    # unless one is given explicitly. That is what makes `Level("1S0")` keep
+    # resolving against the species data it always did.
+    Level(; label="", term=nothing) =
+        new(String(label), term === nothing ? String(label) : termname(term))
+    Level(label::AbstractString; term=nothing) =
+        new(String(label), term === nothing ? String(label) : termname(term))
 end
-Base.copy(l::Level) = Level(; label = l.label)
+Base.copy(l::Level) = Level(l.label; term = l.term)
 
 
 #=============================================================================
@@ -233,15 +374,26 @@ Automatically creates all 2F+1 magnetic sublevels.
 """
 struct HyperfineManifold <: AbstractManifold
     F::Rational{Int}
-    J::Rational{Int}      # <-- add this field!
+    J::Rational{Int}
     label::String
     g_F::Float64
     Γ::Float64
+    term::String
     levels::Vector{HyperfineLevel}
 
-    function HyperfineManifold(F, J; label="", g_F=1.0, Γ=0.0)
-        levels = [HyperfineLevel(F, J, mF, g_F, label) for mF in range(-F, F, step=1)]
-        new(F, J, label, g_F, Γ, levels)
+    function HyperfineManifold(F, J; label="", g_F=1.0, Γ=0.0, term=nothing)
+        # A term carries the state's own J. Checking it here turns the classic
+        # HyperfineManifold(F, J) argument-order slip into an error at the point of
+        # declaration rather than a wrong polarizability much later.
+        Jt = termJ(term)
+        if Jt !== nothing && Rational{Int}(J) != Jt
+            error("manifold declares J = $(Rational{Int}(J)) but term " *
+                  "$(termname(term)) has J = $Jt. Check the HyperfineManifold(F, J) " *
+                  "argument order.")
+        end
+        tn = termname(term)
+        levels = [HyperfineLevel(F, J, mF, g_F, label, tn) for mF in range(-F, F, step=1)]
+        new(F, J, label, g_F, Γ, tn, levels)
     end
 end
 
@@ -271,11 +423,18 @@ struct FineManifold <: AbstractManifold
     label::String
     g_J::Float64
     Γ::Float64
+    term::String
     levels::Vector{FineLevel}
-    
-    function FineManifold(J; label="", g_J=1.0, Γ=0.0)
-        levels = [FineLevel(J, mJ, g_J, label) for mJ in range(-J, J, step=1)]
-        new(J, label, g_J, Γ, levels)
+
+    function FineManifold(J; label="", g_J=1.0, Γ=0.0, term=nothing)
+        Jt = termJ(term)
+        if Jt !== nothing && Rational{Int}(J) != Jt
+            error("manifold declares J = $(Rational{Int}(J)) but term " *
+                  "$(termname(term)) has J = $Jt.")
+        end
+        tn = termname(term)
+        levels = [FineLevel(J, mJ, g_J, label, tn) for mJ in range(-J, J, step=1)]
+        new(J, label, g_J, Γ, tn, levels)
     end
 end
 
