@@ -261,7 +261,6 @@ function _init_species_data!(a::AtomWrapper, inner::NLevelAtom, beams)
     for λ in wavelengths
         α_si = map(a.levels) do l
             if haskey(models, l.label)
-                @info "Populating '$(l.label)' at λ = $(round(λ, sigdigits=3)*1e9)nm, α = $(round(polarizability_si(models[l.label], λ * 1e9), sigdigits=3)) SI" maxlog=1
                 polarizability_si(models[l.label], λ * 1e9)
             else
                 @warn "Polarizability model not found for level '$(l.label)'; defaulting to α = 0.0" maxlog=1

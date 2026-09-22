@@ -334,14 +334,12 @@ struct StarkShiftAC{A} <: AbstractField
     q_axis::Vector{Float64}
 
     function StarkShiftAC(b::Basis, atom, lvl, beam::AbstractBeam, q_axis::Vector{Float64}; tensor_shift = true, F = 0//1, mF = 0//1)
-        @info "TEMP: Building StarkShiftAC term!" maxlog=1
         H = Op(b, atom, lvl => lvl, 1.0)    # level projector H = |lvl⟩⟨lvl|
         alphas = atom.alpha[getwavelength(beam)]
         alpha = alphas[lvl]# - mean(alphas)
 
         alphas2 = atom.alpha2[getwavelength(beam)]
         alpha2 = alphas2[lvl]
-        @info "alpha = $(round(alpha, sigdigits=3)), alpha2 = $(round(alpha2, sigdigits=3))" maxlog=3
 
         num = (3*mF^2 - F*(F + 1))
         denom = (F*(2*F - 1))
@@ -352,8 +350,6 @@ struct StarkShiftAC{A} <: AbstractField
             tensor_shift = false
             hyperfine_coeff = 0//1
         end
-        
-        @info "Beam polarisation $(beam.pol), quant. axis $(q_axis)"
 
 
         new{typeof(atom)}(atom, lvl, H, beam, alpha, alpha2, tensor_shift, hyperfine_coeff, Ref(Complex(0.0)), q_axis)
@@ -361,7 +357,7 @@ struct StarkShiftAC{A} <: AbstractField
 end
 
 
-# TEMP: This is where I must add tensor lightshift calculation
+
 """
     update!(f::StarkShiftAC, step)
 

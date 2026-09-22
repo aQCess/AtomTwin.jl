@@ -20,7 +20,15 @@ pulse_duration = 10µs           # Pulse duration (s)
 dt             = 1ns            # Time step (s)
 
 
+B_vec = [-1.0, 0.0, 0.0]
 
+k_tweezer = [0, 1.0, 0]         # Tweezer propagation axis
+λ_tweezer = 767nm               # Tweezer wavelength (m)
+waist_pos = [0., 0., 0.]        # Waist position
+waist_tweezer = 1.5μm           # Waist size
+P_tweezer = 5mW                 # Tweezer total power
+# Polarization vector for tweezer
+pol_tweezer = [-cos(p_angle * π/180), 0, sin(p_angle * π/180)]
 
 # Green Mot transition 1S0 -> 3P1
 # Has tensor light-shift
@@ -29,7 +37,7 @@ dt             = 1ns            # Time step (s)
 
 
 
-
+# ## Define atom
 g = HyperfineLevel(0, 0, 0, 0.0, "1S0")
 e = HyperfineLevel(1, 1, 0, 0.0, "3P1")
 
@@ -39,18 +47,9 @@ atom = Ytterbium174Atom(;
     v_init = maxwellboltzmann(T = temperature),
 )
 
-B_vec = [-1.0, 0.0, 0.0]
 
-k_tweezer = [0, 1.0, 0] # along y
-λ_tweezer = 767nm
-waist_pos = [0., 0., 0.]
-
-waist_tweezer = 1.5μm
-P_tweezer = 5mW
-pol_tweezer = [-cos(p_angle * π/180), 0, sin(p_angle * π/180)]
-
-
-
+# Important to define tweezer as a GeneralGaussianBeam
+# GaussianBeam does not have polarisation property
 tweezer = GeneralGaussianBeam(
     λ_tweezer,
     waist_tweezer,
@@ -62,8 +61,7 @@ tweezer = GeneralGaussianBeam(
 )
 
 
-
-# Build the full system
+# ##  Build the full system
 system = System(atom, tweezer)
 coupling = add_coupling!(system, atom, g => e, Ω; active = false)
 
@@ -77,7 +75,6 @@ lightshifts = add_lightshifts!(system, active = true; q_axis = B_vec)
 # ## Build Sequence
 #
 # We measure the excited–state population
-
 add_detector!(system, PopulationDetectorSpec(atom, e; name = "P_e"))
 
 seq = Sequence(dt)
@@ -85,14 +82,13 @@ seq = Sequence(dt)
     Pulse(coupling, pulse_duration)
 end
 
-
 # ## Run simulations
 out = play(system, seq; initial_state = g, shots = 100)
 
 # ## Plot results
-#
+# The closer we are to a magic angle for 767nm, 
+# the more "full" the Rabi oscillations will appear
 tlist = out.times
-
 
 # Expected Rabi oscillation for zero detuning
 Pe_theoretical = 0.5.*(1.0 .- cos.(Ω .* tlist))
