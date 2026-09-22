@@ -83,3 +83,7 @@ end
 Return a vector containing the beam pb
 """
 getbeams(pb::PlanarBeam) = AbstractBeam[pb]
+
+# See `peak_intensity(::GaussianBeam)`. A plane wave is uniform, so its peak is
+# its intensity.
+peak_intensity(pb::PlanarBeam) = pb.I

@@ -742,11 +742,17 @@ end
         end
         job = compile(sys, seq)
         fs = [f for f in job.fields if f isa StarkShiftAC]
-        # The coefficient is α I/(c ε₀ ħ) at the atom — an angular frequency.
+        # The applied shift is α I/(c ε₀ ħ) at the atom — an angular frequency.
         # NOT α I/ħ: this assertion previously encoded that error, which is why
-        # it never caught it. Anchored to the trap depth instead, below.
+        # it never caught it. Anchored to the trap depth as well, below.
+        #
+        # Read the shift as `H` value × coefficient rather than from `_coeff`
+        # alone: the magnitude lives in the operator and `_coeff` carries only
+        # the intensity envelope, so that `spectral_spec` can bound this term
+        # (see `recenter!`). The physics is the product, either way.
+        shift(f) = real(f.H.forward[1][3] * f._coeff[])
         AtomTwin.Dynamiq.update!(fs[end], 1)
-        @test isapprox(real(fs[end]._coeff[]),
+        @test isapprox(shift(fs[end]),
                        fs[end].alpha * AtomTwin.Dynamiq.intensity(tw, sr.inner.x) /
                        (AtomTwin.Units.c * AtomTwin.Units.ε0 * AtomTwin.Units.hbar);
                        rtol = 1e-12)
@@ -755,8 +761,7 @@ end
             U0 = AtomTwin.polarizability_si(AtomTwin.SR88_POLARIZABILITY_1S0, 520.0) *
                  tw.I0 / (AtomTwin.Units.c * AtomTwin.Units.ε0)
             AtomTwin.Dynamiq.update!(fs[1], 1)
-            @test isapprox(abs(real(fs[1]._coeff[])), U0 / AtomTwin.Units.hbar;
-                           rtol = 1e-9)
+            @test isapprox(abs(shift(fs[1])), U0 / AtomTwin.Units.hbar; rtol = 1e-9)
         end
         explicit && @test fs[1].alpha == 0.0      # reference = g sits at zero
         length(fs)

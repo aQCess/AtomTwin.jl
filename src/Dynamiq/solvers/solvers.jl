@@ -247,6 +247,9 @@ function tdse_semiclassical(psi::Vector{ComplexF64},
                 update!(f, i)
             end
         end
+        # The atoms just moved, so the trap light shift moved with them. Track
+        # the spectrum's centre; ΔE and the Bessel coefficients stay put.
+        recenter!(plan, H)
         propagate!(integrator, psi, H, plan)
         has_detectors && write_detectors!(detectors, i, steps, downsample)
     end
@@ -589,6 +592,10 @@ function wfmc_semiclassical(psi::Vector{ComplexF64},
                 update!(f, i)
             end
         end
+        # The atoms just moved, so the trap light shift moved with them. Track
+        # the spectrum's centre; ΔE and the Bessel coefficients stay put. Hoisted
+        # out of the sub-step loop: only the drives vary inside it, not positions.
+        recenter!(plan, Heff_terms)
         t0 = (i - 1) * dt
         for q in 1:nsub
             # Drives are read at each sub-step's own midpoint, not frozen across

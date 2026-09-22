@@ -363,13 +363,13 @@ dominates a small step, so hoisting it is what makes short steps cheap.
 
 The plan owns its workspace; stepping through a built plan allocates nothing.
 """
-struct ChebyshevPlan <: IntegratorPlan
-    ws::ChebyshevWorkspace
-    dt::Float64
-    ΔE::Float64
-    Ē::Float64
-    deg::Int
-    degenerate::Bool
+mutable struct ChebyshevPlan <: IntegratorPlan
+    const ws::ChebyshevWorkspace
+    const dt::Float64
+    const ΔE::Float64
+    Ē::Float64                  # see `recenter!`: refreshed per step, not per plan
+    const deg::Int
+    const degenerate::Bool
 end
 
 function ChebyshevPlan(dt::Float64, Emin::Float64, Emax::Float64,
@@ -391,6 +391,59 @@ function ChebyshevPlan(dt::Float64, Emin::Float64, Emax::Float64,
     end
     return ChebyshevPlan(ws, dt, ΔE, Ē, deg, false)
 end
+
+"""
+    recenter!(plan::ChebyshevPlan, terms) -> plan
+
+Move the plan's expansion centre `Ē` to the current spectrum of `terms`, keeping
+its Bessel coefficients.
+
+# Why this exists
+
+The Chebyshev expansion is built about a centre `Ē` and a half-width `ΔE`:
+
+    exp(-iH dt)ψ = e^{-iĒdt} Σ_k c_k(ΔE·dt) T_k((H - Ē)/ΔE) ψ
+
+and it converges only while the spectrum of `H` stays inside `[Ē-ΔE, Ē+ΔE]`. A
+plan is built once per instruction because `ΔE·dt` and `tol` are fixed, and the
+coefficients `c_k` -- Miller's recurrence, the expensive part -- depend on
+nothing else.
+
+`Ē`, though, is not fixed when the Hamiltonian follows the atom. A trapped atom
+crossing its tweezer sweeps the trap light shift over its whole range: for a
+50 mW, 1 µm tweezer on Yb-171 the centre moves by 1.8e8 rad/s -- 176 radians per
+step -- while the half-width, set by the much smaller *differential* shift,
+barely moves at all. The expansion is then evaluated far outside its domain,
+where Chebyshev polynomials grow exponentially, and the trajectory diverges.
+
+The two fixes that do not work are worth recording. Bounding the light shift
+conservatively over its whole range takes `ΔE·dt` from 0.53 to 88.8 and the
+degree from 9 to 169, penalising every trapped simulation. Rebuilding the plan
+each step costs 7.3 µs against a 95 ns propagate, because it redoes the Bessel
+series.
+
+Refreshing `Ē` alone is neither: it enters only as a scalar in the recurrence
+and as the global phase `e^{-iĒdt}`, never inside `c_k`, so it costs one
+`gershgorin_interval` sweep -- O(nnz), no allocation -- and leaves the expensive
+work hoisted.
+
+Uses the instantaneous coefficients (`peak = false`): the centre must sit where
+the spectrum actually is, not where a switched-on coupling would put it.
+"""
+function recenter!(plan::ChebyshevPlan,
+                   terms::Vector{Tuple{Base.RefValue{ComplexF64},Op}})
+    lo, hi = gershgorin_interval(terms; peak = false)
+    plan.Ē = (lo + hi) / 2
+    return plan
+end
+
+"""
+    recenter!(plan, terms) -> plan
+
+No-op for schemes that need no spectral centre. See the `ChebyshevPlan` method
+for what recentering is and why it is needed.
+"""
+recenter!(plan::IntegratorPlan, ::Any) = plan
 
 """
     chebyshev!(ψ, terms, dt, Emin, Emax; tol = 1e-12, ws = nothing)

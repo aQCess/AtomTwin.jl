@@ -344,10 +344,20 @@ struct StarkShiftAC{A} <: AbstractField
     _coeff::Base.RefValue{ComplexF64}
 
     function StarkShiftAC(b, atom, lvl, beam; reference = nothing)
-        H = Op(b, atom, lvl => lvl, 1.0)
         alphas = atom.alpha[getwavelength(beam)]
         alpha = reference === nothing ? alphas[lvl] :
                                         alphas[lvl] - alphas[reference]
+        # The PEAK shift goes into `H`; `_coeff` carries only the intensity
+        # envelope, which is in [0,1]. That is the `Detuning` convention, and
+        # `spectral_spec` depends on it: it bounds the spectrum once per
+        # instruction from the operator values and the coefficients as they
+        # stand, inflating only the OFF-DIAGONAL radius for later switching
+        # (`peak = true`). A diagonal term hiding its magnitude in `_coeff`
+        # is invisible to that bound, so the Chebyshev plan is built for an
+        # interval the Hamiltonian then leaves -- and the expansion is
+        # evaluated far outside its domain, where it diverges.
+        peak = alpha * peak_intensity(beam) / (c * ε0 * hbar)
+        H = Op(b, atom, lvl => lvl, peak)
         new{typeof(atom)}(atom, lvl, H, beam, alpha, Ref(Complex(0.0)))
     end
 
@@ -356,10 +366,21 @@ struct StarkShiftAC{A} <: AbstractField
         new{A}(atom, lvl, H, beam, alpha, coeff)
 end
 
-# Rebuild with a refreshed α, reusing the operator and basis. Used per shot, when
-# `initialize!` has recomputed `atom.alpha` but nothing structural has changed.
-StarkShiftAC(f::StarkShiftAC{A}, α::Float64) where {A} =
-    StarkShiftAC{A}(f.atom, f.level, f.H, f.beam, α, Ref(f._coeff[]))
+# Rebuild with a refreshed α. Used per shot, when `initialize!` has recomputed
+# `atom.alpha` but nothing structural has changed.
+#
+# The operator carries the peak shift (see the constructor), so it has to be
+# rescaled with α rather than reused: keeping the old `H` alongside a new α
+# would leave the two describing different shifts.
+function StarkShiftAC(f::StarkShiftAC{A}, α::Float64) where {A}
+    # Rebuild the operator from the new α rather than rescaling the old one:
+    # the peak is an absolute quantity, and dividing by the previous α would
+    # produce a NaN whenever a level's polarizability was zero.
+    peak = α * peak_intensity(f.beam) / (c * ε0 * hbar)
+    H    = Op([(f.level, f.level, ComplexF64(peak))],
+              Tuple{Int,Int,ComplexF64}[], f.H.dim)
+    StarkShiftAC{A}(f.atom, f.level, H, f.beam, α, Ref(f._coeff[]))
+end
 
 """
     update!(f::StarkShiftAC, step)
@@ -374,7 +395,12 @@ function update!(f::StarkShiftAC{A}, ::Real) where A
     # impedance, 376.73, and it made every trap light shift ~380x too small.
     # This was unexercised until `add_light_shift!` existed: StarkShiftAC shipped
     # in v0.1.0 but was never constructed anywhere.
-    f._coeff[] = f.alpha * intensity(f.beam, f.atom.x) / (c * ε0 * hbar)
+    #
+    # The magnitude lives in `H` (see the constructor); what varies per step is
+    # the intensity envelope at the atom's position, which is in [0,1]. Keeping
+    # the coefficient O(1) is what lets `spectral_spec` bound this term.
+    I0 = peak_intensity(f.beam)
+    f._coeff[] = I0 == 0 ? 0.0 : intensity(f.beam, f.atom.x) / I0
     return nothing
 end
 

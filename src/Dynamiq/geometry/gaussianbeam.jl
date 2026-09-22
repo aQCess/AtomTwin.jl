@@ -283,6 +283,18 @@ Return the beam wavelength in meters.
 getwavelength(gb::GaussianBeam) = gb.λ
 
 """
+    peak_intensity(beam) -> Float64
+
+The largest intensity `beam` can present to an atom, in W/m².
+
+Used to split a position-dependent field into a fixed magnitude and an envelope
+in [0,1] -- `StarkShiftAC` does this so that `spectral_spec` can bound its
+diagonal contribution, which it cannot do if the magnitude hides in a
+per-step coefficient.
+"""
+peak_intensity(gb::GaussianBeam) = gb.I0
+
+"""
     getposition(gb::GaussianBeam) -> Vector{Float64}
 
 Return the beam center position vector `gb.r0`.
@@ -530,6 +542,7 @@ end
 Return the beam wavelength in meters.
 """
 getwavelength(gb::GeneralGaussianBeam) = gb.λ
+peak_intensity(gb::GeneralGaussianBeam) = gb.I0
 
 """
     getposition(gb::GeneralGaussianBeam) -> Vector{Float64}
