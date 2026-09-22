@@ -14,10 +14,10 @@ using Plots
 Ω              = 2π * 1MHz      # Rabi frequency (rad/s)
 temperature    = 5µK            # Initial temperature (K)
 # For tweezer at 767nm, 40.92° is magic
-p_angle        =  20          # Angle of linear polarization axis w.r.t B (°)
+p_angle        =  90.           # Angle of linear polarization axis w.r.t B (°)
 
-pulse_duration = 10µs          # Pulse duration (s)
-dt             = 10ns            # Time step (s)
+pulse_duration = 10µs           # Pulse duration (s)
+dt             = 1ns            # Time step (s)
 
 
 
@@ -68,6 +68,7 @@ system = System(atom, tweezer)
 coupling = add_coupling!(system, atom, g => e, Ω; active = false)
 
 # Currently we need to initialize the system in order to compute the polarizability values
+# This is not what we want long term
 initialize!(atom; beams=[tweezer])
 lightshifts = add_lightshifts!(system, active = true; q_axis = B_vec)
 
