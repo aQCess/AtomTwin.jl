@@ -143,8 +143,12 @@ end
 
 Δ_peak   = Δ_centre[2] / 1e6                     # MHz, at the trap centre
 δ_span   = 2π * 7MHz                             # ≈1.7 Zeeman splittings either side
-δs       = range(2π * Δ_peak * 1e6 - δ_span,
-                 2π * Δ_peak * 1e6 + δ_span; length = 61)   #src
+# Coarser under test, so the suite stays quick; the published example scans the
+# full 161 points. BOTH lines of the test-resolution call carry `#src` -- a
+# continuation line stripped without its opening line leaves a dangling `range(`
+# in the generated example, which then does not parse.
+δs       = range(2π * Δ_peak * 1e6 - δ_span,                          #src
+                 2π * Δ_peak * 1e6 + δ_span; length = 61)             #src
 if false                                                    #src
 δs       = range(2π * Δ_peak * 1e6 - δ_span,
                  2π * Δ_peak * 1e6 + δ_span; length = 161)
