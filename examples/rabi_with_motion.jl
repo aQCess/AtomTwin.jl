@@ -41,9 +41,17 @@ atom = Ytterbium171Atom(;
 
 display(atom)
 
-# Single-site tweezer array with specified geometry and powers
+# Single-site tweezer array with specified geometry and powers.
+#
+# 759.40 nm is where the shipped Yb-171 models cross, i.e. the magic wavelength
+# for ¹S₀–³P₀: both states take the same shift and the transition frequency does
+# not move with the trap. The conventional round number 759 nm is 0.4 nm off that
+# crossing, which leaves a 69 kHz differential shift at this depth -- larger than
+# the 50 kHz Rabi frequency here, so it would visibly detune the oscillation.
+# That sensitivity is the point of a magic trap, and it only became observable
+# once a trapping beam started shifting the levels it traps.
 tweezer = GaussianBeam(
-    λ    = 759nm,
+    λ    = 759.40nm,
     w0   = 1.0µm,
     P   = 50mW
 )
