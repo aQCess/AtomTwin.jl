@@ -24,6 +24,17 @@ HyperfineLevel
 Superposition
 ```
 
+### Term symbols
+
+A level's `term` is what binds it to a polarizability model, so it is matched by
+spectroscopic term rather than by display label.
+
+```@docs
+TermSymbol
+@term
+@l_str
+```
+
 ### Manifold types
 ```@docs
 AbstractManifold

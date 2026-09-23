@@ -66,7 +66,7 @@ matters:
 
 - A **`gamma_MHz`** line is a physical decay rate `Γ(J,J')`, so its angular-momentum
   weight is still outstanding and is computed as `f(J,J')` (see
-  [`_line_strength_factor`](@ref)). With the defaults `J = 0`, `J_f = 1` this gives
+  `_line_strength_factor`). With the defaults `J = 0`, `J_f = 1` this gives
   `f = 3`, which is what the scalar sum assumed implicitly before these fields
   existed — hence every pre-existing `¹S₀`/`³P₀` model is unchanged. A state with
   `J > 0`, notably `³P₁`, **must** declare `J` and `J_f`: a line *below* it in
@@ -225,7 +225,7 @@ Light-shift contribution from a single electric-dipole transition.
 
 # Arguments
 - `ω0`: Transition angular frequency [rad/s]. Use `|ω₀|`; the sign of the
-  transition frequency enters through `f` (see [`_line_strength_factor`](@ref)).
+  transition frequency enters through `f` (see `_line_strength_factor`).
 - `Γ` : Radiative linewidth (angular) [rad/s].
 - `ωL`: Laser angular frequency [rad/s].
 - `f` : Angular-momentum line-strength factor; `3` for a `J=0 → J'=1` line.
