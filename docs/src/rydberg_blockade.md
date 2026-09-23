@@ -69,8 +69,18 @@ resonant pulse to both atoms simultaneously.
 ````julia
 add_detector!(system, PopulationDetectorSpec(atom1, r; name = "P_r1"))
 add_detector!(system, PopulationDetectorSpec(atom2, r; name = "P_r2"))
+````
 
-seq = Sequence(dt)
+`dt` is the OUTPUT grid, not the accuracy knob -- the solver picks its own
+sub-steps from `tol`. Twenty points per oscillation resolves it cleanly;
+without a `dt` a sequence records one sample per instruction.
+
+Under blockade the pair oscillates at `√2 Ω`, not `Ω` -- that enhancement is
+the effect this example exists to show -- so the grid is set from the faster
+rate. Sizing it from `Ω` alone gives 14 points per period instead of 20.
+
+````julia
+seq = Sequence(2π / (20 * √2 * Ω); tol = 1e-4)
 @sequence seq begin
     Pulse([coupling1, coupling2], pulse_duration)
 end

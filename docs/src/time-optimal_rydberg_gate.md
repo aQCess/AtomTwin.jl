@@ -160,11 +160,24 @@ amplitudes = cis.(-[0,
 ````
 
 Build a pulse sequence with time-dependent amplitudes
+`dt` is the output grid. Without it a sequence records one sample per
+instruction -- 42 points here -- and the two Rydberg peaks land on
+different parts of their bins, which made the plotted asymmetry come out
+with the wrong sign (second peak 0.0161 HIGHER, against a converged
+0.0194 lower). The waveform has 98 holds, so four output points per hold
+resolves it.
 
 ````julia
-seq = Sequence(dt)
+seq = Sequence(pulse_duration / 392; tol = 1e-4)
 @sequence seq begin
-    Pulse(couplings, pulse_duration; amplitudes=amplitudes)
+````
+
+`interp = :constant`: this waveform is a list of hold values, exactly what
+an AWG emits. Reading it as a smooth curve would round the corners the
+optimiser deliberately put there.
+
+````julia
+    Pulse(couplings, pulse_duration; amplitudes=amplitudes, interp=:constant)
 end
 ````
 

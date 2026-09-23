@@ -59,10 +59,28 @@ This installs dependencies for AtomTwin, Dynamiq, and the documentation/examples
 To run the tests:
 
 ```bash
-ATOMTWIN_RUN_EXAMPLES=true julia --project=. -e 'using Pkg; Pkg.test("AtomTwin")'
+julia --project=. -e 'using Pkg; Pkg.test("AtomTwin")'
 ```
 
-This should exercise AtomTwin’s tests, including checks tied to `test/examples_src`.
+To also run the examples, which print a runtime and checksum per script:
+
+```bash
+ATOMTWIN_RUN_EXAMPLES=true julia -t10 --project=. -e 'using Pkg; Pkg.test("AtomTwin")'
+```
+
+This exercises the checks tied to `test/examples_src`.
+
+If you are reading those runtimes, add `--check-bounds=auto`:
+
+```bash
+ATOMTWIN_RUN_EXAMPLES=true julia -t10 --project=. \
+  -e 'using Pkg; Pkg.test("AtomTwin"; julia_args=["--check-bounds=auto"])'
+```
+
+`Pkg.test` otherwise forces `--check-bounds=yes`, which overrides every
+`@inbounds` in the package — including the solver hot loops — and inflates the
+reported runtimes about 2.5x. Checksums are unaffected, and the test suite says
+so when it applies, so there is no need to remember this.
 
 ***
 

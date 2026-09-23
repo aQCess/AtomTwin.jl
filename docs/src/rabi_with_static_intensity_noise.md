@@ -10,7 +10,7 @@ over many trajectories.
 
 ````julia
 using AtomTwin
-using StatsBase
+using Statistics
 using Plots
 ````
 
@@ -20,7 +20,6 @@ using Plots
 Ω = Parameter(:Ω, 2π * 0.5e6; std = 2π * 0.05e6)   # Rabi frequency (rad/s)
 
 pulse_duration = 10e-6   # Total pulse duration (s)
-dt             = 5e-9    # Time step (s)
 ````
 
 ## System construction
@@ -46,8 +45,15 @@ We record the excited-state population and also register a motion detector
 ````julia
 add_detector!(system, PopulationDetectorSpec(atom, e; name = "P_e"))
 add_detector!(system, MotionDetectorSpec(atom; dims = [1, 2], name = "atom"))
+````
 
-seq = Sequence(dt)
+`dt` is the OUTPUT grid, not the accuracy knob -- the solver picks its own
+sub-steps from `tol`. Twenty points per Rabi period resolves the
+oscillation cleanly; without a `dt` a sequence records one sample per
+instruction.
+
+````julia
+seq = Sequence(2π / (20 * Ω.default); tol = 1e-4)
 @sequence seq begin
     Pulse(coupling, pulse_duration)
 end

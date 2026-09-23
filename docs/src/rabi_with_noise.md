@@ -9,7 +9,7 @@ this noise damps the Rabi oscillations compared to the ideal coherent case.
 
 ````julia
 using AtomTwin
-using StatsBase
+using Statistics
 using Plots
 ````
 
@@ -66,9 +66,13 @@ add_detector!(system, FieldDetectorSpec(coupling; name = "coupling"))
 ````
 
 Build the sequence and play the simulation using quantum trajectories
+`dt` is the OUTPUT grid, not the accuracy knob -- the solver picks its own
+sub-steps from `tol`. Twenty points per Rabi period resolves the
+oscillation cleanly; without a `dt` a sequence records one sample per
+instruction.
 
 ````julia
-seq = Sequence(dt)
+seq = Sequence(2π / (20Ω); tol = 1e-4)
 @sequence seq begin
     Pulse(coupling, pulse_duration)
 end
@@ -94,6 +98,8 @@ h0    = noise_model.powerlaw_ampl
 hg    = noise_model.bump_ampl
 fg    = noise_model.bump_center
 sigma = noise_model.bump_width
+
+Omega_eff = Ω
 
 Gamma = 0.5 * (
     h0 +
@@ -124,8 +130,13 @@ Plots.plot!(plt, t_us, mean(P_excited, dims = 2);
         color = :black,
         linewidth = 3,
         label = "Quantum trajectories (mean)")
+````
 
-Plots.plot!(plt, t_us, 0.5 .+ 0.5 .* exp.(-Gamma .* tlist);
+P_e(t) = ½(1 − cos(Ωt)·e^{−Γt}) for an atom starting in |g⟩: the phase noise
+damps the oscillation toward ½ rather than decaying a population from 1.
+
+````julia
+Plots.plot!(plt, t_us, 0.5 .* (1 .- cos.(Omega_eff .* tlist) .* exp.(-Gamma .* tlist));
         color = :blue,
         linewidth = 3,
         label = "Analytical damping model")

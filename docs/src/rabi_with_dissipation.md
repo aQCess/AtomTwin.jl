@@ -10,7 +10,7 @@ We compare two simulation methods:
 
 ````julia
 using AtomTwin
-using StatsBase
+using Statistics
 using Plots
 ````
 
@@ -50,8 +50,15 @@ Register population detector on |e⟩
 
 ````julia
 add_detector!(system, PopulationDetectorSpec(atom, e; name = "P_e"))
+````
 
-seq = Sequence(dt)
+`dt` is the OUTPUT grid, not the accuracy knob -- the solver picks its own
+sub-steps from `tol`. Twenty points per Rabi period resolves the
+oscillation cleanly; without a `dt` a sequence records one sample per
+instruction.
+
+````julia
+seq = Sequence(2π / (20Ω); tol = 1e-4)
 @sequence seq begin
     Pulse(coupling, pulse_duration)
 end
@@ -62,7 +69,6 @@ end
 ````julia
 out_me = play(system, seq; initial_state = g, density_matrix = true) # master equation
 out_qt = play(system, seq; initial_state = g, shots = 400) # quantum trajectories
-end
 ````
 
 ## Plot results

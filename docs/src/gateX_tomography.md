@@ -9,7 +9,7 @@ visualize the complex Choi matrix as a 3D “cityscape” plot.
 
 ````julia
 using AtomTwin
-using StatsBase, LinearAlgebra
+using Statistics, LinearAlgebra
 using GLMakie, Colors
 ````
 
@@ -45,7 +45,7 @@ is registered for convenience (not strictly needed for the tomography).
 ````julia
 add_detector!(system, PopulationDetectorSpec(atom, e; name = "P_e"))
 
-seq = Sequence(dt)
+seq = Sequence(; tol = 1e-4)
 @sequence seq begin
     Pulse(coupling, pulse_duration)
 end

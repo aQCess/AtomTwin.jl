@@ -16,7 +16,7 @@ using Plots
 Δ = 2π * -6.7e6
 
 Gamma = 2π * 6.035e6          # Decay rate
-B = 2.0G
+B = 2.0Units.G                      # gauss (Units is exported by AtomTwin)
 
 pulse_duration = 0.5e-6        # seconds
 dt = 1e-9
@@ -92,9 +92,12 @@ end
 ````
 
 Here we use a repeated sequence of 20 pulses alternating between laser and mw couplings
+`tol` bounds the error of one integration step; the error accumulated over
+the run is larger. This value is calibrated so the global error of the
+result below is about 1e-4 (measured 1.0e-04 against a tol = 1e-9 reference).
 
 ````julia
-seq = Sequence(dt)
+seq = Sequence(; tol = 1e-3)
 @sequence seq begin
     for _ in 1:20
         Pulse(vcat(coupling22,coupling23), pulse_duration)
