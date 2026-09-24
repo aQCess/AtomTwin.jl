@@ -450,8 +450,7 @@ end
 
 The `(3|ε_z|² − 1)/2` factor, with `ε_z` the projection of the (linear)
 polarisation unit vector onto the quantisation axis. It is `1` for polarisation
-along the axis, `−1/2` for polarisation perpendicular to it, and vanishes at the
-magic angle `acos(1/√3) ≈ 54.7356°`.
+along the axis, `−1/2` for polarisation perpendicular to it, and vanishes at the angle `acos(1/√3) ≈ 54.7356°`.
 """
 _polarization_factor(ε_z::Real) = (3 * abs2(ε_z) - 1) / 2
 

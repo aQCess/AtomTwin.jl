@@ -34,18 +34,7 @@ mutable struct GaussianBeam <: AbstractBeam
     _coeff::Base.RefValue{ComplexF64}
 end
 
-"""
-    GaussianBeam(λ, w0, P; r0 = [0, 0, 0])
 
-Construct a `GaussianBeam` from wavelength, transverse waist, and power.
-
-- `λ::Float64`: Wavelength (m).
-- `w0::Float64`: Waist radius (m).
-- `P::Float64`: Optical power (W).
-- `r0::Vector{Float64}`: Beam center position (default `[0, 0, 0]`).
-
-`I0` and `w0z` are derived automatically from these parameters.
-"""
 # Normalise a user polarization to a unit complex 3-vector.
 function _unit_pol(pol)
     p = ComplexF64.(pol)
@@ -55,6 +44,19 @@ function _unit_pol(pol)
     return p ./ n
 end
 
+"""
+    GaussianBeam(λ, w0, P; r0 = [0, 0, 0], pol = [1, 0, 0])
+
+Construct a `GaussianBeam` from wavelength, transverse waist, and power.
+
+- `λ::Float64`: Wavelength (m).
+- `w0::Float64`: Waist radius (m).
+- `P::Float64`: Optical power (W).
+- `r0::Vector{Float64}`: Beam center position (default `[0, 0, 0]`).
+- `pol::Vector{Complex}`: Complex polarization vector in global coordinates
+
+`I0` and `w0z` are derived automatically from these parameters.
+"""
 function GaussianBeam(λ::Float64, w0::Float64, P::Float64;
                       r0 = [0.0, 0.0, 0.0],
                       pol = ComplexF64[1.0, 0.0, 0.0])
@@ -64,7 +66,7 @@ function GaussianBeam(λ::Float64, w0::Float64, P::Float64;
 end
 
 """
-    GaussianBeam(; λ, w0, P, r0 = [0, 0, 0])
+    GaussianBeam(; λ, w0, P, r0 = [0, 0, 0], pol = [1, 0, 0])
 
 Keyword-only constructor for `GaussianBeam`. Parameters are the same
 as the positional constructor.
