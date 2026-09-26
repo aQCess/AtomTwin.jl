@@ -101,9 +101,9 @@ Two separate errors set the sub-step `h`, and the smaller bound wins:
 Bounding only (1) makes the trajectory mean depend on the user's sampling `dt`,
 which it must not: with `Γmax = 2π×182 kHz` and a 2 MHz detuning, `jtol = 1e-2`
 permits `ΔE·h = 3.3` and overestimates the off-resonant population **7×**, while
-the master equation is exact at every `dt`. See `bugs/mcwf-jtol-underresolves.jl`
-in the harness. `ΔE = 0` recovers the old behaviour for callers that have no
-spectral estimate.
+the master equation is exact at every `dt` (regression test: "MCWF is
+independent of the sampling step"). `ΔE = 0` recovers the old behaviour for
+callers that have no spectral estimate.
 
 `THETA_JUMP` is the tolerated rotation per sub-step. It is not a fitted
 constant: at `ΔE·h = 1` the timing error is a radian, and the measured bias is
@@ -131,16 +131,6 @@ end
 # Master equation evolution (QME)
 #------------------------------------------------------------------------------
 
-# Re-evaluate every time-dependent modifier at instruction time `t`. A no-op
-# when there are none, which is the common case.
-@inline function _resample!(modifiers, t::Float64)
-    isempty(modifiers) && return
-    @inbounds for m in modifiers
-        update!(m, t)
-    end
-    return
-end
-
 # A staircase is a LEFT-held value: sample `k` is in force from its own time
 # until the next one, which is what an AWG does and what
 # `interpolate_piecewise_constant` did. Reading it at the step midpoint shifts
@@ -165,6 +155,8 @@ end
     return false
 end
 
+# Re-evaluate every time-dependent modifier for a (sub-)step of length `h`
+# centred on `tmid`. A no-op when there are none, which is the common case.
 @inline function _resample!(modifiers, tmid::Float64, h::Float64)
     isempty(modifiers) && return
     @inbounds for m in modifiers
@@ -247,7 +239,7 @@ end
 StrangControl(n::Int) = StrangControl(1, false, 0.0, 0.0, false, 0, NoProbe(),
                                       (zeros(ComplexF64, n, n) for _ in 1:4)...)
 
-const _STRANG_CTL = ThreadCache{StrangControl}(StrangControl)
+const _STRANG_CTL = _engine_cache(ThreadCache{StrangControl}(StrangControl))
 
 """
     strang_control(n) -> StrangControl
@@ -357,7 +349,12 @@ function strang_substeps!(dt::Float64,
                           order::Int,
                           modifiers = (),
                           t0::Float64 = 0.0)
-    isempty(Jlist) && (fquantum!(dt, ρ, Hlist, _ρ1, _ρ2; order = order); return 1)
+    # No jumps is NOT a shortcut to one `fquantum!(dt, …)`: that is a single
+    # Taylor step with no error control and a hard stability limit at
+    # ‖H‖·dt ≈ 2.8, past which ρ diverges silently. With `Jlist` empty the Strang
+    # step reduces to two Taylor half-steps (`fdissipator2!` returns at once), so
+    # the controller below applies unchanged and sub-divides `dt` as `tol` needs.
+    #
     # No Hamiltonian: `fdissipator2!` applies the dissipator as an exact channel
     # at any step size, so there is no splitting error to control and no `k` that
     # would improve it.

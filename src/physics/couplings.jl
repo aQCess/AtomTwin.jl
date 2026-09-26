@@ -9,20 +9,24 @@ and Clebsch–Gordan factors to obtain the correct matrix elements.
 Update the Rabi rate of a `GlobalCoupling` by rescaling its operator entries.
 Called by `compile`/`recompile!` for parameter bindings.
 """
-function update!(c::GlobalCoupling, ::Val, val::Number)
+function update!(c::Union{GlobalCoupling, PlanarCoupling, Interaction}, ::Val, val::Number)
     new_rate = ComplexF64(val)
-    if c.rate != 0
-        scale = new_rate / c.rate
-        for k in eachindex(c.H.forward)
-            i, j, v = c.H.forward[k]
-            c.H.forward[k] = (i, j, v * scale)
-        end
-        for k in eachindex(c.H.reverse)
-            i, j, v = c.H.reverse[k]
-            c.H.reverse[k] = (i, j, v * scale)
-        end
-    end
+    c.rate != 0 && Dynamiq.rescale!(c.H, new_rate / c.rate)
     c.rate = new_rate
+end
+
+# Set a JOB's field to a newly sampled rate. It is rescaled from its own `rate`,
+# never from state on the (shared) node: each thread of a multi-shot run holds a
+# deep copy of the job, and shots must not compound. A field at rate 0 has zero
+# entries and cannot be rescaled, so it takes its structure from the node's
+# field first.
+function _set_rate!(c, node_field, new_rate::ComplexF64)
+    if c.rate == 0 && new_rate != 0
+        copy!(c.H.forward, node_field.H.forward)
+        copy!(c.H.reverse, node_field.H.reverse)
+        c.rate = node_field.rate
+    end
+    update!(c, Val(:_), new_rate)
 end
 
 """
@@ -33,17 +37,7 @@ Called by `compile_node!` when the atom's position (and hence Ω₀) has changed
 """
 function update!(c::GaussianCoupling, ::Val, new_Ω0::Number)
     new_Ω0 = ComplexF64(new_Ω0)
-    if c.Ω0 != 0
-        scale = new_Ω0 / c.Ω0
-        for k in eachindex(c.H.forward)
-            i, j, v = c.H.forward[k]
-            c.H.forward[k] = (i, j, v * scale)
-        end
-        for k in eachindex(c.H.reverse)
-            i, j, v = c.H.reverse[k]
-            c.H.reverse[k] = (i, j, v * scale)
-        end
-    end
+    c.Ω0 != 0 && Dynamiq.rescale!(c.H, new_Ω0 / c.Ω0)
     c.Ω0 = new_Ω0
 end
 

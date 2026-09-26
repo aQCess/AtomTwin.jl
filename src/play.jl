@@ -2,6 +2,11 @@ using Base.Threads
 
 const PARALLEL_THRESH::Int = 4
 
+# Whether the calling task runs inside a `Threads.@threads` loop. This is the
+# test `@threads :static` itself makes before throwing "cannot be used
+# concurrently or nested"; Base offers no public equivalent.
+_in_threaded_region() = ccall(:jl_in_threaded_region, Cint, ()) != 0
+
 """
     play(sys::System, seq::Sequence; 
             initial_state=sys.initial_state, 
@@ -32,7 +37,7 @@ workflows with repeated executions, consider using [`compile`](@ref) followed by
   trajectory as `shot_callback(shot, shots)`, where `shot` is the 1-based index and `shots` is the
   total. Useful for progress reporting (e.g. `shot_callback = (s,n) -> @printf "shot %d/%d\\n" s n`).
   In multithreaded runs the callback is still called per shot but invocation order is non-deterministic.
-- Additional `kwargs` are treated as parameter values for resolving `Deferred` objects and
+- Additional `kwargs` are treated as parameter values for resolving `Parameter`s and
   other parametric components in the system and sequence
 
 # Returns
@@ -48,48 +53,41 @@ Returns a `NamedTuple` with the following fields:
 - For quantum systems, `initial_state` must be specified in `sys.initial_state` or overridden via this argument 
 - Each shot reinitializes atomic velocities/positions with fresh randomness
 - Detector measurements occur at the **end** of each timestep, not the beginning
-- Multi-shot simulations use parallel execution when `shots ≥ 4` and `Threads.nthreads() > 1`
+- Multi-shot simulations use parallel execution when `shots ≥ 4` and `Threads.nthreads() > 1`,
+  and run serially when `play` is itself called inside a `Threads.@threads` loop
 - Classical systems (no quantum state) skip quantum evolution and only simulate atomic motion
 
 # Examples
 
-## Single-shot quantum simulation
 ```julia
 using AtomTwin
 
-# Define system with ground and excited states
-g, e = AtomTwin.Level(:g), AtomTwin.Level(:e)
-atoms = [Atom(position=[0.0, 0.0, 0.0], levels=[g, e])]
-basis = Basis([g, e])
+g, e = Level("g"), Level("e")
+atom = Atom(; levels = [g, e])
+sys  = System(atom)
+Ω    = Parameter(:Ω, 2π * 1e6)                    # 1 MHz Rabi frequency
+c    = add_coupling!(sys, atom, g => e, Ω; active = false)
+add_detector!(sys, PopulationDetectorSpec(atom, e; name = "P_e"))
 
-# Create Rabi pulse and detector
-Ω = RabiField(amplitude=2π*1.0, detuning=0.0)
-detector = PopulationDetector("P_g", level=g)
+seq = Sequence(1e-9)
+@sequence seq begin
+    Pulse(c, 0.5e-6)
+end
 
-sys = System(atoms, [], [g], basis, [Ω], [detector])
-seq = Sequence(dt=0.01)
-push!(seq, Pulse(Ω, duration=1.0))
+out = play(sys, seq; initial_state = g)
+out.detectors["P_e"]                              # Vector over out.times
 
-# Run simulation
-result = play(sys, seq; initial_state=g, shots=1)
-result.detectors["P_g"]  # Vector of ground state populations vs time
+# With dissipation, average over wavefunction Monte Carlo trajectories...
+add_decay!(sys, atom, e => g, 2π * 1e5)
+out = play(sys, seq; initial_state = g, shots = 100)
+out.detectors["P_e"]                              # Matrix: [n_times × 100]
 
-## Multi-shot Monte Carlo simulation
-# Same system as above, run 100 trajectories with quantum jumps
-jump = Jump(rate=0.1, source=e, target=g)
-sys_jumps = System(atoms, [], [g], basis, [Ω, jump], [detector])
+# ...or integrate the master equation directly.
+out = play(sys, seq; initial_state = g, density_matrix = true)
 
-result = play(sys_jumps, seq; initial_state=g, shots=100, savefinalstate=true)
-result.detectors["P_g"]  # Matrix: [n_times × 100]
-mean_population = mean(result.detectors["P_g"], dims=2)  # Average over shots
-
-## Parametric simulation with deferred values
-# Define amplitude as a parameter
-Ω_param = Deferred(:amplitude)
-pulse = Pulse(RabiField(amplitude=Ω_param, detuning=0.0), duration=1.0)
-
-# Run with specific parameter value
-result = play(sys, seq; initial_state=g, amplitude=2π*2.0)
+# Parameters are `play` keywords: no rebuild.
+out = play(sys, seq; initial_state = g, Ω = 2π * 2e6)
+```
 """
 function play(sys::System, seq::Sequence;
                 initial_state=sys.initial_state,
@@ -114,7 +112,7 @@ function play(sys::System, seq::Sequence;
                 shots=shots, shot_callback=shot_callback, kwargs...)
 end
 
-function _execute_shot!(shot, local_job, sys, shot_rng, initial_state, all_outputs_vec, 
+function _execute_shot!(shot, local_job, sys, shot_rng, all_outputs_vec,
                         det_names, n_detectors, final_states, savefinalstate; kwargs...)
 
     result = _play(local_job; rng=shot_rng, savefinalstate=savefinalstate)
@@ -130,26 +128,53 @@ function _execute_shot!(shot, local_job, sys, shot_rng, initial_state, all_outpu
     savefinalstate && (final_states[shot] = result.final_state)
 end
 
-function play(job::SimulationJob, sys::System;
-              savefinalstate::Bool=false,
-              shots::Int = 1,
-              density_matrix = false,
-              initial_state = nothing,
-              parallel_thresh = PARALLEL_THRESH,
-              rng = Random.default_rng(),
-              shot_callback::Union{Nothing,Function}=nothing,
-              kwargs...)
+"""
+    play(job::SimulationJob, sys::System; initial_state = nothing, shots = 1, kwargs...)
 
-    # Update sys.state[] so recompile! picks it up for all shots.
-    # For multi-shot without an explicit initial_state, save job.state (the compile-time
-    # initial state, before _play mutates it) so recompile! always sees the right type.
-    if initial_state !== nothing && !isempty(_tovector(initial_state)) && job.state !== nothing
-        sys.state[] = getqstate(sys, _tovector(initial_state); density_matrix=density_matrix)
-    elseif shots > 1 && job.state !== nothing
-        sys.state[] = copy(job.state)
+Run a compiled job -- the "compile once, play many" form of
+`play(sys, seq)`, taking the same keywords.
+
+Every run starts clean, whatever ran before: every shot from `initial_state` if
+given (for this run only) or else the state the job was compiled with, with the
+detectors zeroed and every field in its declared switch state.
+"""
+function play(job::SimulationJob, sys::System; initial_state = nothing, kwargs...)
+    job.state === nothing && return _play_shots(job, sys; kwargs...)
+    # Every shot starts from `job.initial_state` -- shot 1 via `_reset_run_state!`,
+    # the rest via `recompile!` -- so a requested state goes there, restored
+    # afterwards. It used to reach only `sys.state[]`, which the solvers never
+    # read: a reused job started from the previous run's FINAL state, and process
+    # tomography ran every input from the first.
+    compiled = copy(job.initial_state)
+    if initial_state !== nothing && !isempty(_tovector(initial_state))
+        s0 = getqstate(sys, _tovector(initial_state);
+                       density_matrix = job.state isa AbstractMatrix)
+        size(s0) == size(compiled) || throw(ArgumentError(
+            "initial_state gives a state of size $(size(s0)), but the job was compiled " *
+            "for $(size(compiled)); compile with the same `density_matrix`"))
+        job.initial_state .= s0
     end
+    sys.state[] = copy(job.initial_state)
+    try
+        return _play_shots(job, sys; kwargs...)
+    finally
+        job.initial_state .= compiled
+    end
+end
+
+# `density_matrix` is accepted with the rest of `play`'s keywords but not used:
+# the job knows what it was compiled as.
+function _play_shots(job::SimulationJob, sys::System;
+                     savefinalstate::Bool=false,
+                     shots::Int = 1,
+                     density_matrix = nothing,
+                     parallel_thresh = PARALLEL_THRESH,
+                     rng = Random.default_rng(),
+                     shot_callback::Union{Nothing,Function}=nothing,
+                     kwargs...)
 
     @assert shots > 0 "shots must be positive"
+    density_matrix = job.state isa AbstractMatrix
 
     if density_matrix && isempty(job.jumps)
         @warn """
@@ -184,6 +209,12 @@ function play(job::SimulationJob, sys::System;
     for k in eachindex(job.initial_beams)
         restore_beam!(job.beams[k], job.initial_beams[k])
     end
+    # ...and the rest of what a shot starts from, as `recompile!` does for every
+    # later shot: a reused job otherwise kept its final state, its accumulated
+    # clicks, and any coupling the last run left switched on.
+    _reset_run_state!(job)
+    _foreach_job_output((node, f) -> _reset_activity!(node, f), job,
+                        _topological_sort(sys.nodes))
 
     # Single-shot fast path
     if shots == 1
@@ -215,8 +246,12 @@ function play(job::SimulationJob, sys::System;
     
     final_states = savefinalstate ? Vector{typeof(job.state)}(undef, shots) : typeof(job.state)[]
     
-    # Determine execution mode
-    use_parallel = shots ≥ parallel_thresh && Threads.nthreads() > 1
+    # Determine execution mode. Inside someone else's threaded region -- a
+    # parameter sweep under `Threads.@threads` -- run the shots serially: the
+    # sweep already occupies the threads, and `@threads :static` below cannot
+    # nest (it throws rather than falling back).
+    use_parallel = shots ≥ parallel_thresh && Threads.nthreads() > 1 &&
+                   !_in_threaded_region()
     
     if use_parallel
         # Memory check
@@ -259,7 +294,7 @@ function play(job::SimulationJob, sys::System;
                                 rng=shot_rngs[shot],
                                 kwargs...)
             end
-            _execute_shot!(shot, thread_jobs[tid], sys, shot_rngs[shot], initial_state,
+            _execute_shot!(shot, thread_jobs[tid], sys, shot_rngs[shot],
                         all_outputs_vec, det_names, n_detectors, final_states,
                         savefinalstate; kwargs...)
             shot_callback !== nothing && shot_callback(shot, shots)
@@ -271,7 +306,7 @@ function play(job::SimulationJob, sys::System;
                                 rng=shot_rngs[shot],
                                 kwargs...)
             end
-            _execute_shot!(shot, job, sys, shot_rngs[shot], initial_state,
+            _execute_shot!(shot, job, sys, shot_rngs[shot],
                         all_outputs_vec, det_names, n_detectors, final_states,
                         savefinalstate; kwargs...)
             shot_callback !== nothing && shot_callback(shot, shots)

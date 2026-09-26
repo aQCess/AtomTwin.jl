@@ -749,7 +749,7 @@ end
         # Read the shift as `H` value × coefficient rather than from `_coeff`
         # alone: the magnitude lives in the operator and `_coeff` carries only
         # the intensity envelope, so that `spectral_spec` can bound this term
-        # (see `recenter!`). The physics is the product, either way.
+        # (see `track_spectrum!`). The physics is the product, either way.
         shift(f) = real(f.H.forward[1][3] * f._coeff[])
         AtomTwin.Dynamiq.update!(fs[end], 1)
         @test isapprox(shift(fs[end]),

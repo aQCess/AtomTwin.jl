@@ -224,6 +224,20 @@ function Op(b::Basis,
 end
 
 """
+    rescale!(op::Op, s) -> op
+
+Multiply every entry of `op` by `s`, in place. How a field's operator follows a
+new rate without being rebuilt.
+"""
+function rescale!(op::Op, s::Number)
+    for v in (op.forward, op.reverse), k in eachindex(v)
+        i, j, x = v[k]
+        v[k] = (i, j, x * s)
+    end
+    return op
+end
+
+"""
     sparse(op::Op)
 
 Reconstruct the sparse matrix representation from an `Op`.

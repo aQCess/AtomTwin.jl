@@ -735,3 +735,105 @@ end
         end
     end
 end
+
+# The Chebyshev plan is built once per instruction. Anything that moves the
+# spectrum within the instruction -- a trap ramped or moved under a frozen atom,
+# a van der Waals term with no value until its first update -- used to leave the
+# expansion outside its interval, where it is not unitary: P_e came out as 1e86
+# (ramp), 1e158 (move), 1e50 (vdW), with no error raised.
+@testset "Chebyshev plan follows a spectrum that moves within an instruction" begin
+    gm = HyperfineManifold(0//1, 0; label = "¹S₀", term = l"1S0", g_F = 0.0)
+    em = HyperfineManifold(1//1, 1; label = "³P₁", term = l"3P1", g_F = 1.5)
+    g, e = gm[0], em[0]
+
+    function trap_run(dt, mode; decay = false, shots = 1)
+        tw  = TweezerArray(λ = 767e-9, w0 = 1e-6, P_total = 50e-3,
+                           row_freqs = [0.0], col_freqs = [0.0])
+        yb  = Ytterbium174Atom(; levels = [g, e])          # at rest: frozen solver
+        sys = System([yb], [tw])
+        c   = add_coupling!(sys, yb, g => e, 2π * 1e6; active = false)
+        decay && add_decay!(sys, yb, e => g, 2π * 1e3)
+        add_detector!(sys, PopulationDetectorSpec(yb, e; name = "Pe"))
+        seq = dt === nothing ? Sequence(; tol = 1e-6) : Sequence(dt)
+        part = mode === :ramp ? RampRow(tw, 1, 0.1, 2e-6) : MoveCol(tw, 1, 1e6, 2e-6)
+        @sequence seq begin
+            Parallel([Pulse([c], 2e-6), part])
+        end
+        Pe = play(sys, seq; initial_state = [g], shots = shots).detectors["Pe"]
+        return shots == 1 ? Pe[end] : sum(Pe[end, :]) / shots
+    end
+
+    for mode in (:ramp, :move)
+        ref = trap_run(1e-9, mode)
+        @test 0 < ref < 1
+        # Coarse steps carry a discretisation error, but must stay physical.
+        @test isapprox(trap_run(50e-9, mode), ref; atol = 0.02)
+        @test 0 <= trap_run(nothing, mode) <= 1
+        @test 0 <= trap_run(50e-9, mode; decay = true, shots = 2) <= 1   # wfmc
+    end
+
+    # Two static atoms: vdW must match the same constant interaction exactly.
+    gg, rr = Level("g"), Level("r")
+    V, d = 2π * 50e6, 4e-6
+    function pair_run(kind, dt)
+        a1 = Atom(; levels = [gg, rr], x_init = [0.0, 0, 0])
+        a2 = Atom(; levels = [gg, rr], x_init = [d, 0, 0])
+        sys = System([a1, a2])
+        cs = [add_coupling!(sys, a, gg => rr, 2π * 1e6; active = false) for a in (a1, a2)]
+        kind === :vdw ? add_vdwinteraction!(sys, (a1, a2), (rr, rr) => (rr, rr), V * d^6) :
+                        add_interaction!(sys, (a1, a2), (rr, rr) => (rr, rr), V)
+        add_detector!(sys, PopulationDetectorSpec(a1, rr; name = "P1"))
+        seq = Sequence(dt)
+        @sequence seq begin
+            Pulse(cs, 0.35e-6)
+        end
+        play(sys, seq; initial_state = [gg, gg]).detectors["P1"][end]
+    end
+    @test isapprox(pair_run(:vdw, 20e-9), pair_run(:const, 20e-9); atol = 1e-9)
+end
+
+# With no jump operators the density-matrix path used to take one bare Taylor-4
+# step per `dt`: no error control, and past ‖H‖·dt ≈ 2.8 it diverged silently
+# (P_e = -2e17 for a 10 MHz Rabi drive at dt = 100 ns).
+@testset "density matrix without dissipation is error-controlled" begin
+    g, e = Level("g"), Level("e")
+    Ω = 2π * 10e6
+    for dt in (10e-9, 100e-9)
+        a = Atom(; levels = [g, e])
+        sys = System([a])
+        c = add_coupling!(sys, a, g => e, Ω; active = false)
+        add_detector!(sys, PopulationDetectorSpec(a, e; name = "Pe"))
+        seq = Sequence(dt)
+        @sequence seq begin
+            Pulse([c], 0.95e-6)
+        end
+        Pe = play(sys, seq; initial_state = [g], density_matrix = true).detectors["Pe"][end]
+        @test isapprox(Pe, sin(Ω * 0.95e-6 / 2)^2; atol = 1e-3)
+    end
+end
+
+# A move inside a `Parallel` converged at FIRST order: the move's modifier took
+# its span from a `0:dt:duration` grid that loses its endpoint to rounding, and a
+# `Parallel` (no `duration` of its own) ran on the requested step, so any
+# difference in the parts' step counts made it a step long.
+@testset "moves converge at second order" begin
+    gm = HyperfineManifold(0//1, 0; label = "¹S₀", term = l"1S0", g_F = 0.0)
+    em = HyperfineManifold(1//1, 1; label = "³P₁", term = l"3P1", g_F = 1.5)
+    g, e = gm[0], em[0]
+    function run(dt)
+        tw  = TweezerArray(λ = 767e-9, w0 = 1e-6, P_total = 50e-3,
+                           row_freqs = [0.0], col_freqs = [0.0])
+        yb  = Ytterbium174Atom(; levels = [g, e])
+        sys = System([yb], [tw])
+        c   = add_coupling!(sys, yb, g => e, 2π * 1e6; active = false)
+        add_detector!(sys, PopulationDetectorSpec(yb, e; name = "Pe"))
+        seq = Sequence(dt)
+        @sequence seq begin
+            Parallel([Pulse([c], 1e-6), MoveCol(tw, 1, 0.5e6, 1e-6; sweep = :min_jerk)])
+        end
+        play(sys, seq; initial_state = [g]).detectors["Pe"][end]
+    end
+    P = [run(dt) for dt in (4e-9, 2e-9, 1e-9)]
+    ratio = (P[1] - P[2]) / (P[2] - P[3])
+    @test 3.5 < ratio < 4.5                 # 2 for first order, 4 for second
+end

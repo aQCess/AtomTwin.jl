@@ -50,7 +50,7 @@ function build_detector(spec::DetectorSpec,
                          ) where T
 
     # Apply resolve_target to the object reference
-    # (mostly for Deferred parameters; deepcopy already handles atom refs)
+    # (mostly for parametric values; deepcopy already handles atom refs)
     obj = resolve_target(spec.obj)
     p   = spec.params
 

@@ -11,10 +11,11 @@
 # The failure is a crash or a wrong-length buffer, both silent-ish and
 # load-dependent, so it is worth pinning even though it needs >1 thread to show.
 #
-# The statevector paths no longer use a cache at all: their scratch lives in the
-# `IntegratorPlan`, built once per instruction and owned by one task. `ThreadCache`
-# now backs only the density-matrix scratch (`_DISS_WS2`, `_STRANG_CTL`), which is
-# what these tests cover.
+# The statevector propagators no longer use a cache: their scratch lives in the
+# `IntegratorPlan`, built once per instruction and owned by one task. The engine's
+# `ThreadCache`s (listed in `Dynamiq._ENGINE_CACHES`) back the density-matrix
+# scratch and the spectral bounds; the density-matrix ones are what these tests
+# cover.
 using Test, AtomTwin
 
 const _D = AtomTwin.Dynamiq

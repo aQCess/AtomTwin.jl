@@ -142,10 +142,10 @@ include("solvers/solvers.jl")
 How a sampled envelope is read between its samples: `:constant`, `:linear` or
 `:cubic`.
 
-An envelope is `N` samples spanning `[0, duration]`. The solver no longer steps
-on the sample grid — it chooses its own step from `tol`, and sub-divides further
-when the error estimator asks — so the samples must be readable at *any* time,
-not just at the points they were given on.
+An envelope is `N` samples spanning `[0, duration]`. The solvers do not step on
+the sample grid — they read drives at step midpoints and at their own sub-steps
+(the density-matrix error controller's, the MCWF jump test's) — so the samples
+must be readable at *any* time, not just at the points they were given on.
 
 - `:constant` holds each sample to the next, a physical staircase. An AWG really
   does this, so it is the correct choice for hardware-defined waveforms and the

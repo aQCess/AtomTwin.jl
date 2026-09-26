@@ -235,6 +235,8 @@ Base.:(==)(a::NLevelAtom, b::AtomWrapper) = a == b.inner
 
 Base.isequal(a::AtomWrapper, b::AbstractAtom) = isequal(a.inner, b)
 Base.isequal(a::AbstractAtom, b::AtomWrapper) = isequal(a, b.inner)
+# Both wrappers: without this the two methods above are ambiguous and throw.
+Base.isequal(a::AtomWrapper, b::AtomWrapper) = isequal(a.inner, b.inner)
 
 Base.hash(a::AtomWrapper, h::UInt) = hash(a.inner, h)
 
@@ -522,5 +524,11 @@ end
 # Helpers
 #------------------------------------------------------------------------------
 
+"""
+    getspecies(atom) -> Symbol
+
+The species tag of an atom: `:Ytterbium171` for a `Ytterbium171Atom`,
+`:Generic` for an `Atom`. Used to look up the species' polarizability models.
+"""
 getspecies(::AtomWrapper{S}) where {S} = S
 

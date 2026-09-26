@@ -121,8 +121,7 @@ function _derive_dt(seq::Sequence, fields, jumps = (), qstate = nothing;
         push!(terms, (ff._coeff, ff.H))
     end
 
-    durations = Float64[inst.duration for inst in seq
-                        if hasproperty(inst, :duration) && inst.duration > 0]
+    durations = filter(>(0), Float64[instruction_duration(inst) for inst in seq])
     longest   = isempty(durations) ? 0.0 : maximum(durations)
 
     # `dt` is the OUTPUT resolution, and the user did not ask for one, so give
@@ -185,15 +184,7 @@ function _derive_dt(seq::Sequence, fields, jumps = (), qstate = nothing;
     # `rabi_with_dissipation` now does, rather than relying on both being clamped
     # by a bound only one of them needs.
     if qstate isa Vector{ComplexF64} && !isempty(jumps)
-        Γmax = 0.0
-        for j in jumps
-            (hasproperty(j, :_coeff) && hasproperty(j, :LdagL_diag)) || continue
-            j.LdagL_diag === nothing && continue
-            γ = abs2(j._coeff[])
-            for x in j.LdagL_diag
-                Γmax = max(Γmax, γ * x)
-            end
-        end
+        Γmax = Dynamiq.jump_rate_bound(jumps)
         jt = resolve_jtol(seq.jtol, shots)
         if Γmax > 0
             Δp = sqrt(min(jt, 0.25))          # two-jump probability ≈ Δp² ≤ jtol
@@ -321,6 +312,7 @@ function compile(sys::System, seq::Sequence;
     for node in sorted_nodes
         (node isa BeamNode || node isa QuantizationAxisNode) && continue  # Phase 1
         obj = compile_node!(node, sys.basis, rng, param_values)
+        (obj isa AtomTwin.Dynamiq.AbstractField || obj isa Jump) && _reset_activity!(node, obj)
         if obj isa AtomTwin.Dynamiq.AbstractField
             push!(resolved_fields, obj)
         elseif obj isa Jump
@@ -362,6 +354,9 @@ function compile(sys::System, seq::Sequence;
     # When the sequence carries no explicit dt, derive one from the Hamiltonian
     # that is actually present. `Dynamiq.suggested_dt` uses a Gershgorin upper
     # bound on ‖H‖ (O(nnz), no matrix assembled), so the result is conservative.
+    # Bound ‖H‖ from the fields as they stand at the atoms' initial positions --
+    # a `VdWInteraction` has no strength until its first update.
+    Dynamiq.refresh_fields!(resolved_fields)
     derived_dt = seq.dt === nothing ? _derive_dt(seq, resolved_fields, resolved_jumps, qstate; integrator = integrator, shots = shots) : nothing
 
     for (i, inst) in enumerate(seq)
@@ -377,8 +372,9 @@ function compile(sys::System, seq::Sequence;
         # that looks uniform but breaks `diff(t)` at the boundary. `stepgrid`
         # rounds the count UP, so this only ever makes the step smaller.
         ds_i = something(resolved_inst.downsample, seq.downsample)
-        if ds_i > 1 && hasproperty(resolved_inst, :duration) && resolved_inst.duration > 0
-            _, dt_i = stepgrid(resolved_inst.duration, dt_i, ds_i)
+        dur_i = instruction_duration(resolved_inst)
+        if ds_i > 1 && dur_i > 0
+            _, dt_i = stepgrid(dur_i, dt_i, ds_i)
         end
 
         # Compile and resolve_target (which uses same cache)
@@ -395,6 +391,24 @@ function compile(sys::System, seq::Sequence;
         total_tspan_size += n_steps
     end
 
+    # The statevector solvers read a time-dependent drive once per step and do
+    # not sub-divide, so on a derived grid `tol` has no say in how well a shaped
+    # pulse, ramp or move is resolved -- measured, a Gaussian pulse was 14% off at
+    # every `tol` from 1e-3 to 1e-9. The density-matrix solver does sub-divide.
+    if qstate isa Vector && seq.dt === nothing &&
+       any(i -> seq[i].dt === nothing && !isempty(modifiers[i]), 1:n_instructions)
+        @warn """
+        `Sequence(; tol)` with the statevector solver and a time-dependent drive.
+
+        A shaped pulse, ramp or move is read once per step, and a sequence with
+        no `dt` has as few steps as the Hamiltonian allows -- typically one per
+        instruction. `tol` does not refine that, so the drive may be badly
+        under-resolved. Give the sequence (or the instruction) a `dt` that
+        resolves the drive, or use `density_matrix = true`, which sub-divides to
+        meet `tol`.
+        """ maxlog = 1
+    end
+
     # === PHASE 5: BUILD DETECTORS AND OUTPUT STORAGE ===
 
     offsets  = cumsum([0; step_counts])
@@ -407,7 +421,7 @@ function compile(sys::System, seq::Sequence;
     inst_dts = Float64[]
     for i in 1:n_instructions
         req = something(seq[i].dt, seq.dt, derived_dt)
-        dur = hasproperty(seq[i], :duration) ? Float64(seq[i].duration) : 0.0
+        dur = instruction_duration(seq[i])
         push!(inst_dts, (dur > 0 && step_counts[i] > 0) ? dur / step_counts[i] : req)
     end
     inst_ds  = [something(seq[i].downsample, seq.downsample) for i in 1:n_instructions]
@@ -462,14 +476,16 @@ function compile(sys::System, seq::Sequence;
         ds_tspan = view(times, ds_offsets[i]+1:ds_offsets[i+1])
         # Narrow the element type, as for `modifiers` above: `write_detectors!`
         # runs once per output step, and iterating an abstractly-typed vector
-        # boxes.
-        detectors[i] = identity.(map(1:n_detectors) do j
+        # boxes. With no detectors `map` gives a `Vector{Any}`, which the
+        # solvers' `detectors::Vector{<:AbstractDetector}` rejects.
+        dets = map(1:n_detectors) do j
             vals_slice = ds_offsets[i]+1:ds_offsets[i+1]
             vals_view  = ndims(detector_vals[j]) == 1 ?
                 view(detector_vals[j], vals_slice) :
                 view(detector_vals[j], vals_slice, :)
             build_detector(sys.detector_specs[j], ds_tspan, vals_view, resolve_target, sys)
-        end)
+        end
+        detectors[i] = isempty(dets) ? AbstractDetector[] : identity.(dets)
     end
 
     # Bind each PhotoDetector to the jump it counts (from add_decay!(...; clicks=…)).
@@ -543,38 +559,34 @@ function recompile!(job::SimulationJob, sys::System;
         node isa BeamNode && recompile_node!(node, nothing, rng, param_values)
     end
 
-    # Collect beams for atom reinitialization
+    # Collect beams for atom reinitialization. `job.beams` is the trapping beams
+    # followed by the compile-time coupling beams (see `compile`); take only the
+    # former, since the coupling beams were just re-resolved.
     resolved_coupling = AbstractBeam[n._compiled[] for n in sorted_nodes if n isa BeamNode]
-    all_beams = vcat(job.beams, resolved_coupling)  # job.beams holds trapping beams
+    all_beams = vcat(job.beams[1:length(job.initial_beams)], resolved_coupling)
 
-    # Phase 2: reinitialize atoms
+    # Phase 2: reinitialize atoms, with the same quantization axis `compile`
+    # used. The tensor polarizability depends on it, so omitting it recomputes α
+    # against ẑ from the second shot on.
+    q_axis = _shot_quantization_axis(sys, rng, param_values)
     for i in 1:length(sys.atoms)
-        initialize!(sys.atoms[i], job.atoms[i]; beams=all_beams, rng=rng, param_values=param_values)
+        initialize!(sys.atoms[i], job.atoms[i]; beams=all_beams, rng=rng,
+                    param_values=param_values, q_axis=q_axis)
     end
 
-    # Phase 3: recompile remaining nodes.
-    #
-    # `job.fields` begins with `n_auto_fields` automatic light shifts that have no
-    # DAG node behind them, so the node walk below must start past them. Without
-    # the offset every node updates the field `n_auto_fields` earlier than its own
-    # -- a DetuningNode writing into a StarkShiftAC -- which silently freezes every
-    # Parameter on any system with a trapping beam.
-    field_counter = job.n_auto_fields
-    jump_counter  = 0
+    # The automatic light shifts carry α in their operator (they have no node,
+    # so the walk below does not reach them). Keep them in step with the α just
+    # recomputed; a no-op unless α changed.
+    for k in 1:job.n_auto_fields
+        f = job.fields[k]
+        α = f.atom.alpha[getwavelength(f.beam)][f.level]
+        α == f.alpha || Dynamiq.set_alpha!(f, α)
+    end
 
-    for node in sorted_nodes
-        node isa BeamNode && continue  # already recompiled
-        obj = node_output(node)
-        if obj isa AtomTwin.Dynamiq.AbstractField
-            field_counter += 1
-            recompile_node!(node, job.fields[field_counter], rng, param_values)
-        elseif obj isa Jump
-            jump_counter += 1
-            # recompiling jumps is expensive
-            #recompile_node!(node, job.jumps[jump_counter], rng, param_values)
-            #AtomTwin.Dynamiq.precompute!(obj, Vector)
-            #AtomTwin.Dynamiq.precompute!(obj, Matrix)
-        end
+    # Phase 3: recompile remaining nodes, each in its declared switch state.
+    _foreach_job_output(job, sorted_nodes) do node, f
+        recompile_node!(node, f, rng, param_values)   # jumps: cheap unless resampled
+        _reset_activity!(node, f)
     end
 
     # Regenerate noise in modifiers
@@ -585,15 +597,36 @@ function recompile!(job::SimulationJob, sys::System;
         end
     end
     
-    # Reset quantum state from the compile-time copy
-    if job.state !== nothing && job.initial_state !== nothing
-        job.state .= job.initial_state
-    end
-    
-    # Zero detector outputs
+    _reset_run_state!(job)
+    return job
+end
+
+# Reset what a shot starts from: the quantum state (from `job.initial_state`)
+# and the detector outputs, several of which accumulate (a `PhotoDetector`
+# counts clicks).
+function _reset_run_state!(job::SimulationJob)
+    job.state === nothing || (job.state .= job.initial_state)
     for vals in values(job.detector_outputs)
         fill!(vals, 0.0)
     end
-    
     return job
+end
+
+# Call `fn(node, output)` for every DAG node that produced a field or jump, with
+# the JOB's own copy of that output. `job.fields` begins with `n_auto_fields`
+# automatic light shifts that have no node, so the walk starts past them --
+# without that offset every node reached the field `n_auto_fields` before its
+# own, a DetuningNode writing into a StarkShiftAC. Jumps are in node order too.
+function _foreach_job_output(fn, job::SimulationJob, sorted_nodes)
+    fi, ji = job.n_auto_fields, 0
+    for node in sorted_nodes
+        node isa BeamNode && continue
+        obj = node_output(node)
+        if obj isa AtomTwin.Dynamiq.AbstractField
+            fn(node, job.fields[fi += 1])
+        elseif obj isa Jump
+            fn(node, job.jumps[ji += 1])
+        end
+    end
+    return nothing
 end

@@ -88,7 +88,7 @@ end
 # Forwarded to the wrapped coupling. Takes a time now, like every other
 # time-dependent update: the solver evaluates drives wherever its step lands,
 # not at a step index.
-Dynamiq.update!(field::NoisyField, t::Float64) = Dynamiq.update!(field.coupling, t)
+Dynamiq.update!(field::NoisyField, t::Real) = Dynamiq.update!(field.coupling, t)
 
 # Constructors
 NoisyField(coupling::T, noise::N; n_freqs = noise.n_freqs, rng=Random.Xoshiro(rand(UInt32))) where {T, N} =
@@ -98,6 +98,7 @@ NoisyField(coupling::T, noise::N, global_time_ref::Ref{Float64}, n_freqs::Int, r
     NoisyField{typeof(coupling.atom), T, N}(coupling, noise, global_time_ref, n_freqs, rng, Float64[])
 
 base_coupling(nf::NoisyField) = nf.coupling
+Dynamiq.envelope(nf::NoisyField) = Dynamiq.envelope(nf.coupling)
 
 # Deepcopy with fresh RNG and buffer
 function Base.deepcopy_internal(nf::NoisyField, stackdict::IdDict)

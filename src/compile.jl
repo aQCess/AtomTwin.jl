@@ -59,36 +59,30 @@ function move(atoms, beams, displacement, duration, sweep, dt)
         error("sweep must be a built-in Symbol ($(collect(keys(BUILTIN_SWEEPS))) ) or a function s->f(s)")
     end
 
-    # Time grid: 0, dt, ..., duration
-    tspan = collect(0.0:dt:duration)
-    tspan = length(tspan) ≥ 2 ? tspan : [0.0, duration]  # ensure at least two points
-
-    moves = MoveModifier[MoveModifier(beam, displacement, tspan; schedule = schedule) for beam in beams]
-    return moves, length(tspan)
+    # The modifier needs only the span, and it must be the exact duration: a
+    # grid `0:dt:duration` loses its endpoint to rounding for some `dt`, which
+    # finished the move a step early -- a first-order timing error. The step
+    # count follows `stepgrid`, as for every other timed instruction.
+    nsteps, _ = stepgrid(duration, dt)
+    moves = MoveModifier[MoveModifier(beam, displacement, [0.0, duration]; schedule = schedule)
+                         for beam in beams]
+    return moves, nsteps
 end
 
 
 """
-    ramp(beams, amplitudes_final, ramp_time, dt) -> (ramps, tspan)
+    ramp(beams, amplitudes_final, ramp_time, dt) -> (ramps, nsteps)
 
-Linearly ramp each beam in `beams` from its current amplitude to the
-corresponding value in `amplitudes_final` over `ramp_time` seconds.
+Linearly ramp each beam in `beams` from the amplitude it has when the ramp
+starts to the corresponding value in `amplitudes_final` over `ramp_time`.
 
-Returns `(ramps, nsteps)`, where `ramps` is a vector of `AmplitudeModifier`
-and `nsteps` is the number of time steps.
+Returns `(ramps, nsteps)`, where `ramps` is a vector of `RampModifier` and
+`nsteps` is the number of time steps.
 """
 function ramp(beams, amplitudes_final, ramp_time, dt)
-    tspan = collect(dt:dt:ramp_time)
-    nsteps = length(tspan)
-
-    # A ramp is a straight line between two amplitudes, so two samples read
-    # linearly reproduce it exactly at any time -- no need to tabulate it.
-    ramps = AmplitudeModifier[
-        AmplitudeModifier(beam, ComplexF64[beam._coeff[], amp_final], ramp_time;
-                          interp = :linear)
-        for (beam, amp_final) in zip(beams, amplitudes_final)
-    ]
-
+    nsteps, _ = stepgrid(ramp_time, dt)   # as `move`: not a rounding-prone range
+    ramps = Dynamiq.RampModifier[Dynamiq.RampModifier(beam, amp_final, ramp_time)
+                                 for (beam, amp_final) in zip(beams, amplitudes_final)]
     return ramps, nsteps
 end
 
@@ -223,11 +217,28 @@ the amplitudes of tweezers in the selected columns over `inst.ramp_time`.
 """
 function compile(atoms, inst::RampRow, dt; resolve_target = identity)
     ta = resolve_target(inst.tweezers)
-    beams = tweezers_in_row(ta, inst.rows)
-    nbeams = length(beams)
-    amplitudes_final = inst.final_amplitude isa Number ? fill(inst.final_amplitude, nbeams) : inst.final_amplitude
-    mods, n = ramp(beams, amplitudes_final, inst.ramp_time, dt)
+    targets = _line_targets(inst.final_amplitude, inst.rows)
+    beams, finals = AbstractBeam[], Float64[]
+    for (row, a) in zip(inst.rows, targets)
+        ta.row_amplitudes[row] = a          # keep AmplRow/AmplCol's bookkeeping current
+        for col in eachindex(ta.col_amplitudes)
+            push!(beams, ta[row, col])
+            push!(finals, a * ta.col_amplitudes[col])
+        end
+    end
+    mods, n = ramp(beams, finals, inst.ramp_time, dt)
     return mods, _NO_BMODS, n
+end
+
+# One ramp target per row (or column), as `RampRow`/`RampCol` document it. The
+# beam at (row, col) then ramps to `row target × column amplitude`: the same
+# factorisation `AmplRow`/`AmplCol` apply, which the ramps previously ignored.
+function _line_targets(final, lines)
+    final isa Number && return fill(Float64(final), length(lines))
+    length(final) == length(lines) || throw(ArgumentError(
+        "final_amplitude has $(length(final)) entries for $(length(lines)) " *
+        "rows/columns: give one per row/column, or a scalar"))
+    return collect(Float64, final)
 end
 
 """
@@ -238,10 +249,16 @@ the amplitudes of tweezers in the selected columns over `inst.ramp_time`.
 """
 function compile(atoms, inst::RampCol, dt; resolve_target = identity)
     ta = resolve_target(inst.tweezers)
-    beams = tweezers_in_col(ta, inst.cols)
-    nbeams = length(beams)
-    amplitudes_final = inst.final_amplitude isa Number ? fill(inst.final_amplitude, nbeams) : inst.final_amplitude
-    mods, n = ramp(beams, amplitudes_final, inst.ramp_time, dt)
+    targets = _line_targets(inst.final_amplitude, inst.cols)
+    beams, finals = AbstractBeam[], Float64[]
+    for (col, a) in zip(inst.cols, targets)
+        ta.col_amplitudes[col] = a          # keep AmplRow/AmplCol's bookkeeping current
+        for row in eachindex(ta.row_amplitudes)
+            push!(beams, ta[row, col])
+            push!(finals, ta.row_amplitudes[row] * a)
+        end
+    end
+    mods, n = ramp(beams, finals, inst.ramp_time, dt)
     return mods, _NO_BMODS, n
 end
 
@@ -342,11 +359,10 @@ function _interp_kind(k::Symbol)
     throw(ArgumentError("interp must be :cubic, :linear or :constant (got $k)"))
 end
 
-# Helpers: build boundary modifier targeting the same coefficient reference
-_reset_modifier(c::GaussianCoupling) = ResetModifier(c._amplitude)
-_reset_modifier(c) = ResetModifier(c)
-_set_modifier(c::GaussianCoupling, val) = SetModifier(c._amplitude, ComplexF64(val))
-_set_modifier(c, val) = SetModifier(c, ComplexF64(val))
+# Instructions write the commanded amplitude to the field's `envelope`: `_coeff`
+# for most fields, `_amplitude` for those whose `update!` recomputes `_coeff`.
+_reset_modifier(c) = ResetModifier(Dynamiq.envelope(c))
+_set_modifier(c, val) = SetModifier(Dynamiq.envelope(c), ComplexF64(val))
 
 """
     compile(atoms, inst::Pulse, dt; resolve_target = identity)
@@ -389,8 +405,8 @@ function compile(atoms, inst::Pulse, dt; resolve_target = identity)
         return modifiers, bmods, tsteps
     else
         # Shaped pulse. The envelope is NOT resampled onto the solver grid: the
-        # solver picks its step from `tol` and sub-divides further when the error
-        # estimator asks, so it reads the envelope wherever it lands. Handing the
+        # solvers read it at step midpoints and at their own sub-steps, wherever
+        # those land (see `sample_at`). Handing the
         # modifier the user's own samples keeps the envelope's resolution a
         # property of the pulse rather than of whatever step the solver chose.
         scaled = ComplexF64.(inst.ampl .* inst.amplitudes)

@@ -197,3 +197,71 @@ end
     # …and the atom really is bound, so the test is not passing on a frozen atom.
     @test maximum(abs, x[:, 1, :]) > 1e-8
 end
+
+# `recompile!` called `initialize!` without the quantization axis, so from the
+# second shot on the tensor polarizability was computed against ẑ: identical,
+# deterministic shots then ended in different places.
+@testset "quantization axis survives recompile" begin
+    gm = HyperfineManifold(0//1, 0; label = "¹S₀", term = l"1S0", g_F = 0.0)
+    em = HyperfineManifold(1//1, 1; label = "³P₁", term = l"3P1", g_F = 1.5)
+    λ  = 767e-9
+    yb = Ytterbium174Atom(; levels = [gm..., em...],
+                          x_init = [0.3e-6, 0.0, 0.0], v_init = [0.05, 0.0, 0.0])
+    tw = GaussianBeam(λ = λ, w0 = 1e-6, P = 50e-3, pol = [1.0, 0.0, 0.0])
+    sys = System(yb, tw)
+    add_quantization_axis!(sys, [1.0, 0.0, 0.0])
+    add_detector!(sys, MotionDetectorSpec(yb; dims = [1], name = "x"))
+    seq = Sequence(0.05e-6)
+    @sequence seq begin
+        Wait(5e-6)
+    end
+
+    job = compile(sys, seq; initial_state = [em[1]])
+    α1  = copy(job.atoms[1].alpha[λ])
+    AtomTwin.recompile!(job, sys)
+    @test job.atoms[1].alpha[λ] == α1
+
+    X = play(sys, seq; initial_state = [em[1]], shots = 3).detectors["x"]
+    @test X[:, 2] == X[:, 1] && X[:, 3] == X[:, 1]
+end
+
+# `qme_semiclassical` never refreshed the level populations from ρ, so the
+# dipole force weighted α by whatever a PopulationDetector had last written --
+# nothing at all without one, and the atom moved ballistically.
+@testset "density-matrix motion feels the state-dependent force" begin
+    gm = HyperfineManifold(0//1, 0; label = "¹S₀", term = l"1S0", g_F = 0.0)
+    em = HyperfineManifold(1//1, 1; label = "³P₁", term = l"3P1", g_F = 1.5)
+    g, e = gm[0], em[0]
+    function run(; dm, popdet)
+        yb  = Ytterbium174Atom(; levels = [g, e], x_init = [0.4e-6, 0, 0],
+                               v_init = [1e-3, 0, 0])
+        sys = System(yb, GaussianBeam(λ = 767e-9, w0 = 1e-6, P = 50e-3, pol = [0, 0, 1.0]))
+        popdet && add_detector!(sys, PopulationDetectorSpec(yb, e; name = "Pe"))
+        add_detector!(sys, MotionDetectorSpec(yb; dims = [1], name = "x"))
+        seq = Sequence(0.05e-6)
+        @sequence seq begin
+            Wait(10e-6)
+        end
+        play(sys, seq; initial_state = [e], density_matrix = dm).detectors["x"][end]
+    end
+    x_sv = run(dm = false, popdet = false)      # deterministic: no jumps
+    x_dm = run(dm = true,  popdet = false)
+    @test abs(x_sv - (0.4e-6 + 1e-3 * 10e-6)) > 1e-8   # the force did something
+    @test isapprox(x_dm, x_sv; atol = 1e-12)
+    @test run(dm = true, popdet = true) == x_dm
+end
+
+# A ramp read its starting amplitude from the beam at COMPILE time, before any
+# earlier `AmplRow` had run, so `AmplRow(0.1)` then a ramp to 1 ramped 1 → 1.
+@testset "a ramp starts from the amplitude the beam has at run time" begin
+    beam = GaussianBeam(λ = 767e-9, w0 = 1e-6, P = 1e-3)
+    ramps, n = AtomTwin.ramp([beam], [1.0], 1e-6, 1e-7)
+    @test n == 10
+    beam._coeff[] = 0.1                     # what an earlier AmplRow leaves
+    m = ramps[1]
+    AtomTwin.Dynamiq.begin_instruction!(m)
+    AtomTwin.Dynamiq.update!(m, 0.5e-6)
+    @test beam._coeff[] ≈ 0.55
+    AtomTwin.Dynamiq.update!(m, 1e-6)
+    @test beam._coeff[] == 1.0
+end

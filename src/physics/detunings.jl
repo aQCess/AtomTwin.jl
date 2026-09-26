@@ -145,6 +145,17 @@ function getquantizationaxis(system)
     return [0.0, 0.0, 1.0]
 end
 
+# The axis for one shot of `recompile!`: resolved afresh, so a sampled axis is
+# resampled per shot, but NOT written back to the node. `sys` is shared by every
+# thread of a multi-shot run; `recompile!` must only mutate its own job.
+function _shot_quantization_axis(system, rng, param_values)
+    for n in system.nodes
+        n isa QuantizationAxisNode &&
+            return _unit_axis(_resolve_node_value(n.axis, param_values, rng))
+    end
+    return [0.0, 0.0, 1.0]
+end
+
 #------------------------------------------------------------------------------
 # Trap light shifts
 #------------------------------------------------------------------------------

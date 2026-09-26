@@ -353,3 +353,19 @@ Convenience constructor for Parallel with optional per-instruction overrides.
 """
 Parallel(parts::AbstractVector{<:AbstractInstruction}; dt=nothing, downsample=nothing) =
     Parallel(AbstractInstruction[parts...], dt, downsample)
+
+"""
+    instruction_duration(inst) -> Float64
+
+The time `inst` occupies: its `duration` (a ramp's `ramp_time`), `0` for an
+instantaneous instruction, and for a [`Parallel`](@ref) the longest of its
+parts, which it has no field for.
+
+`compile` realises this span exactly by setting the instruction's step to
+`duration / nsteps`. Without it a `Parallel` fell back to the requested step, so
+one whose parts count their steps differently -- a move counts grid points, one
+more than a pulse's steps -- ran a step long and stretched every pulse inside it.
+"""
+instruction_duration(inst) = hasproperty(inst, :duration) ? Float64(inst.duration) : 0.0
+instruction_duration(inst::Union{RampRow, RampCol}) = Float64(inst.ramp_time)
+instruction_duration(p::Parallel) = maximum(instruction_duration, p.parts; init = 0.0)

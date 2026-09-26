@@ -58,9 +58,9 @@ Set the beam position `r0` to its start plus the scheduled displacement at time
 `t` within the instruction, on the components listed in `m.dims`.
 
 **Absolute, not incremental.** The stored schedule is evaluated at `t` and the
-result written, rather than a per-step increment being accumulated. The solver
-no longer visits a fixed set of steps -- it chooses its step from `tol` and
-sub-divides further when the error estimator asks -- so accumulating increments
+result written, rather than a per-step increment being accumulated. The solvers
+do not visit a fixed set of steps -- they sub-divide adaptively (density matrix)
+or for the jump test (MCWF) -- so accumulating increments
 would make the final position depend on how many times `update!` happened to be
 called. Evaluating the schedule directly makes the trajectory a function of time
 alone, which is what it physically is.

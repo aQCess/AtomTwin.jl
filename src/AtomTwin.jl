@@ -202,13 +202,7 @@ export process_tomography
 # slot vector at construction, which for a `const` global is package build time.
 # A stale size is safe -- `get_ws!` grows it under lock on first touch -- but
 # doing it here keeps that off the first parallel run's critical path.
-function __init__()
-    Dynamiq.reset!(Dynamiq._GERSH_WS)
-    Dynamiq.reset!(Dynamiq._COMM_WS)
-    Dynamiq.reset!(Dynamiq._STRANG_CTL)
-    Dynamiq.reset!(Dynamiq._DISS_WS2)
-    return nothing
-end
+__init__() = Dynamiq.reset_workspaces!()
 
 #------------------------------------------------------------------------------
 # Precompilation
@@ -243,16 +237,17 @@ using PrecompileTools: @setup_workload, @compile_workload
             Wait(1e-8)
         end
 
-        play(system, seq; initial_state = [lvl_g, lvl_g])
-        play(system, seq; initial_state = [lvl_g, lvl_g], shots = 2)
-        play(system, seq; initial_state = [lvl_g, lvl_g], density_matrix = true)
+        # Silenced: the single-shot run on a dissipative system trips the
+        # "shots = 1" advice, which would otherwise print on every install.
+        Base.CoreLogging.with_logger(Base.CoreLogging.NullLogger()) do
+            play(system, seq; initial_state = [lvl_g, lvl_g])
+            play(system, seq; initial_state = [lvl_g, lvl_g], shots = 2)
+            play(system, seq; initial_state = [lvl_g, lvl_g], density_matrix = true)
+        end
     end
 
     # Drop what the workload left in the thread caches.
-    Dynamiq.reset!(Dynamiq._GERSH_WS)
-    Dynamiq.reset!(Dynamiq._COMM_WS)
-    Dynamiq.reset!(Dynamiq._STRANG_CTL)
-    Dynamiq.reset!(Dynamiq._DISS_WS2)
+    Dynamiq.reset_workspaces!()
 end
 
 end # module AtomTwin
