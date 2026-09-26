@@ -18,7 +18,8 @@ jobs:
       fail-fast: false
       matrix:
         version:
-          - '1.11'
+          - '1.11'   # the compat lower bound
+          - '1'      # latest stable release
           - 'nightly'
         os:
           - ubuntu-latest
