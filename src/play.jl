@@ -218,6 +218,7 @@ function _play_shots(job::SimulationJob, sys::System;
     for k in eachindex(job.initial_beams)
         restore_beam!(job.beams[k], job.initial_beams[k])
     end
+    _restore_atoms!(job)
     # ...and the rest of what a shot starts from, as `recompile!` does for every
     # later shot: a reused job otherwise kept its final state, its accumulated
     # clicks, and any coupling the last run left switched on.

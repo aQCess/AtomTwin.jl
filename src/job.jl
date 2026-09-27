@@ -8,7 +8,7 @@ This object should not be constructed directly by users. Instead, use
 
 # Structure
 - **Runtime state** (reset between shots): `state`, `atoms`, `beams` (restored from
-  `initial_state` / `initial_beams`)
+  `initial_state` / `initial_atoms` / `initial_beams`)
 - **Execution structures** (shared across shots): `fields`, `jumps`, `modifiers`
 - **Detectors**: `detectors` (per-instruction), `detector_outputs` (views to results)
 - **Time grids**: `times` (global downsampled), `local_tspans` (per-instruction solver time grids)
@@ -35,6 +35,7 @@ struct SimulationJob{S}
     atoms::Vector{NLevelAtom}
     beams::Vector{AbstractBeam}
     initial_beams::Vector{AbstractBeam}  # copies of trapping beams at compile time; restore moved/ramped beam state between shots
+    initial_atoms::Vector{NLevelAtom}    # copies of the atoms at compile time; shot 1 of a replay starts from them
     fields::Vector{<:Dynamiq.AbstractField}
     n_auto_fields::Int       # leading entries of `fields` with no DAG node behind
                              # them (automatic light shifts). `recompile!` walks
@@ -513,9 +514,12 @@ function compile(sys::System, seq::Sequence;
     # mutate beam.r0 / beam._coeff in place, which would otherwise accumulate across
     # trajectories. Coupling beams are rebuilt fresh by recompile! and need no snapshot.
     initial_beams = AbstractBeam[copy(b) for b in resolved_trapping]
+    # ...and the atoms, for the same reason: shot 1 of a replayed job starts from
+    # them (later shots re-`initialize!`).
+    initial_atoms = [copy(a) for a in atoms]
 
     return SimulationJob(qstate, qstate === nothing ? nothing : copy(qstate),
-                        atoms, resolved_beams, initial_beams, resolved_fields,
+                        atoms, resolved_beams, initial_beams, initial_atoms, resolved_fields,
                         n_auto_fields, resolved_jumps,
                         modifiers, boundary_modifiers, detectors, local_tspans,
                         detector_outputs, times, inst_ds, inst_dts, seq.tol,
@@ -598,6 +602,18 @@ function recompile!(job::SimulationJob, sys::System;
     end
     
     _reset_run_state!(job)
+    return job
+end
+
+# Put the atoms back where `compile` left them: position, velocity, and the motion
+# caches of the previous run. Shot 1 of every `play` needs it; later shots are
+# re-initialised by `recompile!`, which must not undo their resampling.
+function _restore_atoms!(job::SimulationJob)
+    for (a, a0) in zip(job.atoms, job.initial_atoms)
+        copyto!(a.x, a0.x); copyto!(a.v, a0.v)
+        Dynamiq.reset_force!(a)
+        fill!(a._Eb, 0.0)
+    end
     return job
 end
 

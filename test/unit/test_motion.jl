@@ -198,6 +198,22 @@ end
     @test maximum(abs, x[:, 1, :]) > 1e-8
 end
 
+@testset "a replayed job starts where it was compiled" begin
+    # Later shots re-`initialize!` their atoms, but shot 1 of a replay took them as
+    # the previous run left them: a free atom at 1 m/s ended 1 µm out, then 2 µm on
+    # the next `play` of the same job.
+    g   = Level("g")
+    yb  = Ytterbium174Atom(; levels = [g], x_init = zeros(3), v_init = [1.0, 0.0, 0.0])
+    sys = System(yb)
+    add_detector!(sys, MotionDetectorSpec(yb; dims = [1], name = "x"))
+    seq = Sequence(1e-8); push!(seq, Wait(1e-6; downsample = 100))
+    job = compile(sys, seq; initial_state = [g])
+    x1  = play(job, sys).detectors["x"][end]
+    @test x1 ≈ 1e-6 rtol = 1e-9
+    @test play(job, sys).detectors["x"][end] == x1
+    @test play(job, sys; shots = 2).detectors["x"][end, :] ≈ [x1, x1] rtol = 1e-12
+end
+
 # `recompile!` called `initialize!` without the quantization axis, so from the
 # second shot on the tensor polarizability was computed against ẑ: identical,
 # deterministic shots then ended in different places.
