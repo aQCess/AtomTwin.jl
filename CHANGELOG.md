@@ -38,6 +38,11 @@ old tolerance. Re-run anything you intend to compare against 0.1.x.
   its momentum, from the beam that excited the atom, and an excitation that
   decays unseen leaves none. Recoil heating in imaging-type simulations goes up
   (Yb 399 nm, s = 40: 146 → 221 nK per photon).
+- A shaped envelope on a position-dependent field — a `PlanarCoupling` or
+  `GaussianCoupling`, a trap light shift, a van der Waals interaction — reaches the
+  Hamiltonian at every solver sub-step. Inside MCWF sub-steps and density-matrix
+  sub-step pairs it was applied as a staircase at `dt`, however fine those were: a
+  detuned sin² pulse sampled at four points was off by 5–10 % in population.
 - MCWF jumps are placed within their sub-step (at its start or end with the
   probabilities that make the jump time right on average) instead of always at its
   end. Photon counts on a saturated line were ~√jtol/4 low (2.5 % at the default

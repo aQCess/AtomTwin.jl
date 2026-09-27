@@ -901,3 +901,30 @@ end
         @test abs(mean(N) / N_exact - 1) < 0.006
     end
 end
+
+@testset "a shaped envelope on a position-dependent coupling is resampled within the step" begin
+    # A sub-step resampled the commanded amplitude of a PlanarCoupling (likewise
+    # GaussianCoupling, StarkShiftAC, VdWInteraction), but its coefficient --
+    # amplitude × geometric factor -- was rebuilt only by the per-`dt` `update!`:
+    # the envelope reached the Hamiltonian as a staircase at `dt`, however finely the
+    # MCWF or QME solver sub-stepped. At the origin a frozen PlanarCoupling is a
+    # GlobalCoupling, so the two must agree.
+    g, e = Level("g"), Level("e")
+    function run(planar; dm)
+        a = Atom(; levels = [g, e], x_init = zeros(3), v_init = zeros(3))
+        sys = System(a)
+        c = planar ? add_coupling!(sys, a, g => e, 2π * 5e6; active = false,
+                                   beam = PlanarBeam(780e-9, 1.0, [1.0, 0, 0], [0, 0, 1.0])) :
+                     add_coupling!(sys, a, g => e, 2π * 5e6; active = false)
+        add_detuning!(sys, a, e, 2π * 3e6)
+        add_decay!(sys, a, e => g, 2π * 1e6)
+        add_detector!(sys, PopulationDetectorSpec(a, e; name = "Pe"))
+        seq = Sequence(50e-9)                        # 4 samples across the pulse
+        push!(seq, Pulse(c, 200e-9; amplitudes = sin.(range(0, π, length = 101)) .^ 2))
+        o = play(sys, seq; initial_state = g, frozen = true, density_matrix = dm,
+                 shots = dm ? 1 : 200, rng = MersenneTwister(2))
+        o.detectors["Pe"]
+    end
+    @test run(true; dm = true) ≈ run(false; dm = true) rtol = 1e-10
+    @test run(true; dm = false) == run(false; dm = false)
+end

@@ -35,9 +35,9 @@ struct AmplitudeModifier{F} <: AbstractModifier
                            Float64(duration), interp)
     end
 
-    # Inner constructor for a bare `Ref` target: a field's `envelope` when that
-    # is not its `_coeff` (see the redirect below)
-    function AmplitudeModifier(field::Base.RefValue{ComplexF64},
+    # Inner constructor for a field's `envelope` when that is not the field itself
+    # (see the redirect below)
+    function AmplitudeModifier(field::Union{Base.RefValue{ComplexF64}, Envelope},
                                vals::AbstractVector{<:Number},
                                duration::Real; interp::Symbol = :cubic)
         new{typeof(field)}(field, convert(Vector{ComplexF64}, vals),
@@ -60,8 +60,9 @@ end
     AmplitudeModifier(field::Union{PlanarCoupling,GaussianCoupling,StarkShiftAC,VdWInteraction}, vals, duration)
 
 For a field whose `update!` recomputes `_coeff` from geometry, write to its
-[`envelope`](@ref) (`_amplitude`) instead, so the commanded amplitude and the
-geometric factor both reach the Hamiltonian without overwriting each other.
+[`envelope`](@ref) instead, so the commanded amplitude and the geometric factor
+both reach the Hamiltonian without overwriting each other, also when the solver
+resamples the amplitude between two `update!`s.
 """
 function AmplitudeModifier(field::Union{PlanarCoupling, GaussianCoupling,
                                         StarkShiftAC, VdWInteraction},
@@ -70,7 +71,8 @@ function AmplitudeModifier(field::Union{PlanarCoupling, GaussianCoupling,
     AmplitudeModifier(envelope(field), vals, duration; interp = interp)
 end
 
-@inline function update!(m::AmplitudeModifier{<:Base.RefValue{ComplexF64}}, t::Float64)
+@inline function update!(m::AmplitudeModifier{<:Union{Base.RefValue{ComplexF64}, Envelope}},
+                         t::Float64)
     m.field[] = sample_at(m.vals, m.duration, t, m.interp)
 end
 
@@ -117,7 +119,8 @@ struct SetModifier{F} <: AbstractBoundaryModifier
 end
 
 begin_instruction!(m::SetModifier) = (m.field._coeff[] = m.val)
-begin_instruction!(m::SetModifier{<:Base.RefValue{ComplexF64}}) = (m.field[] = m.val)
+begin_instruction!(m::SetModifier{<:Union{Base.RefValue{ComplexF64}, Envelope}}) =
+    (m.field[] = m.val)
 
 """
     ResetModifier{F} <: AbstractBoundaryModifier
@@ -130,4 +133,5 @@ struct ResetModifier{F} <: AbstractBoundaryModifier
 end
 
 end_instruction!(m::ResetModifier) = (m.field._coeff[] = zero(ComplexF64))
-end_instruction!(m::ResetModifier{<:Base.RefValue{ComplexF64}}) = (m.field[] = zero(ComplexF64))
+end_instruction!(m::ResetModifier{<:Union{Base.RefValue{ComplexF64}, Envelope}}) =
+    (m.field[] = zero(ComplexF64))

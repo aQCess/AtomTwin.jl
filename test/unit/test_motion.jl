@@ -345,6 +345,25 @@ end
         @test (x[3] - x[2]) / (t[3] - t[2]) / vrec(556e-9) ≈ 1.0 atol = 5e-3
     end
 
+    # A shaped π pulse (sin², peak 2× the nominal amplitude) sampled at four points:
+    # the envelope must reach the sub-steps (it reached the Hamiltonian only per
+    # `dt`), and the sub-steps must resolve its peak. TDSE and density matrix.
+    for dm in (false, true)
+        yb  = Ytterbium174Atom(; levels = [g, e], x_init = zeros(3), v_init = zeros(3))
+        sys = System(yb)
+        c = add_coupling!(sys, yb, g => e, Ω; active = false,
+                          beam = PlanarBeam(556e-9, 1.0, [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]))
+        dm && add_decay!(sys, yb, e => g, 2π * 1.0)     # negligible: the QME path
+        add_detector!(sys, MotionDetectorSpec(yb; dims = [1], name = "x"))
+        seq = Sequence(1e-9)
+        push!(seq, Pulse(c, π / Ω; amplitudes = 2 .* sin.(range(0, π, length = 201)) .^ 2,
+                         dt = π / Ω / 4, downsample = 4))
+        push!(seq, Wait(2e-9; dt = 1e-9, downsample = 1))
+        o = play(sys, seq; initial_state = g, density_matrix = dm)
+        x, t = o.detectors["x"], o.times
+        @test (x[3] - x[2]) / (t[3] - t[2]) / vrec(556e-9) ≈ 1.0 atol = 5e-3
+    end
+
     # Density matrix, CW on one saturated beam: the ensemble-mean force ħk R with
     # R = (Γ/2) s/(1+s), after the ~1/Γ transient.
     Γ = 2π * 29.1e6; s = 40.0; T = 400e-9

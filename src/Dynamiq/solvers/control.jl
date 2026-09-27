@@ -334,6 +334,23 @@ end
     return nothing
 end
 
+# The radiation impulse of one pair: the trapezoid of the force at its two ends,
+# both read with the drives at the pair's midpoint. The pair itself reads them at
+# each sub-step's midpoint, so the force the previous pair left would pair this
+# start with that pair's drives -- a lag of one pair under a shaped envelope.
+@inline function _radiation_pair_start!(rp, ρ, modifiers, tmid::Float64, h::Float64)
+    rp === nothing && return nothing
+    _resample!(modifiers, tmid, 2h)
+    radiation_eval!(rp, ρ, 1 / real(tr(ρ)))
+    return nothing
+end
+@inline function _radiation_pair_end!(rp, ρ, modifiers, tmid::Float64, h::Float64)
+    rp === nothing && return nothing
+    _resample!(modifiers, tmid, 2h)
+    radiation_pair!(rp, ρ, 2h)
+    return nothing
+end
+
 """
     strang_substeps!(dt, ρ, Hlist, Jlist, tol, ctl, _ρ1, _ρ2, order,
                      modifiers = (), t0 = 0.0, rp = nothing) -> Int
@@ -428,16 +445,18 @@ function strang_substeps!(dt::Float64,
         plast  = k
         for p in 1:k
             estimate = probe_all || p == pfirst || p == plast
+            tmid = t0 + (2p - 1) * h
+            _radiation_pair_start!(rp, ρ, modifiers, tmid, h)   # no-op without planar drives
             r = if estimate
-                _strang_pair!(ρ, h, t0 + (2p - 1) * h, Hlist, Jlist, ctl,
+                _strang_pair!(ρ, h, tmid, Hlist, Jlist, ctl,
                               _ρ1, _ρ2, order, tol, modifiers)
             else
-                _strang_pair_plain!(ρ, h, t0 + (2p - 1) * h, Hlist, Jlist,
+                _strang_pair_plain!(ρ, h, tmid, Hlist, Jlist,
                                     _ρ1, _ρ2, order, modifiers)
                 0.0
             end
             r > rworst && (rworst = r)
-            radiation_pair!(rp, ρ, 2h)              # no-op without planar drives
+            _radiation_pair_end!(rp, ρ, modifiers, tmid, h)
 
             probe!(ctl.probe, (step = ctl.stepno, attempt = attempt,
                                pair = p, k = k, h = h, r = r,
@@ -471,10 +490,12 @@ function strang_substeps!(dt::Float64,
             rworst = 0.0
             radiation_retry!(rp)                     # ρ was reset to the step start
             for p in 1:k
-                r = _strang_pair!(ρ, h, t0 + (2p - 1) * h, Hlist, Jlist, ctl,
+                tmid = t0 + (2p - 1) * h
+                _radiation_pair_start!(rp, ρ, modifiers, tmid, h)
+                r = _strang_pair!(ρ, h, tmid, Hlist, Jlist, ctl,
                                   _ρ1, _ρ2, order, tol, modifiers)
                 r > rworst && (rworst = r)
-                radiation_pair!(rp, ρ, 2h)
+                _radiation_pair_end!(rp, ρ, modifiers, tmid, h)
             end
             # Committed whether or not it met `tol`. A silent miss is the failure
             # mode to avoid -- the run completes and looks plausible -- so warn

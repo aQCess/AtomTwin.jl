@@ -262,7 +262,7 @@ function tdse_semiclassical(psi::Vector{ComplexF64},
     # driven states rotate by at most `RAD_THETA` per sub-step (trapezoid error
     # ≲ 0.3 % on a π pulse). Without planar drives nothing changes.
     rp   = radiation_pressure(fields, atoms)
-    nsub = rp === nothing ? 1 : _radiation_substeps(rp, H, dt)
+    nsub = rp === nothing ? 1 : _radiation_substeps(rp, H, dt, modifiers)
     h    = dt / nsub
     plan = plan_step(integrator, psi, h, spec; tol = tol)
 
@@ -288,6 +288,7 @@ function tdse_semiclassical(psi::Vector{ComplexF64},
                 if has_modifiers && nsub > 1
                     _resample!(modifiers, t0 + (q - 0.5) * h, h)
                     track_spectrum!(plan, H; recenter = false)
+                    radiation_eval!(rp, psi, 1.0)  # the drives changed: restart the trapezoid
                 end
                 propagate!(integrator, psi, H, plan)
                 radiation_step!(rp, psi, 1.0, h)
@@ -308,12 +309,16 @@ const RAD_THETA = 0.1
 # Sub-steps per `dt` for the TDSE radiation impulse. The drives' population flow
 # oscillates at the rotation rate of the states they couple: the Gershgorin span of
 # their own rows, not of the whole spectrum, which an undriven far-detuned level
-# would inflate. Taken at the nominal amplitude (`peak`): an envelope that exceeds
-# it rotates faster, and needs a `dt` that resolves it anyway.
-function _radiation_substeps(rp, H, dt)
+# would inflate. `peak` takes the drives at their nominal amplitude; a shaped
+# envelope may exceed it, so the rate is scaled by the instruction's largest one.
+function _radiation_substeps(rp, H, dt, modifiers)
     rows = unique!(sort!([k for d in rp.drives for (i, j, _) in d.H.forward for k in (i, j)]))
     lo, hi = gershgorin_interval(H, rows; peak = true)
-    return max(1, ceil(Int, (hi - lo) / 2 * dt / RAD_THETA))
+    amax = 1.0
+    for m in modifiers
+        m isa AmplitudeModifier && !isempty(m.vals) && (amax = max(amax, maximum(abs, m.vals)))
+    end
+    return max(1, ceil(Int, amax * (hi - lo) / 2 * dt / RAD_THETA))
 end
 
 #------------------------------------------------------------------------------
@@ -680,6 +685,7 @@ function wfmc_semiclassical(psi::Vector{ComplexF64},
             if has_modifiers
                 _resample!(modifiers, t0 + (q - 0.5) * h, h)
                 track_spectrum!(plan, Heff_terms; recenter = false)
+                radiation_eval!(rp, psi, 1.0)      # the drives changed: restart the trapezoid
             end
             propagate!(integrator, psi, Heff_terms, plan)
             n = norm(psi)

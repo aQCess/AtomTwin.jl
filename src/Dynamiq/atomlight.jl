@@ -113,13 +113,14 @@ mutable struct PlanarCoupling{A} <: AbstractField
     beam::PlanarBeam
     H::Op
     rate::ComplexF64                        # Rabi rate baked into H, as GlobalCoupling
-    _coeff::Base.RefValue{ComplexF64}       # = _amplitude[] × cis(k·x), by update!
+    _coeff::Base.RefValue{ComplexF64}       # = _amplitude[] × _geom[] (see `envelope`)
     _amplitude::Base.RefValue{ComplexF64}   # commanded amplitude (Pulse/On/Off)
+    _geom::Base.RefValue{ComplexF64}        # cis(k·x) at the last update!
 
     function PlanarCoupling(b, atom, transition, rate, beam)
         H = Op(b, atom, transition, rate / 2)
         new{typeof(atom)}(atom, transition, beam, H, ComplexF64(rate),
-                          Ref(Complex(1.0)), Ref(Complex(1.0)))
+                          Ref(Complex(1.0)), Ref(Complex(1.0)), Ref(Complex(1.0)))
     end
 end
 
@@ -132,7 +133,9 @@ position and beam wavevector. This is typically called by the time integrator.
 function update!(drive::PlanarCoupling{A}, ::Real) where A
     k = drive.beam.k
     r = drive.atom.x
-    drive._coeff[] = drive._amplitude[] * cis(k[1] * r[1] + k[2] * r[2] + k[3] * r[3])
+    g = cis(k[1] * r[1] + k[2] * r[2] + k[3] * r[3])
+    drive._geom[]  = g
+    drive._coeff[] = drive._amplitude[] * g
     return nothing
 end
 
@@ -190,8 +193,9 @@ mutable struct GaussianCoupling{A,B<:AbstractBeam} <: AbstractField
     atom::A
     transition::Pair{Int,Int}
     H::Op                                       # Ω0/2 baked in (same convention as GlobalCoupling)
-    _coeff::Base.RefValue{ComplexF64}           # = _amplitude[] × efield/E0 (written by update!)
+    _coeff::Base.RefValue{ComplexF64}           # = _amplitude[] × _geom[] (see `envelope`)
     _amplitude::Base.RefValue{ComplexF64}       # dimensionless pulse amplitude (written by AmplitudeModifier)
+    _geom::Base.RefValue{ComplexF64}            # efield/E0 at the last update!
     beam::B
     Ω0::ComplexF64                              # peak Ω at reference position (baked into H)
     E0::ComplexF64                              # efield scalar at reference position
@@ -205,6 +209,7 @@ function GaussianCoupling(b::Basis, atom, transition::Pair{Int,Int},
         atom, transition, H,
         Ref(ComplexF64(1.0)),   # _coeff — overwritten by update! before first fquantum!
         Ref(ComplexF64(1.0)),   # _amplitude — set by AmplitudeModifier each step
+        Ref(ComplexF64(1.0)),   # _geom — likewise
         beam, Ω0, E0)
 end
 
@@ -220,7 +225,9 @@ both the commanded pulse amplitude and the atom's position scale the instantaneo
 Cost: one `efield_scalar` evaluation + one complex multiply + one divide — no alloc.
 """
 function update!(f::GaussianCoupling, ::Real)
-    f._coeff[] = f._amplitude[] * efield_scalar(f.beam, f.atom.x) / f.E0
+    g = efield_scalar(f.beam, f.atom.x) / f.E0
+    f._geom[]  = g
+    f._coeff[] = f._amplitude[] * g
     return nothing
 end
 
@@ -345,8 +352,9 @@ mutable struct StarkShiftAC{A} <: AbstractField
     const H::Op
     const beam::AbstractBeam
     alpha::Float64                  # refreshed per shot by `set_alpha!`
-    const _coeff::Base.RefValue{ComplexF64}      # = _amplitude[] × I(x)/I₀, by update!
+    const _coeff::Base.RefValue{ComplexF64}      # = _amplitude[] × _geom[] (see `envelope`)
     const _amplitude::Base.RefValue{ComplexF64}  # commanded amplitude (Pulse/On/Off)
+    const _geom::Base.RefValue{ComplexF64}       # I(x)/I₀ at the last update!
 
     function StarkShiftAC(b, atom, lvl, beam; reference = nothing)
         alphas = atom.alpha[getwavelength(beam)]
@@ -362,7 +370,8 @@ mutable struct StarkShiftAC{A} <: AbstractField
         # interval the Hamiltonian then leaves -- and the expansion is
         # evaluated far outside its domain, where it diverges.
         H = Op(b, atom, lvl => lvl, _peak_shift(alpha, beam))
-        new{typeof(atom)}(atom, lvl, H, beam, alpha, Ref(Complex(0.0)), Ref(Complex(1.0)))
+        new{typeof(atom)}(atom, lvl, H, beam, alpha, Ref(Complex(0.0)), Ref(Complex(1.0)),
+                          Ref(Complex(0.0)))
     end
 end
 
@@ -409,7 +418,9 @@ function update!(f::StarkShiftAC{A}, ::Real) where A
     # the intensity envelope at the atom's position, which is in [0,1]. Keeping
     # the coefficient O(1) is what lets `spectral_spec` bound this term.
     I0 = peak_intensity(f.beam)
-    f._coeff[] = I0 == 0 ? 0.0 : f._amplitude[] * intensity(f.beam, f.atom.x) / I0
+    g  = I0 == 0 ? 0.0 : intensity(f.beam, f.atom.x) / I0
+    f._geom[]  = g
+    f._coeff[] = f._amplitude[] * g
     return nothing
 end
 
@@ -463,11 +474,12 @@ mutable struct VdWInteraction{A} <: AbstractField
     C6::Float64         # rad/s·m^6
     V_cap::Float64      # maximum interaction strength (rad/s); Inf = no cap
     _amplitude::Base.RefValue{ComplexF64}   # commanded amplitude (Pulse/On/Off)
+    _geom::Base.RefValue{ComplexF64}        # capped C6/r⁶ at the last update!
     function VdWInteraction(b, atoms::Pair, transition1, transition2, C6::Float64;
                             V_cap::Float64 = Inf)
         H = Op(b, atoms, transition1, transition2, 1.0)
         return new{typeof(atoms[1])}(atoms[1], atoms[2], H, Ref(ComplexF64(C6)), C6, V_cap,
-                                     Ref(ComplexF64(1.0)))
+                                     Ref(ComplexF64(1.0)), Ref(ComplexF64(C6)))
     end
 end
 
@@ -490,7 +502,9 @@ function update!(d::VdWInteraction, ::Real)
     # Clamp the MAGNITUDE. `min(V, V_cap)` pinned an attractive interaction
     # (C6 < 0, so a negative default cap) at the cap for every separation.
     cap = abs(d.V_cap)
-    d._coeff[] = d._amplitude[] * (isfinite(cap) ? clamp(V, -cap, cap) : V)
+    g   = isfinite(cap) ? clamp(V, -cap, cap) : V
+    d._geom[]  = g
+    d._coeff[] = d._amplitude[] * g
     return nothing
 end
 
@@ -504,11 +518,35 @@ For most fields that is `_coeff` itself. A field whose `update!` recomputes
 `_coeff` from geometry every step -- a position-dependent Rabi rate, a local
 trap intensity, a distance-dependent interaction -- would overwrite anything
 written there, leaving it permanently on. Those keep the commanded amplitude in
-`_amplitude`, and `update!` multiplies the two.
+`_amplitude` and the geometric factor of the last `update!` in `_geom`, with
+`_coeff` their product; their envelope is an [`Envelope`](@ref), which keeps the
+product current when the amplitude is written between updates.
 """
 envelope(f) = f._coeff
 envelope(f::Union{PlanarCoupling, GaussianCoupling, StarkShiftAC, VdWInteraction}) =
-    f._amplitude
+    Envelope(f._amplitude, f._coeff, f._geom)
+
+"""
+    Envelope
+
+The commanded amplitude of a field whose coefficient is that amplitude times a
+geometric factor from `update!` (see [`envelope`](@ref)). `env[] = a` sets the
+amplitude and the coefficient, from the factor of the last `update!`; `env[]`
+reads the amplitude. The solvers resample envelopes within a step, between two
+`update!`s -- on MCWF sub-steps, QME pairs, the TDSE radiation sub-steps -- and
+writing only the amplitude left the Hamiltonian with the step's midpoint value.
+"""
+struct Envelope
+    amplitude::Base.RefValue{ComplexF64}
+    coeff::Base.RefValue{ComplexF64}
+    geom::Base.RefValue{ComplexF64}
+end
+Base.getindex(e::Envelope) = e.amplitude[]
+@inline function Base.setindex!(e::Envelope, a)
+    e.amplitude[] = a
+    e.coeff[] = e.amplitude[] * e.geom[]
+    return e
+end
 
 #------------------------------------------------------------------------------
 # N-level atom model
