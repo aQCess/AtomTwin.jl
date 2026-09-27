@@ -68,6 +68,7 @@ import ..TermSymbol, ..TERM_REGISTRY, ..@term
 @term "1S0" 0//1      # (6s²)  ¹S₀  ground
 @term "3P0" 0//1      # (6s6p) ³P₀  clock
 @term "3P1" 1//1      # (6s6p) ³P₁  intercombination
+@term "1P1" 1//1      # (6s6p) ¹P₁  399 nm (no shipped polarizability model)
 end
 
 """

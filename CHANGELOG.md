@@ -46,6 +46,12 @@ old tolerance. Re-run anything you intend to compare against 0.1.x.
   factorisation that `AmplRow`/`AmplCol` apply.
 
 ### Added
+- `polarizabilities = Dict(term => model)` on any atom constructor (documented,
+  never implemented): a polarizability model for a state the species does not ship,
+  or an override, for that atom only.
+- `PolarizabilityModel(…; tensor_offset_Hz_per_Wm2)`: a measured tensor light shift,
+  recoupled to each hyperfine F like a line, so a (scalar, tensor) pair measured at
+  one wavelength needs no line list. The `1P1` term is registered for Yb.
 - Ytterbium-174, Rubidium-87 and Strontium-88 polarizability models; tensor
   polarizability; `scattering_rate_per_Wcm2`.
 - `add_light_shift!`, `add_quantization_axis!`, `add_hamiltonian!`,

@@ -914,6 +914,50 @@ end
     @test 0.3 < n_pi / n_sig < 3.0
 end
 
+@testset "measured polarizability for a level with no line model" begin
+    # Yb ¹P₁ has no shipped model. `polarizabilities` attaches one to an atom, and
+    # a tensor offset lets a measured (scalar, tensor) pair at one wavelength stand
+    # without a line list. Muzi Falconi et al. (2025), 532 nm, π-polarised trap:
+    # m_J = ±1 magic, m_J = 0 at −11.6 MHz/mK relative to ¹S₀ (whose shift is
+    # 20.84 MHz/mK): α(0)/α(¹S₀) = 0.443 → α_s = 0.814, α_t = 0.186 in units of α(¹S₀).
+    u   = AtomTwin._U_over_I(AtomTwin.YB174_POLARIZABILITY_1S0, 532.0) / AtomTwin.Units.h
+    r0  = 1 - 11.6 / 20.84
+    αs, αt = (2 + r0) / 3, (1 - r0) / 3
+    model = PolarizabilityModel("1P1", NamedTuple[]; J = 1,
+                                offset_Hz_per_Wm2 = αs * u, tensor_offset_Hz_per_Wm2 = αt * u)
+    g  = HyperfineManifold(0//1, 0; label = "¹S₀", term = l"1S0")
+    ex = HyperfineManifold(1//1, 1; label = "¹P₁", term = l"1P1")
+    for (εz, ratio0, ratio1) in ((1.0, r0, 1.0),                    # π-polarised trap
+                                 (cosd(45), (r0 + 1) / 2, αs + αt / 4))  # 45°: P₂ = 1/4
+        yb  = Ytterbium174Atom(; levels = [g..., ex...], polarizabilities = Dict(l"1P1" => model))
+        sys = System(yb, GaussianBeam(λ = 532e-9, w0 = 1e-6, P = 1e-3,
+                                      pol = [sqrt(1 - εz^2), 0.0, εz]))
+        add_quantization_axis!(sys, [0.0, 0.0, 1.0])
+        q = Sequence(1e-8); push!(q, Wait(1e-8))          # (an empty Sequence won't compile)
+        job = compile(sys, q; initial_state = [g[0]])
+        α = job.atoms[1].alpha[532e-9]
+        idx(l) = yb.level_indices[l]
+        @test α[idx(ex[0])] / α[idx(g[0])] ≈ ratio0 rtol = 1e-12
+        @test α[idx(ex[1])] / α[idx(g[0])] ≈ ratio1 rtol = 1e-12
+        @test α[idx(ex[-1])] ≈ α[idx(ex[1])]
+    end
+    # The species' own models are untouched for other atoms.
+    @test !haskey(AtomTwin.getpolarizabilitymodels(Ytterbium174Atom()), "1P1")
+    # Hyperfine recoupling of the tensor offset: a J = 1 offset on the F levels of
+    # I = 1/2 and I = 3/2 isotopes equals what a line of the same J-level tensor gives.
+    line = PolarizabilityModel("X", [(freq_THz = 300.0, gamma_MHz = 10.0, J_f = 2//1)]; J = 1)
+    αJ = AtomTwin._alpha2_si(line, 532.0; F = 1//1, I = 0//1)
+    uJ = -αJ / (AtomTwin.Units.c * AtomTwin.Units.ε0 * AtomTwin.Units.h)
+    off = PolarizabilityModel("X", NamedTuple[]; J = 1, tensor_offset_Hz_per_Wm2 = uJ)
+    for (F, I) in ((3//2, 1//2), (3//2, 3//2), (5//2, 3//2))
+        αF = AtomTwin._alpha2_si(line, 532.0; F = F, I = I)
+        @test αF != 0
+        @test AtomTwin._alpha2_si(off, 532.0; F = F, I = I) ≈ αF rtol = 1e-12
+    end
+    @test_throws ArgumentError PolarizabilityModel("X", NamedTuple[]; J = 1//2,
+                                                   tensor_offset_Hz_per_Wm2 = 1.0)
+end
+
 @testset "a detuning pulse must have real amplitudes" begin
     # Documented as rejected; it was accepted, and the density matrix then lost
     # population while the statevector renormalised it away.
