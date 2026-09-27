@@ -335,10 +335,14 @@ end
 end
 
 """
-    strang_substeps!(dt, ρ, Hlist, Jlist, tol, ctl, _ρ1, _ρ2, order) -> Int
+    strang_substeps!(dt, ρ, Hlist, Jlist, tol, ctl, _ρ1, _ρ2, order,
+                     modifiers = (), t0 = 0.0, rp = nothing) -> Int
 
 Advance `ρ` by `dt` in `ctl.k` equal Strang sub-step pairs, adapting `k` so each
-pair's local error stays within `tol`. Returns the `k` actually used.
+pair's local error stays within `tol`. Returns the `k` actually used. `modifiers`
+are resampled at each sub-step's midpoint, `t0` being the step's start; `rp` (a
+[`RadiationPressure`](@ref) or `nothing`) integrates the radiation force over the
+pairs, and a retaken step discards what it accumulated.
 
 `tol` bounds one sub-step pair, as a step tolerance normally does; error
 accumulated over the run grows with the number of steps in the usual way.
@@ -371,7 +375,8 @@ function strang_substeps!(dt::Float64,
                           _ρ2::Matrix{ComplexF64},
                           order::Int,
                           modifiers = (),
-                          t0::Float64 = 0.0)
+                          t0::Float64 = 0.0,
+                          rp = nothing)
     # No jumps is NOT a shortcut to one `fquantum!(dt, …)`: that is a single
     # Taylor step with no error control and a hard stability limit at
     # ‖H‖·dt ≈ 2.8, past which ρ diverges silently. With `Jlist` empty the Strang
@@ -405,6 +410,7 @@ function strang_substeps!(dt::Float64,
         rworst  = 0.0
         ok      = true
         copyto!(ρ, ctl.a)
+        attempt > 1 && radiation_retry!(rp)      # the step is being retaken
 
         # Estimate the two END pairs and advance the interior unestimated. The
         # local error varies smoothly across a user step, so the ends bracket
@@ -431,6 +437,7 @@ function strang_substeps!(dt::Float64,
                 0.0
             end
             r > rworst && (rworst = r)
+            radiation_pair!(rp, ρ, 2h)              # no-op without planar drives
 
             probe!(ctl.probe, (step = ctl.stepno, attempt = attempt,
                                pair = p, k = k, h = h, r = r,
@@ -462,10 +469,12 @@ function strang_substeps!(dt::Float64,
             k = max(knew, k)
             h = dt / (2k)
             rworst = 0.0
+            radiation_retry!(rp)                     # ρ was reset to the step start
             for p in 1:k
                 r = _strang_pair!(ρ, h, t0 + (2p - 1) * h, Hlist, Jlist, ctl,
                                   _ρ1, _ρ2, order, tol, modifiers)
                 r > rworst && (rworst = r)
+                radiation_pair!(rp, ρ, 2h)
             end
             # Committed whether or not it met `tol`. A silent miss is the failure
             # mode to avoid -- the run completes and looks plausible -- so warn

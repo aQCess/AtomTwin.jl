@@ -1,6 +1,6 @@
 # Solver benchmarks
 
-Three small benchmarks covering the performance and accuracy envelope of the
+Four small benchmarks covering the performance and accuracy envelope of the
 Dynamiq solvers. They exist to gate the `solvers.jl` refactor: the contract is
 that **time, allocations and accuracy all stay put**, so each benchmark prints
 all three as a flat, diffable table.
@@ -9,9 +9,10 @@ all three as a flat, diffable table.
 atwin run bench/bench1_small.jl     # d = 4     per-step overhead
 atwin run bench/bench2_large.jl     # d = 4096  matvec throughput
 atwin run bench/bench3_stiff.jl     # d = 512 / 128, stiff
+atwin run bench/bench4_motion.jl    # semiclassical motion, plane-wave drives
 ```
 
-Each runs in well under ten seconds. Run all three before and after a change and
+Each runs in well under ten seconds. Run all four before and after a change and
 diff the tables.
 
 ## What each one is for
@@ -21,6 +22,7 @@ diff the tables.
 | **1 — small** | d = 4 | per-step overhead | a refactor that adds indirection, dispatch or setup to the hot loop; invisible at large d |
 | **2 — large** | d = 4096 | `apply!` over COO triples | a perturbed matvec kernel, Chebyshev recurrence or buffer rotation; also makes a stray per-step allocation obvious |
 | **3 — stiff** | d = 512 / 128 | Chebyshev degree, adaptive controller | high-order `besselj_series!`; a broken `_strang_adapt` feedback loop, as either a runtime blow-up or a silent accuracy loss |
+| **4 — motion** | d = 2 | radiation-pressure bookkeeping per sub-step | a slower or wrong force integration in the three semiclassical solvers; its WFMC control case (the same drive without plane waves) isolates the force's cost |
 
 Together they cover TDSE, WFMC and QME, with and without dissipation.
 
@@ -31,7 +33,9 @@ solution, and for the damped case a Bloch-equation RK4 that shares no code with
 AtomTwin. Those are true error figures.
 
 Benchmark 3 has no closed form (an interacting chain), so it self-consistency
-checks against a more finely resolved run. That catches a refactor that changes
+checks against a more finely resolved run. Benchmark 4 checks physics references:
+quantised absorption plus isotropic emission (≈1.26 E_r per photon, Monte Carlo
+±10 % at 200 shots), exactly N ħk after N π pulses, and the steady-state mean force. That catches a refactor that changes
 the answer, which is what it is for, but would not catch an error already
 present in the reference.
 

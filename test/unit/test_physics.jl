@@ -854,7 +854,8 @@ end
             @sequence seq begin
                 Pulse(cp, 20e-6)
             end
-            play(sys, seq; initial_state = gm[0], shots = 1,
+            ## held: motion is the default, and the trap would pull it to the centre
+            play(sys, seq; initial_state = gm[0], shots = 1, frozen = true,
                  density_matrix = true).detectors["P"][end]
         end
         ds[argmax(y)]

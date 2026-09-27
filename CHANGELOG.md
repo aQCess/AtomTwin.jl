@@ -28,10 +28,28 @@ old tolerance. Re-run anything you intend to compare against 0.1.x.
   states, detector outputs and the quantum state all reset between shots and
   between `play`s of the same job.
 - Spontaneous emission recorded with `add_decay!(…; λ)` gives a photon recoil.
+- Radiation pressure of plane-wave drives (`add_coupling!(…; beam = PlanarBeam(…))`)
+  is the Ehrenfest force of the plane-wave phase, in all three semiclassical solvers,
+  integrated over their sub-steps. It used to be a mean force `ħ R_tot Σ ŵ_b k_b`
+  sampled once per step, and only in the MCWF solver: a π pulse moved almost no
+  momentum, stimulated emission into an opposing beam none, and the spread of the
+  absorbed momentum was set by `dt` instead of by photon statistics. In MCWF the
+  momentum follows the detection record: each emitted photon was absorbed, with
+  its momentum, from the beam that excited the atom, and an excitation that
+  decays unseen leaves none. Recoil heating in imaging-type simulations goes up
+  (Yb 399 nm, s = 40: 146 → 221 nK per photon).
 - MCWF jumps are placed within their sub-step (at its start or end with the
   probabilities that make the jump time right on average) instead of always at its
   end. Photon counts on a saturated line were ~√jtol/4 low (2.5 % at the default
   jtol); they now match the master equation. Every MCWF realisation changes.
+- Motion is the default: `play(…; frozen = true)` freezes the atoms. `play` used to
+  freeze them unless a trapping beam could exert a force and the atom had a velocity
+  or recoil, so a free atom driven by plane waves never moved, and an atom released
+  off-centre at rest never oscillated. Runs where nothing can move take the frozen
+  solvers automatically, with identical results. Runs that can move now take the
+  semiclassical solvers, which cost more; with plane-wave drives the statevector
+  solver also sub-divides each step to 0.1 rad of the driven states' rotation.
+  `play(…; frozen = true)` restores the previous speed and physics.
 - A `Pulse` on a detuning with a complex amplitude is an error, as documented; it
   was silently accepted.
 - The density-matrix dissipator is an exact channel; MCWF sub-steps are bounded

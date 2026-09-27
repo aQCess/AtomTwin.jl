@@ -99,7 +99,9 @@ end
         prog === :wait  && @sequence q begin Wait(0.5e-6) end
         prog === :pulse && @sequence q begin Pulse(c, 0.5e-6) end
         prog === :half  && @sequence q begin Pulse(c, 0.5e-6; ampl = 0.5) end
-        play(s, q; initial_state = g).detectors["Pe"][end]
+        ## frozen: this checks the amplitude logic. With motion (the default) the
+        ## absorbed ħk Doppler-shifts the atom and P_e = 0.999986, as it should.
+        play(s, q; initial_state = g, frozen = true).detectors["Pe"][end]
     end
     @test planar(:wait) < 1e-12
     @test planar(:pulse) ≈ 1 atol = 1e-6            # π pulse

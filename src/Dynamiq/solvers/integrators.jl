@@ -110,6 +110,26 @@ always uses the actual coefficient.
 function gershgorin_interval(terms::Vector{Tuple{Base.RefValue{ComplexF64},Op}};
                              peak::Bool = false)
     isempty(terms) && return (0.0, 0.0)
+    diag, rad = _gershgorin_discs(terms, peak)
+    return _disc_span(diag, rad, eachindex(diag))
+end
+
+"""
+    gershgorin_interval(terms, rows; peak = false) -> (lo, hi)
+
+The same span over the discs of `rows` only: how fast the amplitudes in `rows` can
+rotate, coupled to whatever they couple to. Not a bound on the spectrum; an
+undriven level elsewhere (a far hyperfine or Zeeman partner) does not widen it.
+"""
+function gershgorin_interval(terms::Vector{Tuple{Base.RefValue{ComplexF64},Op}},
+                             rows::AbstractVector{Int}; peak::Bool = false)
+    isempty(terms) && return (0.0, 0.0)
+    diag, rad = _gershgorin_discs(terms, peak)
+    return _disc_span(diag, rad, rows)
+end
+
+# Each row's disc: centre `Hᵢᵢ` and off-diagonal row sum, in the thread's workspace.
+function _gershgorin_discs(terms, peak::Bool)
     dim = terms[1][2].dim
     ws = _gersh_interval_ws(dim)
     diag, rad = ws.diag, ws.rad
@@ -128,8 +148,12 @@ function gershgorin_interval(terms::Vector{Tuple{Base.RefValue{ComplexF64},Op}};
             i == j ? (diag[i] += real(conj(c) * u)) : (rad[i] += cp * abs(u))
         end
     end
+    return diag, rad
+end
+
+function _disc_span(diag, rad, rows)
     lo = Inf; hi = -Inf
-    @inbounds for i in 1:dim
+    @inbounds for i in rows
         lo = min(lo, diag[i] - rad[i])
         hi = max(hi, diag[i] + rad[i])
     end

@@ -766,7 +766,7 @@ end
     function trap_run(dt, mode; decay = false, shots = 1)
         tw  = TweezerArray(λ = 767e-9, w0 = 1e-6, P_total = 50e-3,
                            row_freqs = [0.0], col_freqs = [0.0])
-        yb  = Ytterbium174Atom(; levels = [g, e])          # at rest: frozen solver
+        yb  = Ytterbium174Atom(; levels = [g, e])
         sys = System([yb], [tw])
         c   = add_coupling!(sys, yb, g => e, 2π * 1e6; active = false)
         decay && add_decay!(sys, yb, e => g, 2π * 1e3)
@@ -776,7 +776,10 @@ end
         @sequence seq begin
             Parallel([Pulse([c], 2e-6), part])
         end
-        Pe = play(sys, seq; initial_state = [g], shots = shots).detectors["Pe"]
+        # frozen: this tests the frozen solvers' tracking (a moving trap makes the
+        # run non-static, which would otherwise send it to the semiclassical ones).
+        Pe = play(sys, seq; initial_state = [g], shots = shots,
+                  frozen = true).detectors["Pe"]
         return shots == 1 ? Pe[end] : sum(Pe[end, :]) / shots
     end
 

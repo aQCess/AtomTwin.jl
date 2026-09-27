@@ -37,6 +37,12 @@ workflows with repeated executions, consider using [`compile`](@ref) followed by
   trajectory as `shot_callback(shot, shots)`, where `shot` is the 1-based index and `shots` is the
   total. Useful for progress reporting (e.g. `shot_callback = (s,n) -> @printf "shot %d/%d\\n" s n`).
   In multithreaded runs the callback is still called per shot but invocation order is non-deterministic.
+- `frozen::Bool = false`: Atoms move by default — trap forces, recoil (`add_decay!(…; λ)`)
+  and the radiation pressure of plane-wave drives. `frozen = true` holds every atom at its
+  initial position (runs with a quantum state; a purely classical run always moves its
+  atoms). A run in which nothing can move an atom (at rest, no recoil, no plane-wave
+  drive, no moving beam, no dipole force that would move it by a picometre over the
+  run) takes the frozen solvers automatically; the result is the same.
 - Additional `kwargs` are treated as parameter values for resolving `Parameter`s and
   other parametric components in the system and sequence
 
@@ -95,6 +101,7 @@ function play(sys::System, seq::Sequence;
                 rng=Random.default_rng(),
                 shots::Int = 1,
                 shot_callback::Union{Nothing,Function}=nothing,
+                frozen::Bool = false,
                 kwargs...)
 
     # Sanitize initial_state to a vector
@@ -109,13 +116,14 @@ function play(sys::System, seq::Sequence;
     job = compile(sys, seq; initial_state = s, density_matrix=density_matrix, rng=rng,
                   shots=shots, kwargs...)
     return play(job, sys; initial_state = s, density_matrix=density_matrix, rng=rng,
-                shots=shots, shot_callback=shot_callback, kwargs...)
+                shots=shots, shot_callback=shot_callback, frozen=frozen, kwargs...)
 end
 
 function _execute_shot!(shot, local_job, sys, shot_rng, all_outputs_vec,
-                        det_names, n_detectors, final_states, savefinalstate; kwargs...)
+                        det_names, n_detectors, final_states, savefinalstate;
+                        frozen::Bool = false, kwargs...)
 
-    result = _play(local_job; rng=shot_rng, savefinalstate=savefinalstate)
+    result = _play(local_job; rng=shot_rng, savefinalstate=savefinalstate, frozen=frozen)
     
     @inbounds for j in 1:n_detectors
         if ndims(all_outputs_vec[j]) == 2
@@ -167,6 +175,7 @@ end
 function _play_shots(job::SimulationJob, sys::System;
                      savefinalstate::Bool=false,
                      shots::Int = 1,
+                     frozen::Bool = false,
                      density_matrix = nothing,
                      parallel_thresh = PARALLEL_THRESH,
                      rng = Random.default_rng(),
@@ -220,7 +229,7 @@ function _play_shots(job::SimulationJob, sys::System;
     if shots == 1
         shot_seed = rand(rng, UInt)
         shot_rng = Random.Xoshiro(shot_seed)
-        result = _play(job; rng=shot_rng, savefinalstate=savefinalstate)
+        result = _play(job; rng=shot_rng, savefinalstate=savefinalstate, frozen=frozen)
         final_states = savefinalstate ? [result.final_state] : typeof(job.state)[]
         return (
             detectors = result.detectors,
@@ -296,7 +305,7 @@ function _play_shots(job::SimulationJob, sys::System;
             end
             _execute_shot!(shot, thread_jobs[tid], sys, shot_rngs[shot],
                         all_outputs_vec, det_names, n_detectors, final_states,
-                        savefinalstate; kwargs...)
+                        savefinalstate; frozen = frozen, kwargs...)
             shot_callback !== nothing && shot_callback(shot, shots)
         end
     else
@@ -308,7 +317,7 @@ function _play_shots(job::SimulationJob, sys::System;
             end
             _execute_shot!(shot, job, sys, shot_rngs[shot],
                         all_outputs_vec, det_names, n_detectors, final_states,
-                        savefinalstate; kwargs...)
+                        savefinalstate; frozen = frozen, kwargs...)
             shot_callback !== nothing && shot_callback(shot, shots)
         end
     end
@@ -346,9 +355,11 @@ _propagator_tol(seq_tol::Float64) = min(seq_tol, 1e-12)
 # cost) or cap the propagator at a loose value (silent accuracy loss).
 
 """
-    _play(job::SimulationJob; savefinalstate::Bool=false) -> NamedTuple
+    _play(job::SimulationJob; savefinalstate = false, frozen = false, rng) -> NamedTuple
 
-Execute a compiled simulation job for a single quantum trajectory shot.
+Execute a compiled simulation job for a single quantum trajectory shot, drawing its
+jumps from `rng`. `frozen` holds the atoms (see [`play`](@ref)); a run that
+[`_is_static`](@ref) takes the frozen solvers anyway.
 
 Returns a NamedTuple with:
 - `detectors`: Dict{String, Array} of detector outputs
@@ -357,7 +368,7 @@ Returns a NamedTuple with:
 """
 function _play(job::SimulationJob;
                 savefinalstate::Bool=false,
-                frozen::Union{Nothing,Bool}=nothing,
+                frozen::Bool=false,
                 rng=Random.Xoshiro())
 
     n_instructions = length(job.modifiers)
@@ -374,22 +385,10 @@ function _play(job::SimulationJob;
             for m in job.boundary_modifiers[i]; end_instruction!(m); end
         end
     else
-        # Quantum/semiclassical evolution
-        # Semi-classical (frozen=false) when the atoms can actually move: they
-        # need a force (a beam at a wavelength they have a polarizability for)
-        # AND some way to have momentum -- either they start with it, or a decay
-        # channel carries a recoil kick (`add_decay!(...; λ)`).
-        #
-        # The recoil clause matters: an atom released at rest in a tweezer and
-        # then illuminated heats out of the trap purely by its own fluorescence,
-        # and without it that atom would sit frozen at the centre forever.
-        #
-        # `frozen` kwarg overrides the automatic detection when provided.
-        _has_force  = any(b -> any(a -> haskey(a.alpha, getwavelength(b)), job.atoms),
-                          job.beams)
-        _has_motion = any(a -> !isapprox(sum(abs2, a.v), 0.0; atol=1e-14), job.atoms) ||
-                      any(a -> !isempty(a.lambda), job.atoms)
-        frozen = something(frozen, !(_has_motion && _has_force))
+        # Atoms move unless the caller freezes them (`play(…; frozen = true)`).
+        # A run in which nothing can move them takes the frozen solvers instead —
+        # same answer, less work (see `_is_static`).
+        frozen = frozen || _is_static(job)
         @inbounds for i in 1:n_instructions
             isempty(job.local_tspans[i]) && continue
             for m in job.boundary_modifiers[i]; begin_instruction!(m); end
@@ -408,3 +407,45 @@ function _play(job::SimulationJob;
     final_state = savefinalstate ? copy(job.state) : nothing
     return (detectors = job.detector_outputs, times = job.times, final_state = final_state)
 end
+
+"""
+    _is_static(job) -> Bool
+
+True when no atom can move during the run, so that the frozen solvers give the same
+trajectory as the semiclassical ones for less work: every atom at rest, no recoil
+(`add_decay!(…; λ)`), no plane-wave drive (radiation pressure), no instruction that
+moves, ramps or switches a beam, and, for every internal state, a dipole force at
+the starting position too weak to matter over the run `T`: a displacement
+`δx = |F|T²/2m` below 1 pm and a light-shift phase `|F|δx T/ħ` below 1e-6. (The
+tails of neighbouring tweezers never give exactly zero.) Checked per shot (positions
+and velocities are resampled).
+"""
+function _is_static(job::SimulationJob)
+    atoms = job.atoms
+    for a in atoms
+        (any(!iszero, a.v) || !isempty(a.lambda)) && return false
+    end
+    any(f -> f isa PlanarCoupling, job.fields) && return false
+    for ms in (job.modifiers, job.boundary_modifiers), mi in ms, m in mi
+        _acts_on_beam(m) && return false
+    end
+    isempty(job.beams) && return true
+    T = isempty(job.times) ? 0.0 : job.times[end]
+    for a in atoms
+        P = copy(a._P)
+        try
+            for l in 1:length(P)
+                fill!(a._P, 0.0); a._P[l] = 1.0
+                F  = norm(Dynamiq.force(a, job.beams))
+                δx = F * T^2 / (2a.m)
+                (δx > 1e-12 || F * δx * T / Units.hbar > 1e-6) && return false
+            end
+        finally
+            copyto!(a._P, P)
+        end
+    end
+    return true
+end
+
+_acts_on_beam(m) = m isa Dynamiq.PositionModifier || m isa Dynamiq.MoveModifier ||
+                   (hasproperty(m, :field) && getproperty(m, :field) isa Dynamiq.AbstractBeam)

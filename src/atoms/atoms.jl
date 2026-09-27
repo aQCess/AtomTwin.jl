@@ -420,6 +420,7 @@ function initialize!(a::AtomWrapper, inner::NLevelAtom;
     #    another shot — or from the position this atom had before re-initialising
     #    below — would corrupt the first step of the trajectory.
     Dynamiq.reset_force!(inner)
+    fill!(inner._Eb, 0.0)          # nor a radiation-pressure branch (fresh internal state)
 
     # 1. position — GaussianPosition uses _resolve_node_value; Vector passes through.
     #    With no initializer the atom starts at the origin, and zeroing it is not

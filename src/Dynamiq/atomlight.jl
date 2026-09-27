@@ -525,8 +525,10 @@ Minimal `n`-level atomic model with classical center-of-mass motion.
 - `alphas`: dictionary of scalar or tensor polarizabilities keyed by wavelength.
 - `lambdas`: dictionary of transition wavelengths keyed by level pairs.
 
-Additional internal fields `_P` and `_pidx` are used for caching populations
-and basis-dependent index mappings during simulations.
+Internal fields: `_P` and `_pidx` cache populations and basis-dependent index
+mappings; `_F`/`_Fvalid` the velocity-Verlet force of the previous step; `_Eb` the
+MCWF radiation-pressure excited-branch momentum (see `RadiationPressure`), which
+carries across instructions and is reset per shot.
 """
 mutable struct NLevelAtom <: AbstractAtom
     n::Int
@@ -540,6 +542,8 @@ mutable struct NLevelAtom <: AbstractAtom
     _pidx::Vector{Vector{Int}}    # updated when a basis is constructed
     _F::Vector{Float64}           # force cached from the previous step (velocity Verlet)
     _Fvalid::Bool                 # false until _F holds a force for the current x
+    _Eb::Vector{Float64}          # MCWF radiation pressure: excited-branch momentum/ħ
+                                  # × population, m⁻¹ (see `RadiationPressure`)
 
     function NLevelAtom(n;
                         x       = [0.0, 0.0, 0.0],
@@ -547,7 +551,7 @@ mutable struct NLevelAtom <: AbstractAtom
                         m       = 1amu,
                         alphas  = Dict(),
                         lambdas = Dict())
-        new(n, x, v, m, alphas, lambdas, zeros(n), [[0]], zeros(3), false)
+        new(n, x, v, m, alphas, lambdas, zeros(n), [[0]], zeros(3), false, zeros(3))
     end
 end
 
@@ -572,6 +576,7 @@ function copy(a::NLevelAtom)
     b._pidx   = [copy(idx) for idx in a._pidx]
     b._F      = copy(a._F)
     b._Fvalid = a._Fvalid
+    b._Eb     = copy(a._Eb)
     return b
 end
 
