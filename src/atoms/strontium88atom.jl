@@ -50,7 +50,7 @@ References:
 # offset_Hz_per_Wm2, so the two forms stay in sync if the tails are re-tuned:
 #   α_SI = α_au · 4π ε₀ a₀³;  U/I = −α_SI/(c ε₀);  offset_Hz_per_Wm2 = (U/I)/h.
 _au_to_offset_Hz_per_Wm2(α_au) =
-    -(α_au * 4π * ε0 * a0^3) / (c * ε0) / h
+    -(α_au * 4π * ε0 * a0^3) / (2c * ε0) / h
 
 """
     SR88_POLARIZABILITY_1S0
@@ -61,10 +61,10 @@ Dominated by the 461 nm ¹P₁ line; higher ¹P₁ lines and the core are the of
 const SR88_POLARIZABILITY_1S0 = PolarizabilityModel(
     "1S0",
     [
-        (freq_THz = 650.4897, dipole_ea0 = 5.248, Jg = 0),  # 5s5p ¹P₁   (461 nm)
-        (freq_THz = 434.8190, dipole_ea0 = 0.158, Jg = 0),  # 5s5p ³P₁   (689 nm, weak)
-        (freq_THz = 1022.2323, dipole_ea0 = 0.281, Jg = 0), # 5s6p ¹P₁   (293 nm)
-        (freq_THz = 1234.3055, dipole_ea0 = 0.517, Jg = 0), # 4d5p ¹P₁   (243 nm)
+        (freq_THz = 650.4897, dipole_ea0 = 5.248, Jg = 0, J_f = 1//1),  # 5s5p ¹P₁   (461 nm)
+        (freq_THz = 434.8190, dipole_ea0 = 0.158, Jg = 0, J_f = 1//1),  # 5s5p ³P₁   (689 nm, weak)
+        (freq_THz = 1022.2323, dipole_ea0 = 0.281, Jg = 0, J_f = 1//1), # 5s6p ¹P₁   (293 nm)
+        (freq_THz = 1234.3055, dipole_ea0 = 0.517, Jg = 0, J_f = 1//1), # 4d5p ¹P₁   (243 nm)
     ];
     J = 0//1,                                                  # 5s² ¹S₀
     offset_Hz_per_Wm2 = _au_to_offset_Hz_per_Wm2(4.60 + 5.29),  # Other + Core+Vc
@@ -82,12 +82,12 @@ magic wavelength; the tail offset is anchored to the measured 813.428 nm crossin
 const SR88_POLARIZABILITY_3P0 = PolarizabilityModel(
     "3P0",
     [
-        (freq_THz = 115.1803, dipole_ea0 = 2.675, Jg = 0),  # 5s4d ³D₁   (2603 nm)
-        (freq_THz = 441.3245, dipole_ea0 = 1.962, Jg = 0),  # 5s6s ³S₁   (679 nm)
-        (freq_THz = 620.2406, dipole_ea0 = 2.450, Jg = 0),  # 5s5d ³D₁   (483 nm)
-        (freq_THz = 632.0524, dipole_ea0 = 2.605, Jg = 0),  # 5p²  ³P₁   (474 nm)
-        (freq_THz = 692.7304, dipole_ea0 = 0.516, Jg = 0),  # 5s7s ³S₁   (433 nm)
-        (freq_THz = 760.5135, dipole_ea0 = 1.161, Jg = 0),  # 5s6d ³D₁   (394 nm)
+        (freq_THz = 115.1803, dipole_ea0 = 2.675, Jg = 0, J_f = 1//1),  # 5s4d ³D₁   (2603 nm)
+        (freq_THz = 441.3245, dipole_ea0 = 1.962, Jg = 0, J_f = 1//1),  # 5s6s ³S₁   (679 nm)
+        (freq_THz = 620.2406, dipole_ea0 = 2.450, Jg = 0, J_f = 1//1),  # 5s5d ³D₁   (483 nm)
+        (freq_THz = 632.0524, dipole_ea0 = 2.605, Jg = 0, J_f = 1//1),  # 5p²  ³P₁   (474 nm)
+        (freq_THz = 692.7304, dipole_ea0 = 0.516, Jg = 0, J_f = 1//1),  # 5s7s ³S₁   (433 nm)
+        (freq_THz = 760.5135, dipole_ea0 = 1.161, Jg = 0, J_f = 1//1),  # 5s6d ³D₁   (394 nm)
     ];
     J = 0//1,                                            # 5s5p ³P₀
     offset_Hz_per_Wm2 = _au_to_offset_Hz_per_Wm2(39.31),  # tail anchored to 813.428 nm
