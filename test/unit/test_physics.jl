@@ -587,8 +587,8 @@ end
     au   = 4π * AtomTwin.Units.ε0 * AtomTwin.Units.a0^3
 
     # Scalar and tensor both land inside the paper's own uncertainty.
-    @test isapprox(polarizability_au(m1S0, 473.1445), 3637; atol = 17)
-    @test isapprox(polarizability_au(m3P1, 473.1445), 4146; atol = 117)
+    @test isapprox(AtomTwin._alpha0_si(m1S0, 473.1445) / au, 3637; atol = 17)
+    @test isapprox(AtomTwin._alpha0_si(m3P1, 473.1445) / au, 4146; atol = 117)
     @test isapprox(AtomTwin._alpha2_si(m3P1, 473.1445; F = 1//1, I = 0//1) / au,
                    -509; atol = 15)     # Kestler Table II, an independent CI+all-orders value
     @test isapprox(AtomTwin._alpha2_si(m3P1, 473.375; F = 1//1, I = 0//1) / au,

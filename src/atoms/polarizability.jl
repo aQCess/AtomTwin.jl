@@ -336,6 +336,7 @@ function _alpha0_si(model, λ_nm)
     α0 *= 2π * ε0 * c^3
     α0 += -model.offset_Hz_per_Wm2 * h * 2 * c * ε0
 
+    return α0
 end
 
 # ======================================================================
@@ -437,12 +438,14 @@ function _alpha2_si(model::PolarizabilityModel, λ_nm::Real;
         phase = iseven(round(Int, -2J - J_f - F - I)) ? 1.0 : -1.0
 
         # physical line strength factor f(J, J')
+
         f_phys = _line_strength_factor(J, J_f, t.freq_THz)
 
         α2 += phase * pre * (2J + 1) * f_phys * Γ / (ω0^2 * (ω0^2 - ωL^2)) * w1 * w2
     end
     
-    return 3π * ε0 * c^3 * α2
+    α2 *= 3π * ε0 * c^3
+    return α2
 end
 
 """
@@ -507,17 +510,18 @@ function light_shift_coeff_Hz_per_Wcm2(model::PolarizabilityModel, λ_nm::Real;
                                        mF = 0//1,
                                        I  = 0//1,
                                        ε_z::Real = 1.0)
-    U = _U_over_I(model, λ_nm)
+    α = _alpha0_si(model, λ_nm)
     if F !== nothing
         Fr, mFr, Ir = Rational{Int}(F), Rational{Int}(mF), Rational{Int}(I)
         abs(mFr) <= Fr || throw(ArgumentError("need |mF| ≤ F; got mF = $mFr, F = $Fr"))
         α2 = _alpha2_si(model, λ_nm; F = Fr, I = Ir)
         if α2 != 0.0
-            # One convention across the whole file: `polarizability_si` defines
-            # α_SI = −c ε₀ (U/I), so every α converts with 1/(c ε₀).
-            U += -α2 * _polarization_factor(ε_z) * _tensor_geometry(Fr, mFr) / (c * ε0)
+            α += α2 * _polarization_factor(ε_z) * _tensor_geometry(Fr, mFr)
         end
     end
+    # One convention across the whole file: `polarizability_si` defines
+    # α_SI = − 2 c ε₀ (U/I), so every α converts with 1/(2 c ε₀).
+    U = -α / (2 * c * ε0)
     ν_over_I = U / h              # Hz/(W/m²)
     return ν_over_I * 1e4         # Hz/(W/cm²)
 end
