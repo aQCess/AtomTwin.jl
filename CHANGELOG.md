@@ -28,6 +28,8 @@ old tolerance. Re-run anything you intend to compare against 0.1.x.
   states, detector outputs and the quantum state all reset between shots and
   between `play`s of the same job.
 - Spontaneous emission recorded with `add_decay!(…; λ)` gives a photon recoil.
+- A `Pulse` on a detuning with a complex amplitude is an error, as documented; it
+  was silently accepted.
 - The density-matrix dissipator is an exact channel; MCWF sub-steps are bounded
   by the jump-omission tolerance `jtol` (default from `shots`) and by the
   spectral width.

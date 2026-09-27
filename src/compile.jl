@@ -375,6 +375,7 @@ at the boundary zeros the field after the instruction completes.
 """
 function compile(atoms, inst::Pulse, dt; resolve_target = identity)
     resolved_couplings = [resolve_target(c) for c in inst.couplings]
+    _check_real_detuning(resolved_couplings, inst)
     tsteps, dt = stepgrid(inst.duration, dt)
     bmods = AbstractBoundaryModifier[_reset_modifier(c) for c in resolved_couplings]
 
@@ -415,6 +416,21 @@ function compile(atoms, inst::Pulse, dt; resolve_target = identity)
             for c in resolved_couplings]
         return modifiers, bmods, tsteps
     end
+end
+
+# A detuning is a real diagonal energy: a complex amplitude makes its term
+# anti-Hermitian, which the density matrix turns into population loss and the
+# statevector renormalises away -- two different wrong answers, silently.
+# Rounding residue (an `exp(iπ)`) is not complex in this sense.
+function _check_real_detuning(targets, inst::Pulse)
+    any(c -> c isa Detuning, targets) || return nothing
+    complex(z) = abs(imag(z)) > sqrt(eps()) * abs(z)
+    if complex(inst.ampl) || any(complex, inst.amplitudes)
+        throw(ArgumentError(
+            "a Pulse on a detuning needs real amplitudes (δ(t) in rad/s); got a " *
+            "complex `ampl` or `amplitudes`. A complex detuning is not Hermitian."))
+    end
+    return nothing
 end
 
 """

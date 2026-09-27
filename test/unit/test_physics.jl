@@ -913,3 +913,22 @@ end
     # channels that happen to survive a Dict insertion.
     @test 0.3 < n_pi / n_sig < 3.0
 end
+
+@testset "a detuning pulse must have real amplitudes" begin
+    # Documented as rejected; it was accepted, and the density matrix then lost
+    # population while the statevector renormalised it away.
+    l0, l1 = Level("0"), Level("1")
+    q = Atom(; levels = [l0, l1]); s = System(q)
+    δ = add_detuning!(s, q, l1, 1.0; active = false)
+    add_detector!(s, PopulationDetectorSpec(q, l1; name = "P1"))
+    seq = Sequence(1e-9)
+    push!(seq, Pulse(δ, 1e-7; amplitudes = fill(2π * 1e6 * im, 100), interp = :constant))
+    @test_throws ArgumentError play(s, seq; initial_state = l0 + l1)
+    @test_throws ArgumentError play(s, seq; initial_state = l0 + l1, density_matrix = true)
+    seq2 = Sequence(1e-9); push!(seq2, Pulse(δ, 1e-7; ampl = 1.0im))
+    @test_throws ArgumentError play(s, seq2; initial_state = l0 + l1)
+    seq3 = Sequence(1e-9); push!(seq3, Pulse(δ, 1e-7; amplitudes = fill(2π * 1e6, 100)))
+    @test play(s, seq3; initial_state = l0 + l1).detectors["P1"][end] ≈ 0.5 atol = 1e-10
+    seq4 = Sequence(1e-9); push!(seq4, Pulse(δ, 1e-7; ampl = -exp(im * π)))  # rounding residue
+    @test play(s, seq4; initial_state = l0 + l1).detectors["P1"][end] ≈ 0.5 atol = 1e-10
+end
