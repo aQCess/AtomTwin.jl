@@ -33,6 +33,9 @@ old tolerance. Re-run anything you intend to compare against 0.1.x.
   spectral width.
 - Shaped envelopes are read with `:cubic` interpolation by default
   (`:lagrange`, `:piecewise_constant` remain as aliases).
+- An instruction shorter than its `downsample` keeps its step count and records
+  one sample at its end; it was integrated with `downsample` steps instead
+  (25 → 10 000 for a 250 ns pulse at `dt = 10 ns`, `downsample = 10_000`).
 - Moves and ramps take `round(duration/dt)` steps, like every other timed
   instruction; a move used to take one more, so its output grid has one sample
   fewer.

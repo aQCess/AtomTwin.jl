@@ -161,7 +161,7 @@ function stepgrid(duration::Real, dt::Real, downsample::Integer = 1)
     if downsample > 1
         # Round up to a whole number of downsample groups, but never inflate a
         # short instruction to a full group it did not ask for.
-        tsteps = tsteps <= downsample ? downsample : cld(tsteps, downsample) * downsample
+        tsteps = tsteps <= downsample ? tsteps : cld(tsteps, downsample) * downsample
     end
     return (tsteps, duration / tsteps)
 end

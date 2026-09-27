@@ -305,6 +305,23 @@ end
         end
     end
 
+    @testset "stepgrid never inflates an instruction shorter than downsample" begin
+        # It used to return `downsample` steps: a 25-step pulse under
+        # `downsample = 10_000` ran 10 000 steps (400x the cost), silently.
+        @test AtomTwin.stepgrid(250e-9, 10e-9, 10_000)[1] == 25
+        @test AtomTwin.stepgrid(250e-9, 10e-9, 25)[1] == 25
+        @test AtomTwin.stepgrid(250e-9, 10e-9, 10)[1] == 30   # whole groups, as before
+        g, e = Level("g"), Level("e")
+        atom = Atom(; levels = [g, e]); sys = System(atom)
+        c = add_coupling!(sys, atom, g => e, 2π * 1e6; active = false)
+        add_detector!(sys, PopulationDetectorSpec(atom, e; name = "Pe"))
+        seq = Sequence(10e-9; downsample = 10_000)
+        push!(seq, Pulse(c, 250e-9))
+        out = play(sys, seq; initial_state = g)
+        @test length(out.times) == 1 && out.times[end] ≈ 250e-9
+        @test out.detectors["Pe"][end] ≈ sin(2π * 1e6 * 250e-9 / 2)^2 atol = 1e-6
+    end
+
     @testset "Sequence(duration, tsteps) matches the equivalent dt" begin
         # Stating "2 µs in 2000 steps" must be identical to stating dt = 1 ns.
         function _via_tsteps()
