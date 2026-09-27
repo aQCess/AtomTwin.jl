@@ -8,24 +8,40 @@
 #------------------------------------------------------------------------------
 
 """
-    quantum_jump!(psi, jumps, photo_detectors, i, steps, downsample, _prob, _q1, _q2, rng)
+    quantum_jump!(psi, n, jumps, photo_detectors, i, steps, downsample,
+                  _prob, _q1, _q2, rng) -> (fired jump or nothing, early::Bool)
 
-Test for a quantum jump after one MCWF step, fire one if `‖ψ‖² < rand()`, and
-renormalise.
+Test for a quantum jump after one MCWF sub-step, fire one if `‖ψ‖² < u` for a
+fresh uniform `u`, and renormalise. `n = ‖ψ‖`.
 
-The test runs once per step, so at most one jump fires; [`jump_substeps`](@ref)
-sizes the step so two-jump events stay within `jtol`.
+**Jump time.** The norm crossed `u` somewhere inside the sub-step; if it decayed
+exponentially across it, at the fraction `f = ln u / ln n²` of the way through.
+Applying every jump at the END of its sub-step — the classic first-order scheme —
+delays each by `(1 − f)h`, which lengthens every emission cycle: on a saturated
+transition the photon count comes out low by about `R h/2 ≈ √jtol/4` (2.5 % at
+`jtol = 1e-2`, the largest default). Instead, with probability `1 − f` the jump is
+`early`: it is taken to have happened at the START of the sub-step, and the caller
+propagates the post-jump state over the sub-step (see [`wfmc`](@ref)). The
+post-jump evolution time is then right on average and the bias second order. The
+jump itself — channel and post-jump state — is always drawn from the end-of-sub-step
+state, the one whose norm crossed `u`: the start state may hold none of the
+decaying amplitude yet. Cost: one extra propagation for a fraction `1 − f` of the
+jumps, i.e. at most a few per cent of the sub-steps.
 
-A fired jump writes a click to any `PhotoDetector` bound to it, in the
-downsampled bin containing raw step `i`. Trailing steps beyond the last full bin
-are attributed to that bin, so no click is lost or written out of bounds.
+At most one jump fires per sub-step; [`jump_substeps`](@ref) sizes the step so
+two-jump events stay within `jtol`. A fired jump writes a click to any
+`PhotoDetector` bound to it, in the downsampled bin containing raw step `i`.
 """
-@inline function quantum_jump!(psi::Vector{ComplexF64}, jumps, photo_detectors,
-                               i::Int, steps::Int, downsample::Int,
+@inline function quantum_jump!(psi::Vector{ComplexF64}, n::Float64, jumps,
+                               photo_detectors, i::Int, steps::Int, downsample::Int,
                                _prob, _q1, _q2, rng)
-    n = norm(psi)
-    if n^2 < rand(rng)
+    n2 = n * n
+    u  = rand(rng)
+    fired = nothing
+    early = false
+    if n2 < u
         fired = jump!(psi, jumps, _prob, _q1, _q2, rng)
+        early = rand(rng) * log(n2) < log(u)    # probability 1 − f (ln n² < 0)
         @inbounds for d in photo_detectors
             ## `any(===(fired), d.jumps)` rather than a single identity test: a
             ## manifold decay has one jump per sublevel channel and all of them
@@ -39,11 +55,17 @@ are attributed to that bin, so no click is lost or written out of bounds.
         end
         n = norm(psi)
     end
-    inv_n = 1.0 / n            # explicit loop: `psi ./= n` allocates per step
+    _renormalise!(psi, n)
+    return fired, early
+end
+
+# Explicit loop: `psi ./= n` allocates per step.
+@inline function _renormalise!(psi::Vector{ComplexF64}, n::Float64)
+    inv_n = 1.0 / n
     @inbounds @simd for k in eachindex(psi)
         psi[k] *= inv_n
     end
-    return
+    return psi
 end
 
 """
@@ -91,8 +113,9 @@ Two separate errors set the sub-step `h`, and the smaller bound wins:
    `Δp = √jtol` bounds the omission by `jtol` with no fitted constant, giving
    `h ≤ −log1p(−√jtol)/Γmax`.
 
-2. **Jump-time resolution.** A jump is applied at the END of the sub-step it is
-   detected in, so its time carries an error of order `h`. What makes that
+2. **Jump-time resolution.** A jump is placed at one end of the sub-step it is
+   detected in ([`quantum_jump!`](@ref)), so its time carries an error of order
+   `h`. What makes that
    matter is not the decay rate but how far the state rotates meanwhile: the
    error is `O(ΔE·h)` with `ΔE` the spectral half-width of `H_eff`. This needs
    `ΔE·h ≲ 1` and is the binding constraint whenever `ΔE ≫ Γmax` — a

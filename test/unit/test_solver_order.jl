@@ -854,3 +854,47 @@ end
     ratio = (P[1] - P[2]) / (P[2] - P[3])
     @test 3.5 < ratio < 4.5                 # 2 for first order, 4 for second
 end
+
+@testset "MCWF photon counts match the master equation" begin
+    # A jump used to be applied at the END of the sub-step it was detected in, which
+    # lengthened every emission cycle by ~h/2: on a saturated line the photon count
+    # was ~√jtol/4 low (−2.5 % at s = 40 with the default jtol). The jump is now
+    # placed at the start or the end of its sub-step with the probabilities that
+    # make its time right on average. The manifold decay (three channels, two of
+    # them dark) checks that the jump is drawn from a state that holds the decaying
+    # amplitude: right after a jump, a sub-step's start state holds none.
+    Γ = 2π * 29.1e6; s = 40.0; Ω = Γ * sqrt(s / 2); T = 400e-9; dt = 1e-9
+    function build(clicks, manifold)
+        if manifold
+            gm, em = HyperfineManifold(0//1, 0; label = "g"), HyperfineManifold(1//1, 1; label = "e")
+            a = Atom(; levels = [gm..., em...]); g, e, decay = gm[0], em[0], em => gm
+        else
+            g, e = Level("g"), Level("e")
+            a = Atom(; levels = [g, e]); decay = e => g
+        end
+        sys = System(a)
+        c = add_coupling!(sys, a, g => e, Ω; active = false)
+        if clicks
+            pd = PhotoDetectorSpec(name = "c"); add_detector!(sys, pd)
+            add_decay!(sys, a, decay, Γ; clicks = pd)
+        else
+            add_decay!(sys, a, decay, Γ)
+            add_detector!(sys, PopulationDetectorSpec(a, e; name = "Pe"))
+        end
+        seq = Sequence(dt)
+        push!(seq, Pulse(c, T; downsample = 1)); push!(seq, Wait(60e-9; downsample = 1))
+        sys, seq, g
+    end
+    for manifold in (false, true)
+        sys, seq, g = build(false, manifold)
+        o = play(sys, seq; initial_state = g, density_matrix = true)
+        t = [0.0; o.times]; P = [0.0; real.(o.detectors["Pe"])]
+        N_exact = Γ * sum(0.5 * (P[i] + P[i-1]) * (t[i] - t[i-1]) for i in 2:length(t))
+        sys, seq, g = build(true, manifold)
+        N = vec(sum(play(sys, seq; initial_state = g, shots = 6000,
+                         rng = MersenneTwister(11)).detectors["c"], dims = 1))
+        se = std(N) / sqrt(length(N))
+        @test abs(mean(N) - N_exact) < 4se      # was 12σ low
+        @test abs(mean(N) / N_exact - 1) < 0.006
+    end
+end

@@ -517,8 +517,12 @@ function wfmc(psi::Vector{ComplexF64},
                 track_spectrum!(plan, Heff_terms; recenter = false)
             end
             propagate!(integrator, psi, Heff_terms, plan)
-            quantum_jump!(psi, jumps, photo_detectors, i, steps, downsample,
-                          _prob, _q1, _q2, rng)
+            _, early = quantum_jump!(psi, norm(psi), jumps, photo_detectors, i, steps,
+                                     downsample, _prob, _q1, _q2, rng)
+            if early                   # the jump opened the sub-step: see `quantum_jump!`
+                propagate!(integrator, psi, Heff_terms, plan)
+                _renormalise!(psi, norm(psi))
+            end
         end
         has_detectors && write_detectors!(state_detectors, i, steps, downsample)
     end
@@ -629,8 +633,12 @@ function wfmc_semiclassical(psi::Vector{ComplexF64},
                 track_spectrum!(plan, Heff_terms; recenter = false)
             end
             propagate!(integrator, psi, Heff_terms, plan)
-            quantum_jump!(psi, jumps, photo_detectors, i, steps, downsample,
-                          _prob, _q1, _q2, rng)
+            _, early = quantum_jump!(psi, norm(psi), jumps, photo_detectors, i, steps,
+                                     downsample, _prob, _q1, _q2, rng)
+            if early                   # the jump opened the sub-step: see `quantum_jump!`
+                propagate!(integrator, psi, Heff_terms, plan)
+                _renormalise!(psi, norm(psi))
+            end
         end
         has_detectors && write_detectors!(state_detectors, i, steps, downsample)
     end
