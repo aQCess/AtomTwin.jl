@@ -559,11 +559,11 @@ model and wavelength.
 # Definition
 Uses the relation
 
-    U/I = -α_SI / (c ε₀)
+    U/I = -α_SI / ( 2 c ε₀)
 
 which gives
 
-    α_SI = -c ε₀ (U/I)
+    α_SI = - 2 c ε₀ (U/I)
 
 where U/I is the light shift per intensity in J/(W/m²).
 
@@ -573,7 +573,7 @@ standard SI unit for electric polarizability.
 """
 function polarizability_si(model::PolarizabilityModel, λ_nm::Real)
     U = _U_over_I(model, λ_nm)
-    α_SI = - 2c * ε0 * U
+    α_SI = - 2 * c * ε0 * U
     return α_SI
 end
 
