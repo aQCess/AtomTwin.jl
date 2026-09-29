@@ -312,7 +312,6 @@ function _init_species_data!(a::AtomWrapper, inner::NLevelAtom, beams;
                   "in wavelength.")
         end
         ε_z = first(εs)
-
         α_si = map(a.levels) do l
             key = _level_term(l)
             if !haskey(models, key)
@@ -320,7 +319,7 @@ function _init_species_data!(a::AtomWrapper, inner::NLevelAtom, beams;
                 return 0.0
             end
             model = models[key]
-            α = polarizability_si(model, λ * 1e9)
+            α = _alpha0_si(model, λ * 1e9)
             # Tensor part: needs F and mF, so only a level that carries them gets
             # it. It vanishes identically for J ≤ 1/2 or F ≤ 1/2, so this is a
             # no-op for every ¹S₀/³P₀ state.
