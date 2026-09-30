@@ -50,12 +50,12 @@ equivalent ways to supply that weight are accepted by the constructor:
    The constructor converts the dipole to the effective width, taking into account 
    different normalization conventions for the reduced dipole matrix element:
 
-    1. Wigner-3j, d_convention = "wigner3j" (default)
+    1. Wigner-3j, dipole_convention = "wigner3j" (default)
 
     In this convention, |(Jg‖d‖Je)|² is symmetric in Jg ↔ Je and equals the 
     line strength S directly: S = |(Jg‖d‖Je)|².
 
-    2. Clebsch-Gordan, d_convention = "clebschgordan"
+    2. Clebsch-Gordan, dipole_convention = "clebschgordan"
 
     In this convention, |⟨Jg‖d‖Je⟩|² is NOT symmetric in Jg ↔ Je and is related 
     to the line strength by: S = (2Jg + 1) |⟨Jg‖d‖Je⟩|²
@@ -132,14 +132,14 @@ function _normalize_transition(t, J_model::Rational{Int})
         γ = Float64(t.gamma_MHz)
     elseif haskey(t, :dipole_ea0)
         Je, Jg = freq > 0 ? (J_f, J) : (J, J_f)
-        d_convention = haskey(t, :d_convention) ? Symbol(t.d_convention) : :wigner3j
-        d_convention in (:wigner3j, :clebschgordan) || error(
-            "PolarizabilityModel transition `d_convention` must be :wigner3j, " *
-            "or :clebschgordan; got $(repr(d_convention))")
+        convention = haskey(t, :dipole_convention) ? Symbol(t.dipole_convention) : :wigner3j
+        convention in (:wigner3j, :clebschgordan) || error(
+            "PolarizabilityModel transition `dipole_convention` must be :wigner3j, " *
+            "or :clebschgordan; got $(repr(convention))")
 
-        if d_convention == :wigner3j
+        if convention == :wigner3j
             γ  = _dipole_to_gamma_MHz(t.freq_THz, t.dipole_ea0, Je)
-        elseif d_convention == :clebschgordan
+        elseif convention == :clebschgordan
             γ  = _dipole_to_gamma_MHz(t.freq_THz, t.dipole_ea0*sqrt(2Jg+1), Je)
         end
     else
@@ -481,6 +481,75 @@ _polarization_factor(ε_z::Real) = (3 * abs2(ε_z) - 1) / 2
 # ======================================================================
 
 """
+    polarizability_si(model::PolarizabilityModel, λ_nm::Real) -> Float64
+
+Dynamic electric polarizability α in SI units (C·m²·V⁻¹) for the given
+model and wavelength. This polarizability relates to the physical shift in 
+energy U per unit intensity I through the relation:
+
+    U/I = -α_SI / ( 2 c ε₀)
+
+# Arguments
+- `model`: Polarizability model for a single atomic state.
+- `λ_nm`: Laser wavelength in nanometres.
+
+# Keyword arguments (tensor light shift)
+Supplying `F` adds the **tensor** contribution for the sublevel `|F, mF⟩`:
+
+- `F`: hyperfine quantum number. Omit (the default) for the scalar shift alone.
+- `mF`: magnetic sublevel, `-F ≤ mF ≤ F`.
+- `I`: nuclear spin; `0` for a zero-spin isotope, where `F = J`.
+- `ε_z`: projection of the (linear) polarisation unit vector on the quantisation
+  axis, i.e. `cos θ`. `1` means polarisation along the axis.
+
+The tensor term vanishes identically for `J ≤ 1/2` or `F ≤ 1/2`, so passing `F`
+for a `¹S₀` or `³P₀` state is harmless and returns the scalar result.
+
+Valid only for linear polarisation: the vector (rank-1) term, which would enter
+for elliptical light, is not included.
+
+# Units
+Returns polarizability in C·m²·V⁻¹ (or equivalently F·m²), which is the
+standard SI unit for electric polarizability.
+"""
+function polarizability_si(model::PolarizabilityModel, λ_nm::Real;
+                                       F  = nothing,
+                                       mF = 0//1,
+                                       I  = 0//1,
+                                       ε_z::Real = 1.0)
+    α = _alpha0_si(model, λ_nm)
+    if F !== nothing
+        Fr, mFr, Ir = Rational{Int}(F), Rational{Int}(mF), Rational{Int}(I)
+        abs(mFr) <= Fr || throw(ArgumentError("need |mF| ≤ F; got mF = $mFr, F = $Fr"))
+        α2 = _alpha2_si(model, λ_nm; F = Fr, I = Ir)
+        if α2 != 0.0
+            α += α2 * _polarization_factor(ε_z) * _tensor_geometry(Fr, mFr)
+        end
+    end
+    return α
+end
+
+"""
+    polarizability_au(model::PolarizabilityModel, λ_nm::Real) -> Float64
+
+Dynamic electric polarizability α in atomic units (a₀³) for the given
+model and wavelength.
+
+# Definition
+Converts from SI units via
+
+    α_au = α_SI / (4π ε₀ a₀³)
+"""
+function polarizability_au(model::PolarizabilityModel, λ_nm::Real;
+                                       F  = nothing,
+                                       mF = 0//1,
+                                       I  = 0//1,
+                                       ε_z::Real = 1.0)
+    α_SI = polarizability_si(model, λ_nm; F=F, mF=mF, I=I, ε_z=ε_z)
+    return α_SI / (4π * ε0 * a0^3)
+end
+
+"""
     light_shift_coeff_Hz_per_Wcm2(model, λ_nm; F = nothing, mF = 0, I = 0, ε_z = 1) -> Float64
 
 Light-shift coefficient Δν/I in Hz/(W/cm²) for the given model and wavelength.
@@ -489,6 +558,10 @@ Light-shift coefficient Δν/I in Hz/(W/cm²) for the given model and wavelength
 For a beam intensity `I` in W/cm², the light shift is
 
     Δν = light_shift_coeff_Hz_per_Wcm2(model, λ_nm) * I
+
+Uses the relation
+
+    U/I = -α_SI / ( 2 c ε₀)
 
 # Arguments
 - `model`: Polarizability model for a single atomic state.
@@ -514,15 +587,7 @@ function light_shift_coeff_Hz_per_Wcm2(model::PolarizabilityModel, λ_nm::Real;
                                        mF = 0//1,
                                        I  = 0//1,
                                        ε_z::Real = 1.0)
-    α = _alpha0_si(model, λ_nm)
-    if F !== nothing
-        Fr, mFr, Ir = Rational{Int}(F), Rational{Int}(mF), Rational{Int}(I)
-        abs(mFr) <= Fr || throw(ArgumentError("need |mF| ≤ F; got mF = $mFr, F = $Fr"))
-        α2 = _alpha2_si(model, λ_nm; F = Fr, I = Ir)
-        if α2 != 0.0
-            α += α2 * _polarization_factor(ε_z) * _tensor_geometry(Fr, mFr)
-        end
-    end
+    α = polarizability_si(model, λ_nm; F=F, mF=mF, I=I, ε_z=ε_z)
     # One convention across the whole file: `polarizability_si` defines
     # α_SI = − 2 c ε₀ (U/I), so every α converts with 1/(2 c ε₀).
     U = -α / (2 * c * ε0)
@@ -554,49 +619,7 @@ function scattering_rate_per_Wcm2(model::PolarizabilityModel, λ_nm::Real)
     return Γsc_over_I * 1e4                       # (1/s)/(W/cm²)
 end
 
-"""
-    polarizability_si(model::PolarizabilityModel, λ_nm::Real) -> Float64
 
-Dynamic electric scalar polarizability α in SI units (C·m²·V⁻¹) for the given
-model and wavelength.
-
-# Definition
-Uses the relation
-
-    U/I = -α_SI / ( 2 c ε₀)
-
-which gives
-
-    α_SI = - 2 c ε₀ (U/I)
-
-where U/I is the light shift per intensity in J/(W/m²).
-
-# Units
-Returns polarizability in C·m²·V⁻¹ (or equivalently F·m²), which is the
-standard SI unit for electric polarizability.
-"""
-function polarizability_si(model::PolarizabilityModel, λ_nm::Real)
-    α_SI = _alpha0_si(model, λ_nm)
-    return α_SI
-end
-
-"""
-    polarizability_au(model::PolarizabilityModel, λ_nm::Real) -> Float64
-
-DEPRECATED
-
-Dynamic electric polarizability α in atomic units (a₀³) for the given
-model and wavelength.
-
-# Definition
-Converts from SI units via
-
-    α_au = α_SI / (4π ε₀ a₀³)
-"""
-function polarizability_au(model::PolarizabilityModel, λ_nm::Real)
-    α_SI = polarizability_si(model, λ_nm)
-    return α_SI / (4π * ε0 * a0^3)
-end
 
 
 # ======================================================================
@@ -720,7 +743,7 @@ function print_polarizability_model(model::PolarizabilityModel; io::IO = stdout)
     for (idx, t) in enumerate(model.transitions)
         print(io, "    [", idx, "]: ")
         print(io, "freq_THz: ", t.freq_THz, ", ")
-        print(io, "gamma_MHz: ", t.gamma_MHz, ", ")
+        print(io, "gamma_MHz: ", t.gamma_MHz, "MHz, ")
         print(io, "J: ", t.J, ", ")
         print(io, "J_f: ", t.J_f, ", ")
         print(io, "source: ", t.source)
