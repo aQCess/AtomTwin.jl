@@ -321,9 +321,12 @@ function _init_species_data!(a::AtomWrapper, inner::NLevelAtom, beams;
                 return 0.0
             end
             model = models[key]
-            if hasproperty(l, :F) && hasproperty(l, :mF)
+            if l isa HyperfineLevel
                 α = polarizability_si(model, λ * 1e9; 
                                         F = l.F, mF = l.mF, I = a.I, ε_z = ε_z)
+            elseif a.I == 0//1 && l isa FineLevel
+                α = polarizability_si(model, λ * 1e9; 
+                                        F = l.J, mF = l.mJ, I = a.I, ε_z = ε_z)
             else
                 α = polarizability_si(model, λ * 1e9)
             end
