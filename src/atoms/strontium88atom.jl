@@ -61,10 +61,10 @@ Dominated by the 461 nm ¹P₁ line; higher ¹P₁ lines and the core are the of
 const SR88_POLARIZABILITY_1S0 = PolarizabilityModel(
     "1S0",
     [
-        (freq_THz = 650.4897, dipole_ea0 = 5.248, Jg = 0, J_f = 1//1),  # 5s5p ¹P₁   (461 nm)
-        (freq_THz = 434.8190, dipole_ea0 = 0.158, Jg = 0, J_f = 1//1),  # 5s5p ³P₁   (689 nm, weak)
-        (freq_THz = 1022.2323, dipole_ea0 = 0.281, Jg = 0, J_f = 1//1), # 5s6p ¹P₁   (293 nm)
-        (freq_THz = 1234.3055, dipole_ea0 = 0.517, Jg = 0, J_f = 1//1), # 4d5p ¹P₁   (243 nm)
+        (freq_THz = 650.4897, dipole_ea0 = 5.248, J_f = 1//1,  dipole_convention = :wigner3j),  # 5s5p ¹P₁   (461 nm)
+        (freq_THz = 434.8190, dipole_ea0 = 0.158, J_f = 1//1,  dipole_convention = :wigner3j),  # 5s5p ³P₁   (689 nm, weak)
+        (freq_THz = 1022.2323, dipole_ea0 = 0.281, J_f = 1//1, dipole_convention = :wigner3j), # 5s6p ¹P₁   (293 nm)
+        (freq_THz = 1234.3055, dipole_ea0 = 0.517, J_f = 1//1, dipole_convention = :wigner3j), # 4d5p ¹P₁   (243 nm)
     ];
     J = 0//1,                                                  # 5s² ¹S₀
     offset_Hz_per_Wm2 = _au_to_offset_Hz_per_Wm2(4.60 + 5.29),  # Other + Core+Vc
@@ -82,12 +82,12 @@ magic wavelength; the tail offset is anchored to the measured 813.428 nm crossin
 const SR88_POLARIZABILITY_3P0 = PolarizabilityModel(
     "3P0",
     [
-        (freq_THz = 115.1803, dipole_ea0 = 2.675, Jg = 0, J_f = 1//1),  # 5s4d ³D₁   (2603 nm)
-        (freq_THz = 441.3245, dipole_ea0 = 1.962, Jg = 0, J_f = 1//1),  # 5s6s ³S₁   (679 nm)
-        (freq_THz = 620.2406, dipole_ea0 = 2.450, Jg = 0, J_f = 1//1),  # 5s5d ³D₁   (483 nm)
-        (freq_THz = 632.0524, dipole_ea0 = 2.605, Jg = 0, J_f = 1//1),  # 5p²  ³P₁   (474 nm)
-        (freq_THz = 692.7304, dipole_ea0 = 0.516, Jg = 0, J_f = 1//1),  # 5s7s ³S₁   (433 nm)
-        (freq_THz = 760.5135, dipole_ea0 = 1.161, Jg = 0, J_f = 1//1),  # 5s6d ³D₁   (394 nm)
+        (freq_THz = 115.1803, dipole_ea0 = 2.675, J_f = 1//1, dipole_convention = :wigner3j),  # 5s4d ³D₁   (2603 nm)
+        (freq_THz = 441.3245, dipole_ea0 = 1.962, J_f = 1//1, dipole_convention = :wigner3j),  # 5s6s ³S₁   (679 nm)
+        (freq_THz = 620.2406, dipole_ea0 = 2.450, J_f = 1//1, dipole_convention = :wigner3j),  # 5s5d ³D₁   (483 nm)
+        (freq_THz = 632.0524, dipole_ea0 = 2.605, J_f = 1//1, dipole_convention = :wigner3j),  # 5p²  ³P₁   (474 nm)
+        (freq_THz = 692.7304, dipole_ea0 = 0.516, J_f = 1//1, dipole_convention = :wigner3j),  # 5s7s ³S₁   (433 nm)
+        (freq_THz = 760.5135, dipole_ea0 = 1.161, J_f = 1//1, dipole_convention = :wigner3j),  # 5s6d ³D₁   (394 nm)
     ];
     J = 0//1,                                            # 5s5p ³P₀
     offset_Hz_per_Wm2 = _au_to_offset_Hz_per_Wm2(39.31),  # tail anchored to 813.428 nm
@@ -127,19 +127,19 @@ const SR88_POLARIZABILITY_3P1 = PolarizabilityModel(
         #   Γ = ω₀³|d|²/(3πε₀ħc³)·(2J_g+1)/(2J_e+1) = 2π × 8.187 kHz  (τ ≈ 19.4 µs;
         # the accepted value is 7.4 kHz / 21.4 µs — this line is worth ≈1 a.u. here,
         # so internal consistency matters more than the 10% on its width).
-        (freq_THz = -434.8190, gamma_MHz = 8.187e-3, J_f = 0//1),   # 5s² ¹S₀
+        (freq_THz = -434.8190,   dipole_ea0 = 0.158, J_f = 1//1, dipole_convention = :wigner3j),   # 5s² ¹S₀
         #      E(cm⁻¹ from ³P₁)  →  THz,  D in e·a₀ (PRA 105, 012821 Table II)
-        (freq_THz =  109.574143, dipole_ea0 = 2.318, Jg = 1//1, J_f = 1//1),  # 5s4d ³D₁
-        (freq_THz =  111.342919, dipole_ea0 = 4.013, Jg = 1//1, J_f = 2//1),  # 5s4d ³D₂
-        (freq_THz =  435.718358, dipole_ea0 = 3.435, Jg = 1//1, J_f = 1//1),  # 5s6s ³S₁  688 nm
-        (freq_THz =  614.664477, dipole_ea0 = 2.005, Jg = 1//1, J_f = 1//1),  # 5s5d ³D₁
-        (freq_THz =  615.114165, dipole_ea0 = 3.671, Jg = 1//1, J_f = 2//1),  # 5s5d ³D₂
-        (freq_THz =  620.240616, dipole_ea0 = 2.658, Jg = 1//1, J_f = 0//1),  # 5p²  ³P₀
-        (freq_THz =  626.446320, dipole_ea0 = 2.363, Jg = 1//1, J_f = 1//1),  # 5p²  ³P₁
-        (freq_THz =  634.660634, dipole_ea0 = 2.867, Jg = 1//1, J_f = 2//1),  # 5p²  ³P₂  472 nm
-        (freq_THz =  673.243923, dipole_ea0 = 0.228, Jg = 1//1, J_f = 2//1),  # 5p²  ¹D₂
-        (freq_THz =  679.209793, dipole_ea0 = 0.291, Jg = 1//1, J_f = 0//1),  # 5p²  ¹S₀
-        (freq_THz =  687.124314, dipole_ea0 = 0.921, Jg = 1//1, J_f = 1//1),  # 5s7s ³S₁
+        (freq_THz =  109.574143, dipole_ea0 = 2.318, J_f = 1//1, dipole_convention = :wigner3j),  # 5s4d ³D₁
+        (freq_THz =  111.342919, dipole_ea0 = 4.013, J_f = 2//1, dipole_convention = :wigner3j),  # 5s4d ³D₂
+        (freq_THz =  435.718358, dipole_ea0 = 3.435, J_f = 1//1, dipole_convention = :wigner3j),  # 5s6s ³S₁  688 nm
+        (freq_THz =  614.664477, dipole_ea0 = 2.005, J_f = 1//1, dipole_convention = :wigner3j),  # 5s5d ³D₁
+        (freq_THz =  615.114165, dipole_ea0 = 3.671, J_f = 2//1, dipole_convention = :wigner3j),  # 5s5d ³D₂
+        (freq_THz =  620.240616, dipole_ea0 = 2.658, J_f = 0//1, dipole_convention = :wigner3j),  # 5p²  ³P₀
+        (freq_THz =  626.446320, dipole_ea0 = 2.363, J_f = 1//1, dipole_convention = :wigner3j),  # 5p²  ³P₁
+        (freq_THz =  634.660634, dipole_ea0 = 2.867, J_f = 2//1, dipole_convention = :wigner3j),  # 5p²  ³P₂  472 nm
+        (freq_THz =  673.243923, dipole_ea0 = 0.228, J_f = 2//1, dipole_convention = :wigner3j),  # 5p²  ¹D₂
+        (freq_THz =  679.209793, dipole_ea0 = 0.291, J_f = 0//1, dipole_convention = :wigner3j),  # 5p²  ¹S₀
+        (freq_THz =  687.124314, dipole_ea0 = 0.921, J_f = 1//1, dipole_convention = :wigner3j),  # 5s7s ³S₁
     ];
     J = 1//1,                                        # 5s5p ³P₁
     # Table II "Other" (81) + "Core + vc" (6), in a.u. at the magic wavelengths.

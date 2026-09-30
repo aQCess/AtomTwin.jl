@@ -30,17 +30,17 @@ accuracy below the D lines. Reproduces the accepted static scalar polarizability
 (α₀ ≈ 318 a.u.) and the correct α(λ) from the IR through the visible.
 
 Line frequencies are from NIST wavelengths; dipoles are `|⟨5S₁/₂‖er‖nP_J⟩|` in
-`e·a₀`. The `Jg = 1/2` per line is explicit for clarity (it is also the default).
+`e·a₀`.
 """
 const RB87_POLARIZABILITY_5S12 = PolarizabilityModel(
     "5S1/2",
     [
-        (freq_THz = 377.107, dipole_ea0 = 4.227, Jg = 1//2),  # D1  5S1/2 → 5P1/2  (795 nm)
-        (freq_THz = 384.231, dipole_ea0 = 5.977, Jg = 1//2),  # D2  5S1/2 → 5P3/2  (780 nm)
-        (freq_THz = 710.960, dipole_ea0 = 0.342, Jg = 1//2),  #     5S1/2 → 6P1/2  (422 nm)
-        (freq_THz = 713.477, dipole_ea0 = 0.553, Jg = 1//2),  #     5S1/2 → 6P3/2  (420 nm)
-        (freq_THz = 834.474, dipole_ea0 = 0.118, Jg = 1//2),  #     5S1/2 → 7P1/2  (359 nm)
-        (freq_THz = 835.526, dipole_ea0 = 0.207, Jg = 1//2),  #     5S1/2 → 7P3/2  (359 nm)
+        (freq_THz = 377.107, dipole_ea0 = 4.227, J_f = 1//2, dipole_convention = :wigner3j),  # D1  5S1/2 → 5P1/2  (795 nm)
+        (freq_THz = 384.231, dipole_ea0 = 5.977, J_f = 3//2, dipole_convention = :wigner3j),  # D2  5S1/2 → 5P3/2  (780 nm)
+        (freq_THz = 710.960, dipole_ea0 = 0.342, J_f = 1//2, dipole_convention = :wigner3j),  #     5S1/2 → 6P1/2  (422 nm)
+        (freq_THz = 713.477, dipole_ea0 = 0.553, J_f = 3//2, dipole_convention = :wigner3j),  #     5S1/2 → 6P3/2  (420 nm)
+        (freq_THz = 834.474, dipole_ea0 = 0.118, J_f = 1//2, dipole_convention = :wigner3j),  #     5S1/2 → 7P1/2  (359 nm)
+        (freq_THz = 835.526, dipole_ea0 = 0.207, J_f = 3//2, dipole_convention = :wigner3j),  #     5S1/2 → 7P3/2  (359 nm)
     ];
     J = 1//2,                       # 5S₁/₂ ground state
     # Static ionic-core (Rb⁺) + valence-tail polarizability, α_core ≈ 9.08 a.u.:
