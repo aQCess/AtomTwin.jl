@@ -302,6 +302,7 @@ function _init_species_data!(a::AtomWrapper, inner::NLevelAtom, beams;
         # own polarization. Beams sharing a wavelength must therefore agree on it —
         # a tweezer array does, being one beam replicated. Rather than silently
         # picking one, say so.
+        # This behaviour may be subject to change in the future.
         same_λ = [b for b in beams if getwavelength(b) == λ]
         εs = [_beam_epsilon_z(b, q_axis) for b in same_λ]
         if !all(e -> isapprox(e, first(εs); atol = 1e-12), εs)
@@ -312,6 +313,7 @@ function _init_species_data!(a::AtomWrapper, inner::NLevelAtom, beams;
                   "in wavelength.")
         end
         ε_z = first(εs)
+        # compute polarizability for every internal level
         α_si = map(a.levels) do l
             key = _level_term(l)
             if !haskey(models, key)
@@ -319,15 +321,11 @@ function _init_species_data!(a::AtomWrapper, inner::NLevelAtom, beams;
                 return 0.0
             end
             model = models[key]
-            α = _alpha0_si(model, λ * 1e9)
-            # Tensor part: needs F and mF, so only a level that carries them gets
-            # it. It vanishes identically for J ≤ 1/2 or F ≤ 1/2, so this is a
-            # no-op for every ¹S₀/³P₀ state.
             if hasproperty(l, :F) && hasproperty(l, :mF)
-                α2 = _alpha2_si(model, λ * 1e9; F = l.F, I = a.I)
-                if α2 != 0.0
-                    α += α2 * _polarization_factor(ε_z) * _tensor_geometry(l.F, l.mF)
-                end
+                α = polarizability_si(model, λ * 1e9; 
+                                        F = l.F, mF = l.mF, I = a.I, ε_z = ε_z)
+            else
+                α = polarizability_si(model, λ * 1e9)
             end
             return α
         end
