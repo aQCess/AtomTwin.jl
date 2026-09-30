@@ -488,7 +488,7 @@ function _alpha2_si(model::PolarizabilityModel, λ_nm::Real;
     # term above: the F dependence of a line is pre(F)·{J J 2; F F I}·(−1)^(−F−I),
     # so relative to the nuclear-spin-free F = J it is the ratio of those.
     if model.tensor_offset_Hz_per_Wm2 != 0.0
-        α2J = -c * ε0 * h * model.tensor_offset_Hz_per_Wm2      # α = −cε₀ U/I
+        α2J = -2c * ε0 * h * model.tensor_offset_Hz_per_Wm2      # α = −2cε₀ U/I
         wF  = wigner6j(J, J, 2, F, F, I)
         wJ  = wigner6j(J, J, 2, J, J, 0)
         sgn = iseven(round(Int, J - F - I)) ? 1.0 : -1.0
