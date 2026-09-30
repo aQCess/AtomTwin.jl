@@ -304,6 +304,10 @@ function _U_over_I(model::PolarizabilityModel, λ_nm::Real)
     return U_over_I
 end
 
+# ======================================================================
+# Scalar polarizability
+# ======================================================================
+
 """
     _alpha0_si(model, λ_nm) -> Float64
 
