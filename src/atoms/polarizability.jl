@@ -93,7 +93,7 @@ struct PolarizabilityModel
 end
 
 """
-    _dipole_to_gamma_MHz(freq_THz, dipole_ea0, Jg) -> Float64
+    _dipole_to_gamma_MHz(freq_THz, dipole_ea0, Je) -> Float64
 
 Effective line-strength width (MHz, linear) for a transition specified by its
 reduced dipole matrix element `dipole_ea0` = `|(Jg‖er‖Je)|` in `e·a₀`, such that
