@@ -55,8 +55,7 @@ Only [`Taylor`](@ref) carries one. Chebyshev sets its degree from `ΔE·dt` and
 `tol`, so where a Taylor kernel still runs beneath it -- the Strang half-steps of
 the density-matrix path -- the default 4 applies.
 """
-taylor_order(t::Taylor)   = t.order
-taylor_order(::Chebyshev)  = 4
+taylor_order(t::Taylor) = t.order
 taylor_order(::AbstractIntegrator) = 4
 
 """
@@ -446,34 +445,34 @@ function fdissipator2!(dt::Float64,
 end
 
 # Scratch for `force`: the distinct-wavelength list, sized by the beam count.
-const _FORCE_WS = ThreadCache{NamedTuple{(:seen,),Tuple{Vector{Float64}}}}(
-    n -> (seen = zeros(Float64, n),))
+const _FORCE_WS = _engine_cache(ThreadCache{NamedTuple{(:seen,),Tuple{Vector{Float64}}}}(
+    n -> (seen = zeros(Float64, n),)))
 
 _force_ws(n::Int) = get_ws!(_FORCE_WS, n)
 
 # Per-dimension scratch for `gershgorin_interval`: disc centres and radii.
-const _GERSH_INT_WS = ThreadCache{NamedTuple{(:diag, :rad),NTuple{2,Vector{Float64}}}}(
-    n -> (diag = zeros(Float64, n), rad = zeros(Float64, n)))
+const _GERSH_INT_WS = _engine_cache(ThreadCache{NamedTuple{(:diag, :rad),NTuple{2,Vector{Float64}}}}(
+    n -> (diag = zeros(Float64, n), rad = zeros(Float64, n))))
 
 _gersh_interval_ws(n::Int) = get_ws!(_GERSH_INT_WS, n)
 
 # Per-dimension scratch for `gershgorin_bound`: the row-sum accumulator.
-const _GERSH_WS = ThreadCache{Vector{Float64}}(n -> zeros(Float64, n))
+const _GERSH_WS = _engine_cache(ThreadCache{Vector{Float64}}(n -> zeros(Float64, n)))
 
 _gershgorin_ws(n::Int) = get_ws!(_GERSH_WS, n)
 
 # Per-dimension scratch for `apply_commutator!`: the transposed accumulator that
 # lets the kernel write its one half contiguously. Here rather than beside the
 # kernel because `ThreadCache` must already be defined at load time.
-const _COMM_WS = ThreadCache{NamedTuple{(:Wt,),Tuple{Matrix{ComplexF64}}}}(
-    n -> (Wt = zeros(ComplexF64, n, n),))
+const _COMM_WS = _engine_cache(ThreadCache{NamedTuple{(:Wt,),Tuple{Matrix{ComplexF64}}}}(
+    n -> (Wt = zeros(ComplexF64, n, n),)))
 
 _commutator_ws(n::Int) = get_ws!(_COMM_WS, n)
 
 # Per-dimension scratch for `fdissipator2!`: per-level total rates and the
 # attenuation diagonal.
-const _DISS_WS2 = ThreadCache{NamedTuple{(:Γ, :Γout, :m0),NTuple{3,Vector{Float64}}}}(
-    n -> (Γ = zeros(Float64, n), Γout = zeros(Float64, n), m0 = zeros(Float64, n)))
+const _DISS_WS2 = _engine_cache(ThreadCache{NamedTuple{(:Γ, :Γout, :m0),NTuple{3,Vector{Float64}}}}(
+    n -> (Γ = zeros(Float64, n), Γout = zeros(Float64, n), m0 = zeros(Float64, n))))
 
 _dissipator_ws2(n::Int) = get_ws!(_DISS_WS2, n)
 

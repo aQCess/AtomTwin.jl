@@ -5,9 +5,9 @@ Modifier that sets the complex amplitude `_coeff[]` of a field or beam from a
 sampled envelope, read at arbitrary time.
 
 `vals` is the envelope the user gave, at its own resolution, spanning
-`[0, duration]` — it is NOT aligned with the solver's steps. The solver chooses
-its step from `tol` and sub-divides further when the error estimator asks, so it
-evaluates the envelope wherever it lands via [`sample_at`](@ref).
+`[0, duration]` — it is NOT aligned with the solver's steps. The solvers read
+it at step midpoints and at their own sub-steps, wherever those land, via
+[`sample_at`](@ref).
 
 # Fields
 
@@ -35,8 +35,9 @@ struct AmplitudeModifier{F} <: AbstractModifier
                            Float64(duration), interp)
     end
 
-    # Inner constructor for Ref-based target (used by GaussianCoupling redirect)
-    function AmplitudeModifier(field::Base.RefValue{ComplexF64},
+    # Inner constructor for a field's `envelope` when that is not the field itself
+    # (see the redirect below)
+    function AmplitudeModifier(field::Union{Base.RefValue{ComplexF64}, Envelope},
                                vals::AbstractVector{<:Number},
                                duration::Real; interp::Symbol = :cubic)
         new{typeof(field)}(field, convert(Vector{ComplexF64}, vals),
@@ -56,19 +57,53 @@ envelope's value at time `t` within the instruction.
 end
 
 """
-    AmplitudeModifier(field::GaussianCoupling, vals)
+    AmplitudeModifier(field::Union{PlanarCoupling,GaussianCoupling,StarkShiftAC,VdWInteraction}, vals, duration)
 
-For `GaussianCoupling`, redirect the modifier to `field._amplitude` rather than
-`field._coeff`, so that the pulse amplitude and the spatial envelope both contribute
-to the instantaneous Rabi rate without overwriting each other.
+For a field whose `update!` recomputes `_coeff` from geometry, write to its
+[`envelope`](@ref) instead, so the commanded amplitude and the geometric factor
+both reach the Hamiltonian without overwriting each other, also when the solver
+resamples the amplitude between two `update!`s.
 """
-function AmplitudeModifier(field::GaussianCoupling, vals::AbstractVector{<:Number},
+function AmplitudeModifier(field::Union{PlanarCoupling, GaussianCoupling,
+                                        StarkShiftAC, VdWInteraction},
+                           vals::AbstractVector{<:Number},
                            duration::Real; interp::Symbol = :cubic)
-    AmplitudeModifier(field._amplitude, vals, duration; interp = interp)
+    AmplitudeModifier(envelope(field), vals, duration; interp = interp)
 end
 
-@inline function update!(m::AmplitudeModifier{<:Base.RefValue{ComplexF64}}, t::Float64)
+@inline function update!(m::AmplitudeModifier{<:Union{Base.RefValue{ComplexF64}, Envelope}},
+                         t::Float64)
     m.field[] = sample_at(m.vals, m.duration, t, m.interp)
+end
+
+"""
+    RampModifier{F} <: AbstractModifier
+
+Linear ramp of a beam's amplitude to `target` over `duration`, starting from
+whatever amplitude the beam has when the instruction begins.
+
+The start is captured by `begin_instruction!`, like `MoveModifier`'s start
+position, because it is set by the instructions that run before this one -- an
+`AmplRow`, an earlier ramp -- none of which have run when the sequence is
+compiled. Reading it at compile time ramped from a stale amplitude.
+"""
+struct RampModifier{F} <: AbstractModifier
+    field::F
+    target::ComplexF64
+    duration::Float64
+    start::Base.RefValue{ComplexF64}
+end
+
+RampModifier(field, target::Number, duration::Real) =
+    RampModifier(field, ComplexF64(target), Float64(duration), Ref(field._coeff[]))
+
+begin_instruction!(m::RampModifier) = (m.start[] = m.field._coeff[]; nothing)
+
+# Same expression as a two-sample linear `sample_at`, so a ramp whose start was
+# already right is reproduced bit for bit.
+@inline function update!(m::RampModifier, t::Float64)
+    f = m.duration > 0 ? clamp(t / m.duration, 0.0, 1.0) : 1.0
+    m.field._coeff[] = m.start[] * (1 - f) + m.target * f
 end
 
 """
@@ -84,7 +119,8 @@ struct SetModifier{F} <: AbstractBoundaryModifier
 end
 
 begin_instruction!(m::SetModifier) = (m.field._coeff[] = m.val)
-begin_instruction!(m::SetModifier{<:Base.RefValue{ComplexF64}}) = (m.field[] = m.val)
+begin_instruction!(m::SetModifier{<:Union{Base.RefValue{ComplexF64}, Envelope}}) =
+    (m.field[] = m.val)
 
 """
     ResetModifier{F} <: AbstractBoundaryModifier
@@ -97,4 +133,5 @@ struct ResetModifier{F} <: AbstractBoundaryModifier
 end
 
 end_instruction!(m::ResetModifier) = (m.field._coeff[] = zero(ComplexF64))
-end_instruction!(m::ResetModifier{<:Base.RefValue{ComplexF64}}) = (m.field[] = zero(ComplexF64))
+end_instruction!(m::ResetModifier{<:Union{Base.RefValue{ComplexF64}, Envelope}}) =
+    (m.field[] = zero(ComplexF64))

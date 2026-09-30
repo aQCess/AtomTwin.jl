@@ -3,7 +3,6 @@ using AtomTwin
 using Printf
 using Random
 using Statistics
-using Statistics
 
 unit_dir = joinpath(@__DIR__, "unit")
 
@@ -73,7 +72,7 @@ function run_example(path; min_shots::Int = 10, max_shots::Int = 100, time_limit
     best_runtime    = Inf
     first_elapsed   = Inf
     total_time      = 0.0
-    total_runtime   = 0.0  # New: sum of all runtimes
+    total_runtime   = 0.0
     first_cs        = UInt(0)
     first_desc      = ""
 
@@ -87,7 +86,7 @@ function run_example(path; min_shots::Int = 10, max_shots::Int = 100, time_limit
 
 
         runtime, cs, desc = run_one_shot()
-        total_runtime += runtime  # New: accumulate runtime
+        total_runtime += runtime
         
         if n_shots == 1
             first_elapsed = t
@@ -111,7 +110,7 @@ function run_example(path; min_shots::Int = 10, max_shots::Int = 100, time_limit
     # include: setup, compilation latency, and any further physics after the
     # timed block (process tomography, plotting). Not build time.
     other_time = first_elapsed - best_runtime
-    avg_runtime = total_runtime / n_shots  # New: compute average
+    avg_runtime = total_runtime / n_shots
     return other_time, best_runtime, avg_runtime, first_cs, first_desc
 end
 

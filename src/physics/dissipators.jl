@@ -57,13 +57,9 @@ non-Hermitian Hamiltonian and LdagL diagonal.
 """
 function update!(j::Jump, ::Val, val::Number)
     new_rate = Float64(val)
-    if j._rate > 0
-        scale = sqrt(new_rate / j._rate)
-        for k in eachindex(j.J.forward)
-            i, r, v = j.J.forward[k]
-            j.J.forward[k] = (i, r, v * scale)
-        end
-    end
+    # Unchanged: keep the cached operators, which are the expensive part.
+    new_rate == j._rate && return j
+    j._rate > 0 && Dynamiq.rescale!(j.J, sqrt(new_rate / j._rate))
     j._rate = new_rate
     j.Hnh = nothing
     j.LdagL_diag = nothing

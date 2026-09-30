@@ -1,3 +1,15 @@
+"""
+    Units
+
+SI unit constants and physical constants, so quantities read as written:
+`2π * 1MHz`, `813.4nm`, `20µK`, `4.88G`.
+
+Every value is in SI base units (Hz, s, m, kg, W, J, K, and tesla for `G`).
+Angular rates are not special-cased: a Rabi frequency of 1 MHz is `2π * 1MHz`,
+in rad/s. `using AtomTwin.Units` brings single-letter names such as `g`, `e`,
+`h` and `G` into scope, which collide with the usual level names; import the
+ones you need explicitly when that matters.
+"""
 module Units
 
 export Hz, kHz, MHz, GHz, THz,

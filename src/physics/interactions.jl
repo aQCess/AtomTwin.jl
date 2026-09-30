@@ -50,7 +50,8 @@ end
 """
     add_vdwinteraction!(system, atoms, transition, C6; active=true, V_cap=C6/(1e-6)^6)
 
-Add a van der Waals interaction V(r) = min(C6 / r⁶, V_cap) between two atoms.
+Add a van der Waals interaction V(r) = C6 / r⁶ between two atoms, its magnitude
+capped at |V_cap|.
 
 The interaction strength is recomputed from the instantaneous inter-atom
 distance at every solver timestep. `C6` has units rad/s·m⁶ (ħ = 1).
@@ -58,7 +59,8 @@ distance at every solver timestep. `C6` has units rad/s·m⁶ (ħ = 1).
 # Keyword arguments
 - `active`: whether the interaction is initially active (default `true`).
 - `V_cap`: maximum interaction strength in rad/s (default `C6 / (1 µm)⁶`).
-  At separations smaller than 1 µm the interaction is clamped to `V_cap`,
+  At separations smaller than 1 µm the interaction is clamped to `V_cap`
+  (in magnitude, so an attractive `C6 < 0` is capped too),
   preventing divergences in simulations where atoms overlap.
   Set to `Inf` to disable clamping.
 

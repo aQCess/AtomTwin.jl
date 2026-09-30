@@ -18,8 +18,7 @@ trajectory on a beam, rather than integrating motion from forces.
 - `interp::Symbol`: `:constant`, `:linear` or `:cubic` — see [`sample_at`](@ref).
 
 The trajectory is read at whatever time the solver asks for, not at a step
-index: the solver chooses its own step from `tol` and sub-divides further when
-the error estimator asks.
+index: the solvers read drives at step midpoints and at their own sub-steps.
 
 # Constructor
 

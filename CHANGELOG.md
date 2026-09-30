@@ -5,6 +5,120 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.2.0] — unreleased
+
+Numerical results change in this release: the default propagator, the trap
+light shift and several solver fixes all move answers, most by more than the
+old tolerance. Re-run anything you intend to compare against 0.1.x.
+
+### Changed
+- The default propagator is Chebyshev (no stability limit; degree set by the
+  spectrum and `tol`). `Taylor(order)` remains available via `integrator`.
+- `Sequence(; tol)` with no `dt` records one output sample per instruction. The
+  density-matrix solver sub-divides each step to meet `tol`; the statevector
+  solvers do not sub-divide a time-dependent drive, so give shaped pulses,
+  ramps and moves a `dt` there (`compile` warns).
+- A trapping beam passed to `System` now light-shifts every polarizable level,
+  not only pushes the atom. Every trap light shift was also 1/(cε₀) ≈ 377× too
+  small before.
+- Polarizabilities are per sublevel (tensor light shift), defined against the
+  system's quantization axis (`add_quantization_axis!`). Levels match
+  polarizability models by term symbol.
+- Atom positions and velocities, beams moved or ramped by a shot, field switch
+  states, detector outputs and the quantum state all reset between shots and
+  between `play`s of the same job.
+- Spontaneous emission recorded with `add_decay!(…; λ)` gives a photon recoil.
+- Radiation pressure of plane-wave drives (`add_coupling!(…; beam = PlanarBeam(…))`)
+  is the Ehrenfest force of the plane-wave phase, in all three semiclassical solvers,
+  integrated over their sub-steps. It used to be a mean force `ħ R_tot Σ ŵ_b k_b`
+  sampled once per step, and only in the MCWF solver: a π pulse moved almost no
+  momentum, stimulated emission into an opposing beam none, and the spread of the
+  absorbed momentum was set by `dt` instead of by photon statistics. In MCWF the
+  momentum follows the detection record: each emitted photon was absorbed, with
+  its momentum, from the beam that excited the atom, and an excitation that
+  decays unseen leaves none. Recoil heating in imaging-type simulations goes up
+  (Yb 399 nm, s = 40: 146 → 221 nK per photon).
+- A shaped envelope on a position-dependent field — a `PlanarCoupling` or
+  `GaussianCoupling`, a trap light shift, a van der Waals interaction — reaches the
+  Hamiltonian at every solver sub-step. Inside MCWF sub-steps and density-matrix
+  sub-step pairs it was applied as a staircase at `dt`, however fine those were: a
+  detuned sin² pulse sampled at four points was off by 5–10 % in population.
+- MCWF jumps are placed within their sub-step (at its start or end with the
+  probabilities that make the jump time right on average) instead of always at its
+  end. Photon counts on a saturated line were ~√jtol/4 low (2.5 % at the default
+  jtol); they now match the master equation. Every MCWF realisation changes.
+- Motion is the default: `play(…; frozen = true)` freezes the atoms. `play` used to
+  freeze them unless a trapping beam could exert a force and the atom had a velocity
+  or recoil, so a free atom driven by plane waves never moved, and an atom released
+  off-centre at rest never oscillated. Runs where nothing can move take the frozen
+  solvers automatically, with identical results. Runs that can move now take the
+  semiclassical solvers, which cost more; with plane-wave drives the statevector
+  solver also sub-divides each step to 0.1 rad of the driven states' rotation.
+  `play(…; frozen = true)` restores the previous speed and physics.
+- A `Pulse` on a detuning with a complex amplitude is an error, as documented; it
+  was silently accepted.
+- The density-matrix dissipator is an exact channel; MCWF sub-steps are bounded
+  by the jump-omission tolerance `jtol` (default from `shots`) and by the
+  spectral width.
+- Shaped envelopes are read with `:cubic` interpolation by default
+  (`:lagrange`, `:piecewise_constant` remain as aliases).
+- An instruction shorter than its `downsample` keeps its step count and records
+  one sample at its end; it was integrated with `downsample` steps instead
+  (25 → 10 000 for a 250 ns pulse at `dt = 10 ns`, `downsample = 10_000`).
+- Moves and ramps take `round(duration/dt)` steps, like every other timed
+  instruction; a move used to take one more, so its output grid has one sample
+  fewer.
+- `RampRow`/`RampCol`: a vector `final_amplitude` gives one target per row
+  (column), as documented, and the ramp respects the row × column amplitude
+  factorisation that `AmplRow`/`AmplCol` apply.
+
+### Added
+- `polarizabilities = Dict(term => model)` on any atom constructor (documented,
+  never implemented): a polarizability model for a state the species does not ship,
+  or an override, for that atom only.
+- `PolarizabilityModel(…; tensor_offset_Hz_per_Wm2)`: a measured tensor light shift,
+  recoupled to each hyperfine F like a line, so a (scalar, tensor) pair measured at
+  one wavelength needs no line list. The `1P1` term is registered for Yb.
+- Ytterbium-174, Rubidium-87 and Strontium-88 polarizability models; tensor
+  polarizability; `scattering_rate_per_Wcm2`.
+- `add_light_shift!`, `add_quantization_axis!`, `add_hamiltonian!`,
+  `add_vdwinteraction!`, transverse exchange in `add_interaction!`,
+  `rabi_frequencies`.
+- Symbolic `Operator`s (`ket * bra'`), `ExpectationDetectorSpec`,
+  `PhotoDetectorSpec`, `getjumps`, `getheffective`, `getliouvillian`.
+- Typed term symbols: `TermSymbol`, `@term`, `l"3P1"`.
+- A precompile workload, and solver benchmarks under `bench/`.
+
+### Fixed
+- `process_tomography` evolved every input state from the first input: an X
+  gate with 20% Rabi noise scored process fidelity 0.25 instead of ≈ 0.91.
+- Reusing a compiled job (`play(job, sys)`) started from the previous run's
+  final state, accumulated photon clicks, and kept any coupling left on.
+- Planar-beam couplings, van der Waals interactions and light shifts ignored
+  `active = false`, `Pulse`, `On`/`Off` and `ampl`: they were always on.
+- The Chebyshev propagator could leave its spectral interval — a trap ramped or
+  moved during a pulse, a van der Waals interaction between static atoms — and
+  diverge without an error.
+- A density-matrix run with no dissipation took one unchecked Taylor step per
+  `dt`, diverging past ‖H‖·dt ≈ 2.8.
+- From the second shot on, polarizabilities were computed against ẑ instead of
+  the system's quantization axis.
+- Density-matrix runs with atomic motion felt no state-dependent force unless a
+  population detector happened to be attached.
+- Parameters sampled per shot compounded from shot to shot (planar couplings,
+  interactions), were never resampled (decay rates), or were not refreshed in
+  multi-threaded runs (Gaussian-beam couplings).
+- Moves inside `Parallel` converged at first order in `dt`; a ramp after
+  `AmplRow` started from a stale amplitude.
+- An attractive van der Waals interaction (C₆ < 0) was pinned at its cap at
+  every distance.
+- `play` threw on a system with no detectors, and when called with
+  `shots ≥ 4` inside a `Threads.@threads` loop.
+- `isequal` on two atoms threw; the API docs showed a non-existent
+  `noise_model` keyword and argument order for `laser_freq_psd`.
+
+---
+
 ## [Pre-release]
 
 ### Added

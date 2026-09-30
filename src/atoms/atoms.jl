@@ -103,11 +103,24 @@ struct AtomWrapper{S} <: AbstractAtom
     levels::Vector{AbstractLevel}
     level_indices::Dict{AbstractLevel, Int}
     I::Rational{Int}
+    polarizabilities::Dict{String, PolarizabilityModel}   # per-atom, over the species'
 end
 
 base_atom(wrapper::AtomWrapper) = wrapper.inner
 
 getpolarizabilitymodels(::AtomWrapper) = Dict{String, PolarizabilityModel}()
+
+"""
+    _polarizability_models(atom) -> Dict{String, PolarizabilityModel}
+
+The models `atom` actually uses: its species' ([`getpolarizabilitymodels`](@ref)),
+overridden and extended by the ones given to its constructor
+(`polarizabilities = …`).
+"""
+_polarizability_models(a::AtomWrapper) =
+    isempty(a.polarizabilities) ? getpolarizabilitymodels(a) :
+                                  merge(getpolarizabilitymodels(a), a.polarizabilities)
+_polarizability_models(a::AbstractAtom) = getpolarizabilitymodels(a)
 
 #------------------------------------------------------------------------------
 # Constructor
@@ -122,12 +135,15 @@ getpolarizabilitymodels(::AtomWrapper) = Dict{String, PolarizabilityModel}()
 Construct a parametric atomic species wrapper of type `S`, e.g.
 `AtomWrapper{:Ytterbium171}()`.
 
-Defaults for `mass`, `polarizabilities`, and `I` are taken from
-`ATOM_DEFAULTS` if not provided explicitly.
+Defaults for `mass` and `I` are taken from `ATOM_DEFAULTS` if not provided
+explicitly. `polarizabilities` — a `Dict` from term (`"1P1"` or `l"1P1"`) to
+[`PolarizabilityModel`](@ref) — adds models for states the species does not ship
+and overrides those it does, for this atom only; levels match them by term as
+usual.
 """
 function AtomWrapper{S}(; levels=nothing, x=zeros(3), v=zeros(3), 
                          x_init=nothing, v_init=nothing,
-                         mass=nothing, I=nothing) where S
+                         mass=nothing, I=nothing, polarizabilities=nothing) where S
     
     defaults = get(ATOM_DEFAULTS, S, (mass=87amu, I=1//2))
     
@@ -147,7 +163,9 @@ function AtomWrapper{S}(; levels=nothing, x=zeros(3), v=zeros(3),
                Dict(level => i for (i, level) in enumerate(levels))
     levels_vec = levels === nothing ? AbstractLevel[] : levels
 
-    return AtomWrapper{S}(inner, x_init, v_init, levels_vec, indices, I_used)
+    pol = polarizabilities === nothing ? Dict{String, PolarizabilityModel}() :
+          Dict{String, PolarizabilityModel}(termname(k) => v for (k, v) in polarizabilities)
+    return AtomWrapper{S}(inner, x_init, v_init, levels_vec, indices, I_used, pol)
 end
 
 
@@ -197,8 +215,8 @@ const Potassium39Atom = AtomWrapper{:Potassium39}
     ATOM_DEFAULTS
 
 Internal dictionary of default species parameters keyed by a `Symbol`.
-Each entry stores a named tuple `(mass, polarizabilities, I)` used by
-`AtomWrapper{S}` when explicit values are not provided.
+Each entry stores a named tuple `(mass, I)` used by `AtomWrapper{S}` when explicit
+values are not provided.
 """
 const ATOM_DEFAULTS = Dict{Symbol, NamedTuple}(
     :Ytterbium171 => (mass = 171amu, I = 1//2),
@@ -235,6 +253,8 @@ Base.:(==)(a::NLevelAtom, b::AtomWrapper) = a == b.inner
 
 Base.isequal(a::AtomWrapper, b::AbstractAtom) = isequal(a.inner, b)
 Base.isequal(a::AbstractAtom, b::AtomWrapper) = isequal(a, b.inner)
+# Both wrappers: without this the two methods above are ambiguous and throw.
+Base.isequal(a::AtomWrapper, b::AtomWrapper) = isequal(a.inner, b.inner)
 
 Base.hash(a::AtomWrapper, h::UInt) = hash(a.inner, h)
 
@@ -272,8 +292,9 @@ end
     _init_species_data!(a::AtomWrapper, inner::NLevelAtom, beams; q_axis)
 
 Fill `inner.alpha[λ]` with one polarizability per level, for every wavelength the
-`beams` use. Levels are matched to the species' models (see
-[`getpolarizabilitymodels`](@ref)) by [`_level_term`](@ref).
+`beams` use. Levels are matched by [`_level_term`](@ref) to the atom's models: the
+species' ([`getpolarizabilitymodels`](@ref)), overridden by any given to its
+constructor (`polarizabilities`).
 
 For a level that carries `F` and `mF`, the **tensor** contribution is folded in
 here, using each beam's polarization against `q_axis`. It vanishes identically for
@@ -287,12 +308,11 @@ rather than an arbitrary choice.
 A level with no matching model gets `α = 0`. That is legitimate — a leakage level
 or a Rydberg state has no model here — so it is not an error, but it IS reported
 once per atom listing every unmatched term together, because the consequence is
-otherwise silent: an untrapped atom, and a `frozen` heuristic in `play` that then
-declines to move anything at all.
+otherwise silent: that level feels no trap.
 """
 function _init_species_data!(a::AtomWrapper, inner::NLevelAtom, beams;
                              q_axis = [0.0, 0.0, 1.0])
-    models = getpolarizabilitymodels(a)
+    models = _polarizability_models(a)
     isempty(models) && return nothing
     wavelengths = unique([getwavelength(b) for b in beams])
 
@@ -400,6 +420,7 @@ function initialize!(a::AtomWrapper, inner::NLevelAtom;
     #    another shot — or from the position this atom had before re-initialising
     #    below — would corrupt the first step of the trajectory.
     Dynamiq.reset_force!(inner)
+    fill!(inner._Eb, 0.0)          # nor a radiation-pressure branch (fresh internal state)
 
     # 1. position — GaussianPosition uses _resolve_node_value; Vector passes through.
     #    With no initializer the atom starts at the origin, and zeroing it is not
@@ -467,7 +488,8 @@ Base.copy(a::AtomWrapper{S}) where {S} = AtomWrapper{S}(
     a.v_init isa Vector{Float64} ? copy(a.v_init) : a.v_init,
     copy(a.levels),
     copy(a.level_indices),
-    a.I
+    a.I,
+    copy(a.polarizabilities)
 )
 
 #------------------------------------------------------------------------------
@@ -522,5 +544,11 @@ end
 # Helpers
 #------------------------------------------------------------------------------
 
+"""
+    getspecies(atom) -> Symbol
+
+The species tag of an atom: `:Ytterbium171` for a `Ytterbium171Atom`,
+`:Generic` for an `Atom`. Used to look up the species' polarizability models.
+"""
 getspecies(::AtomWrapper{S}) where {S} = S
 

@@ -103,19 +103,24 @@ Planar laser coupling between two internal levels with a spatially dependent
 phase and amplitude given by `beam`.
 
 The underlying `Op` `H` encodes the bare coupling in basis `b`, while
-`update!(::PlanarCoupling, t)` updates the complex coefficient using
-the instantaneous position of `atom` and the beam wavevector.
+`update!(::PlanarCoupling, t)` sets the coefficient to the commanded amplitude
+times the plane-wave phase at the atom's instantaneous position (see
+`envelope`).
 """
 mutable struct PlanarCoupling{A} <: AbstractField
     atom::A
     transition::Pair{Int,Int}
     beam::PlanarBeam
     H::Op
-    _coeff::Base.RefValue{ComplexF64}
+    rate::ComplexF64                        # Rabi rate baked into H, as GlobalCoupling
+    _coeff::Base.RefValue{ComplexF64}       # = _amplitude[] × _geom[] (see `envelope`)
+    _amplitude::Base.RefValue{ComplexF64}   # commanded amplitude (Pulse/On/Off)
+    _geom::Base.RefValue{ComplexF64}        # cis(k·x) at the last update!
 
     function PlanarCoupling(b, atom, transition, rate, beam)
         H = Op(b, atom, transition, rate / 2)
-        new{typeof(atom)}(atom, transition, beam, H, Ref(Complex(1.0)))
+        new{typeof(atom)}(atom, transition, beam, H, ComplexF64(rate),
+                          Ref(Complex(1.0)), Ref(Complex(1.0)), Ref(Complex(1.0)))
     end
 end
 
@@ -128,7 +133,9 @@ position and beam wavevector. This is typically called by the time integrator.
 function update!(drive::PlanarCoupling{A}, ::Real) where A
     k = drive.beam.k
     r = drive.atom.x
-    drive._coeff[] = cis(k[1] * r[1] + k[2] * r[2] + k[3] * r[3])
+    g = cis(k[1] * r[1] + k[2] * r[2] + k[3] * r[3])
+    drive._geom[]  = g
+    drive._coeff[] = drive._amplitude[] * g
     return nothing
 end
 
@@ -186,8 +193,9 @@ mutable struct GaussianCoupling{A,B<:AbstractBeam} <: AbstractField
     atom::A
     transition::Pair{Int,Int}
     H::Op                                       # Ω0/2 baked in (same convention as GlobalCoupling)
-    _coeff::Base.RefValue{ComplexF64}           # = _amplitude[] × efield/E0 (written by update!)
+    _coeff::Base.RefValue{ComplexF64}           # = _amplitude[] × _geom[] (see `envelope`)
     _amplitude::Base.RefValue{ComplexF64}       # dimensionless pulse amplitude (written by AmplitudeModifier)
+    _geom::Base.RefValue{ComplexF64}            # efield/E0 at the last update!
     beam::B
     Ω0::ComplexF64                              # peak Ω at reference position (baked into H)
     E0::ComplexF64                              # efield scalar at reference position
@@ -201,6 +209,7 @@ function GaussianCoupling(b::Basis, atom, transition::Pair{Int,Int},
         atom, transition, H,
         Ref(ComplexF64(1.0)),   # _coeff — overwritten by update! before first fquantum!
         Ref(ComplexF64(1.0)),   # _amplitude — set by AmplitudeModifier each step
+        Ref(ComplexF64(1.0)),   # _geom — likewise
         beam, Ω0, E0)
 end
 
@@ -216,7 +225,9 @@ both the commanded pulse amplitude and the atom's position scale the instantaneo
 Cost: one `efield_scalar` evaluation + one complex multiply + one divide — no alloc.
 """
 function update!(f::GaussianCoupling, ::Real)
-    f._coeff[] = f._amplitude[] * efield_scalar(f.beam, f.atom.x) / f.E0
+    g = efield_scalar(f.beam, f.atom.x) / f.E0
+    f._geom[]  = g
+    f._coeff[] = f._amplitude[] * g
     return nothing
 end
 
@@ -335,13 +346,15 @@ Pass `reference = i` to shift by `(α[lvl] − α[i]) I/ħ` instead, which puts 
     to be present, so adding a leakage level silently changed every shift in the
     system. Use `reference` to name the level you actually mean.
 """
-struct StarkShiftAC{A} <: AbstractField
-    atom::A
-    level::Int
-    H::Op
-    beam::AbstractBeam
-    alpha::Float64
-    _coeff::Base.RefValue{ComplexF64}
+mutable struct StarkShiftAC{A} <: AbstractField
+    const atom::A
+    const level::Int
+    const H::Op
+    const beam::AbstractBeam
+    alpha::Float64                  # refreshed per shot by `set_alpha!`
+    const _coeff::Base.RefValue{ComplexF64}      # = _amplitude[] × _geom[] (see `envelope`)
+    const _amplitude::Base.RefValue{ComplexF64}  # commanded amplitude (Pulse/On/Off)
+    const _geom::Base.RefValue{ComplexF64}       # I(x)/I₀ at the last update!
 
     function StarkShiftAC(b, atom, lvl, beam; reference = nothing)
         alphas = atom.alpha[getwavelength(beam)]
@@ -356,30 +369,35 @@ struct StarkShiftAC{A} <: AbstractField
         # is invisible to that bound, so the Chebyshev plan is built for an
         # interval the Hamiltonian then leaves -- and the expansion is
         # evaluated far outside its domain, where it diverges.
-        peak = alpha * peak_intensity(beam) / (c * ε0 * hbar)
-        H = Op(b, atom, lvl => lvl, peak)
-        new{typeof(atom)}(atom, lvl, H, beam, alpha, Ref(Complex(0.0)))
+        H = Op(b, atom, lvl => lvl, _peak_shift(alpha, beam))
+        new{typeof(atom)}(atom, lvl, H, beam, alpha, Ref(Complex(0.0)), Ref(Complex(1.0)),
+                          Ref(Complex(0.0)))
     end
-
-    # All-field form, for rebuilding with a refreshed α (see below).
-    StarkShiftAC{A}(atom::A, lvl, H, beam, alpha, coeff) where {A} =
-        new{A}(atom, lvl, H, beam, alpha, coeff)
 end
 
-# Rebuild with a refreshed α. Used per shot, when `initialize!` has recomputed
-# `atom.alpha` but nothing structural has changed.
-#
-# The operator carries the peak shift (see the constructor), so it has to be
-# rescaled with α rather than reused: keeping the old `H` alongside a new α
-# would leave the two describing different shifts.
-function StarkShiftAC(f::StarkShiftAC{A}, α::Float64) where {A}
-    # Rebuild the operator from the new α rather than rescaling the old one:
-    # the peak is an absolute quantity, and dividing by the previous α would
-    # produce a NaN whenever a level's polarizability was zero.
-    peak = α * peak_intensity(f.beam) / (c * ε0 * hbar)
-    H    = Op([(f.level, f.level, ComplexF64(peak))],
-              Tuple{Int,Int,ComplexF64}[], f.H.dim)
-    StarkShiftAC{A}(f.atom, f.level, H, f.beam, α, Ref(f._coeff[]))
+_peak_shift(α, beam) = α * peak_intensity(beam) / (c * ε0 * hbar)
+
+"""
+    set_alpha!(f::StarkShiftAC, α) -> f
+
+Refresh the polarizability in place. Used per shot, when `initialize!` has
+recomputed `atom.alpha` but nothing structural has changed.
+
+`H` is `peak·|l⟩⟨l|` on the many-body basis: one diagonal entry per basis state
+with the atom in `l`, each equal to the peak shift (`operator1` stores them even
+when the shift is zero). So the entries are overwritten, not rescaled -- dividing
+by the previous α would give NaN whenever it was zero. In place, because the
+field is shared by reference with the job that runs it.
+"""
+function set_alpha!(f::StarkShiftAC, α::Float64)
+    f.alpha = α
+    peak = ComplexF64(_peak_shift(α, f.beam))
+    fw = f.H.forward
+    @inbounds for k in eachindex(fw)
+        i, j, _ = fw[k]
+        fw[k] = (i, j, peak)
+    end
+    return f
 end
 
 """
@@ -400,7 +418,9 @@ function update!(f::StarkShiftAC{A}, ::Real) where A
     # the intensity envelope at the atom's position, which is in [0,1]. Keeping
     # the coefficient O(1) is what lets `spectral_spec` bound this term.
     I0 = peak_intensity(f.beam)
-    f._coeff[] = I0 == 0 ? 0.0 : intensity(f.beam, f.atom.x) / I0
+    g  = I0 == 0 ? 0.0 : intensity(f.beam, f.atom.x) / I0
+    f._geom[]  = g
+    f._coeff[] = f._amplitude[] * g
     return nothing
 end
 
@@ -417,10 +437,11 @@ mutable struct Interaction{A} <: AbstractField
     atom1::A
     atom2::A
     H::Op
+    rate::ComplexF64                  # strength baked into H, as GlobalCoupling
     _coeff::Base.RefValue{ComplexF64}
     function Interaction(b, atoms::Pair, transition1, transition2, value)
         H = Op(b, atoms, transition1, transition2, value)
-        new{typeof(atoms[1])}(atoms..., H, Ref(Complex(1.0)))
+        new{typeof(atoms[1])}(atoms..., H, ComplexF64(value), Ref(Complex(1.0)))
     end
 end
 
@@ -442,7 +463,8 @@ The underlying `Op` is built with a unit coefficient (1.0); the scalar `_coeff`
 is updated every solver timestep from the instantaneous inter-atom separation.
 `C6` is in rad/s·m⁶ (ħ = 1 units).
 
-If `V_cap` is finite, the interaction is clamped: `V = min(C6/r⁶, V_cap)`.
+If `V_cap` is finite, the interaction's magnitude is clamped to `|V_cap|`,
+for either sign of `C6`.
 """
 mutable struct VdWInteraction{A} <: AbstractField
     atom1::A
@@ -451,10 +473,13 @@ mutable struct VdWInteraction{A} <: AbstractField
     _coeff::Base.RefValue{ComplexF64}
     C6::Float64         # rad/s·m^6
     V_cap::Float64      # maximum interaction strength (rad/s); Inf = no cap
+    _amplitude::Base.RefValue{ComplexF64}   # commanded amplitude (Pulse/On/Off)
+    _geom::Base.RefValue{ComplexF64}        # capped C6/r⁶ at the last update!
     function VdWInteraction(b, atoms::Pair, transition1, transition2, C6::Float64;
                             V_cap::Float64 = Inf)
         H = Op(b, atoms, transition1, transition2, 1.0)
-        return new{typeof(atoms[1])}(atoms[1], atoms[2], H, Ref(ComplexF64(C6)), C6, V_cap)
+        return new{typeof(atoms[1])}(atoms[1], atoms[2], H, Ref(ComplexF64(C6)), C6, V_cap,
+                                     Ref(ComplexF64(1.0)), Ref(ComplexF64(C6)))
     end
 end
 
@@ -465,8 +490,8 @@ Recompute the van der Waals coefficient from the current inter-atom separation:
 
     V = C6 / r⁶
 
-clamped to `V_cap` when finite. Called each solver timestep after `fclassical!`
-has updated positions.
+with its magnitude clamped to `|V_cap|` when finite. Called each solver
+timestep after `fclassical!` has updated positions.
 """
 function update!(d::VdWInteraction, ::Real)
     x1 = d.atom1.x;  x2 = d.atom2.x
@@ -474,8 +499,53 @@ function update!(d::VdWInteraction, ::Real)
     r2 = dx*dx + dy*dy + dz*dz
     r6 = r2 * r2 * r2
     V  = d.C6 / r6
-    d._coeff[] = ComplexF64(isfinite(d.V_cap) ? min(V, d.V_cap) : V)
+    # Clamp the MAGNITUDE. `min(V, V_cap)` pinned an attractive interaction
+    # (C6 < 0, so a negative default cap) at the cap for every separation.
+    cap = abs(d.V_cap)
+    g   = isfinite(cap) ? clamp(V, -cap, cap) : V
+    d._geom[]  = g
+    d._coeff[] = d._amplitude[] * g
     return nothing
+end
+
+"""
+    envelope(f) -> Base.RefValue{ComplexF64}
+
+Where an instruction -- `Pulse`, `On`, `Off`, a shaped amplitude -- writes the
+commanded amplitude of field `f`.
+
+For most fields that is `_coeff` itself. A field whose `update!` recomputes
+`_coeff` from geometry every step -- a position-dependent Rabi rate, a local
+trap intensity, a distance-dependent interaction -- would overwrite anything
+written there, leaving it permanently on. Those keep the commanded amplitude in
+`_amplitude` and the geometric factor of the last `update!` in `_geom`, with
+`_coeff` their product; their envelope is an [`Envelope`](@ref), which keeps the
+product current when the amplitude is written between updates.
+"""
+envelope(f) = f._coeff
+envelope(f::Union{PlanarCoupling, GaussianCoupling, StarkShiftAC, VdWInteraction}) =
+    Envelope(f._amplitude, f._coeff, f._geom)
+
+"""
+    Envelope
+
+The commanded amplitude of a field whose coefficient is that amplitude times a
+geometric factor from `update!` (see [`envelope`](@ref)). `env[] = a` sets the
+amplitude and the coefficient, from the factor of the last `update!`; `env[]`
+reads the amplitude. The solvers resample envelopes within a step, between two
+`update!`s -- on MCWF sub-steps, QME pairs, the TDSE radiation sub-steps -- and
+writing only the amplitude left the Hamiltonian with the step's midpoint value.
+"""
+struct Envelope
+    amplitude::Base.RefValue{ComplexF64}
+    coeff::Base.RefValue{ComplexF64}
+    geom::Base.RefValue{ComplexF64}
+end
+Base.getindex(e::Envelope) = e.amplitude[]
+@inline function Base.setindex!(e::Envelope, a)
+    e.amplitude[] = a
+    e.coeff[] = e.amplitude[] * e.geom[]
+    return e
 end
 
 #------------------------------------------------------------------------------
@@ -493,8 +563,10 @@ Minimal `n`-level atomic model with classical center-of-mass motion.
 - `alphas`: dictionary of scalar or tensor polarizabilities keyed by wavelength.
 - `lambdas`: dictionary of transition wavelengths keyed by level pairs.
 
-Additional internal fields `_P` and `_pidx` are used for caching populations
-and basis-dependent index mappings during simulations.
+Internal fields: `_P` and `_pidx` cache populations and basis-dependent index
+mappings; `_F`/`_Fvalid` the velocity-Verlet force of the previous step; `_Eb` the
+MCWF radiation-pressure excited-branch momentum (see `RadiationPressure`), which
+carries across instructions and is reset per shot.
 """
 mutable struct NLevelAtom <: AbstractAtom
     n::Int
@@ -508,6 +580,8 @@ mutable struct NLevelAtom <: AbstractAtom
     _pidx::Vector{Vector{Int}}    # updated when a basis is constructed
     _F::Vector{Float64}           # force cached from the previous step (velocity Verlet)
     _Fvalid::Bool                 # false until _F holds a force for the current x
+    _Eb::Vector{Float64}          # MCWF radiation pressure: excited-branch momentum/ħ
+                                  # × population, m⁻¹ (see `RadiationPressure`)
 
     function NLevelAtom(n;
                         x       = [0.0, 0.0, 0.0],
@@ -515,7 +589,7 @@ mutable struct NLevelAtom <: AbstractAtom
                         m       = 1amu,
                         alphas  = Dict(),
                         lambdas = Dict())
-        new(n, x, v, m, alphas, lambdas, zeros(n), [[0]], zeros(3), false)
+        new(n, x, v, m, alphas, lambdas, zeros(n), [[0]], zeros(3), false, zeros(3))
     end
 end
 
@@ -540,6 +614,7 @@ function copy(a::NLevelAtom)
     b._pidx   = [copy(idx) for idx in a._pidx]
     b._F      = copy(a._F)
     b._Fvalid = a._Fvalid
+    b._Eb     = copy(a._Eb)
     return b
 end
 

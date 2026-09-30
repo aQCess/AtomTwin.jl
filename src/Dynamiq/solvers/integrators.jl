@@ -110,6 +110,26 @@ always uses the actual coefficient.
 function gershgorin_interval(terms::Vector{Tuple{Base.RefValue{ComplexF64},Op}};
                              peak::Bool = false)
     isempty(terms) && return (0.0, 0.0)
+    diag, rad = _gershgorin_discs(terms, peak)
+    return _disc_span(diag, rad, eachindex(diag))
+end
+
+"""
+    gershgorin_interval(terms, rows; peak = false) -> (lo, hi)
+
+The same span over the discs of `rows` only: how fast the amplitudes in `rows` can
+rotate, coupled to whatever they couple to. Not a bound on the spectrum; an
+undriven level elsewhere (a far hyperfine or Zeeman partner) does not widen it.
+"""
+function gershgorin_interval(terms::Vector{Tuple{Base.RefValue{ComplexF64},Op}},
+                             rows::AbstractVector{Int}; peak::Bool = false)
+    isempty(terms) && return (0.0, 0.0)
+    diag, rad = _gershgorin_discs(terms, peak)
+    return _disc_span(diag, rad, rows)
+end
+
+# Each row's disc: centre `Hᵢᵢ` and off-diagonal row sum, in the thread's workspace.
+function _gershgorin_discs(terms, peak::Bool)
     dim = terms[1][2].dim
     ws = _gersh_interval_ws(dim)
     diag, rad = ws.diag, ws.rad
@@ -128,8 +148,12 @@ function gershgorin_interval(terms::Vector{Tuple{Base.RefValue{ComplexF64},Op}};
             i == j ? (diag[i] += real(conj(c) * u)) : (rad[i] += cp * abs(u))
         end
     end
+    return diag, rad
+end
+
+function _disc_span(diag, rad, rows)
     lo = Inf; hi = -Inf
-    @inbounds for i in 1:dim
+    @inbounds for i in rows
         lo = min(lo, diag[i] - rad[i])
         hi = max(hi, diag[i] + rad[i])
     end
@@ -267,6 +291,20 @@ end
     return get!(() -> c.build(dim), c.slots[tid], dim)
 end
 
+# The engine's own caches, registered where each is defined so that
+# `reset_workspaces!` cannot miss one. (A hand-kept list here missed two.)
+const _ENGINE_CACHES = ThreadCache[]
+_engine_cache(c::ThreadCache) = (push!(_ENGINE_CACHES, c); c)
+
+"""
+    reset_workspaces!()
+
+`reset!` every per-thread workspace cache the engine defines. Called from
+`AtomTwin.__init__`, so a session gets slots for its own threads, and after the
+precompile workload, so no build-time scratch is serialised into the image.
+"""
+reset_workspaces!() = (foreach(reset!, _ENGINE_CACHES); nothing)
+
 
 
 """
@@ -357,46 +395,65 @@ abstract type IntegratorPlan end
 """
     ChebyshevPlan(dt, Emin, Emax, tol, ws)
 
-The shifted/scaled spectrum, Bessel coefficients and truncation degree -- all
-fixed across an instruction, since `x = ΔE·dt` and `tol` are. Miller's recurrence
-dominates a small step, so hoisting it is what makes short steps cheap.
+The shifted/scaled spectrum, Bessel coefficients and truncation degree. `dt` and
+`tol` are fixed across an instruction; the spectrum usually is too, so Miller's
+recurrence -- which dominates a small step -- runs once. [`track_spectrum!`](@ref)
+keeps the plan valid when the spectrum moves.
 
 The plan owns its workspace; stepping through a built plan allocates nothing.
 """
 mutable struct ChebyshevPlan <: IntegratorPlan
     const ws::ChebyshevWorkspace
     const dt::Float64
-    const ΔE::Float64
-    Ē::Float64                  # see `recenter!`: refreshed per step, not per plan
-    const deg::Int
-    const degenerate::Bool
+    const tol::Float64
+    ΔE::Float64                 # half-width the coefficients were built for
+    Ē::Float64                  # centre; refreshed per step by `track_spectrum!`
+    deg::Int
+    degenerate::Bool
 end
 
 function ChebyshevPlan(dt::Float64, Emin::Float64, Emax::Float64,
                        tol::Float64, ws::ChebyshevWorkspace)
-    ΔE = (Emax - Emin) / 2
-    Ē  = (Emax + Emin) / 2
+    plan = ChebyshevPlan(ws, dt, tol, 0.0, (Emax + Emin) / 2, 0, true)
+    return _set_width!(plan, (Emax - Emin) / 2)
+end
+
+# (Re)build the Bessel coefficients for half-width `ΔE`.
+function _set_width!(plan::ChebyshevPlan, ΔE::Float64)
+    plan.ΔE = ΔE
     # Degenerate spectrum: H is a multiple of the identity over this subspace,
     # so the step is a global phase and no expansion is needed.
-    ΔE <= 0 && return ChebyshevPlan(ws, dt, ΔE, Ē, 0, true)
-
-    x = ΔE * dt
+    if ΔE <= 0
+        plan.deg, plan.degenerate = 0, true
+        return plan
+    end
+    ws = plan.ws
+    x  = ΔE * plan.dt
     ensure_degree!(ws, ceil(Int, x) + 128 + 8 * ceil(Int, sqrt(max(x, 1.0))))
-    deg = besselj_series!(ws.coef, x, tol)
-    if deg >= length(ws.coef) && abs(ws.coef[end]) > tol
+    deg = besselj_series!(ws.coef, x, plan.tol)
+    if deg >= length(ws.coef) && abs(ws.coef[end]) > plan.tol
         error("Chebyshev expansion did not converge: ΔE·dt = $x needs a degree " *
               "beyond the coefficient buffer (got $deg, last coefficient " *
               "$(ws.coef[end])). This should not happen -- ensure_degree! is " *
               "meant to size the buffer first.")
     end
-    return ChebyshevPlan(ws, dt, ΔE, Ē, deg, false)
+    plan.deg, plan.degenerate = deg, false
+    return plan
 end
 
-"""
-    recenter!(plan::ChebyshevPlan, terms) -> plan
+# Headroom when a plan must widen, so a spectrum that keeps growing (a trap
+# ramping up) rebuilds a handful of times rather than every step.
+const CHEB_WIDEN = 1.25
 
-Move the plan's expansion centre `Ē` to the current spectrum of `terms`, keeping
-its Bessel coefficients.
+"""
+    track_spectrum!(plan::ChebyshevPlan, terms; recenter = true) -> plan
+
+Keep the plan valid for the Hamiltonian as it stands now: move its centre `Ē` to
+the current spectrum of `terms`, and widen `ΔE` if the spectrum has outgrown it.
+
+With `recenter = false` the plan is left untouched while the spectrum still lies
+inside `[Ē-ΔE, Ē+ΔE]`, so a step that was valid is taken exactly as before; only
+a spectrum that has left the interval moves the centre.
 
 # Why this exists
 
@@ -404,46 +461,52 @@ The Chebyshev expansion is built about a centre `Ē` and a half-width `ΔE`:
 
     exp(-iH dt)ψ = e^{-iĒdt} Σ_k c_k(ΔE·dt) T_k((H - Ē)/ΔE) ψ
 
-and it converges only while the spectrum of `H` stays inside `[Ē-ΔE, Ē+ΔE]`. A
-plan is built once per instruction because `ΔE·dt` and `tol` are fixed, and the
-coefficients `c_k` -- Miller's recurrence, the expensive part -- depend on
-nothing else.
+and it converges only while the spectrum of `H` stays inside `[Ē-ΔE, Ē+ΔE]`.
+Outside it the Chebyshev polynomials grow exponentially: the step stops being
+unitary and the state diverges, with no error raised. A plan is built once per
+instruction, from the coefficients at its start, so anything that moves the
+spectrum within an instruction must be tracked here:
 
-`Ē`, though, is not fixed when the Hamiltonian follows the atom. A trapped atom
-crossing its tweezer sweeps the trap light shift over its whole range: for a
-50 mW, 1 µm tweezer on Yb-171 the centre moves by 1.8e8 rad/s -- 176 radians per
-step -- while the half-width, set by the much smaller *differential* shift,
-barely moves at all. The expansion is then evaluated far outside its domain,
-where Chebyshev polynomials grow exponentially, and the trajectory diverges.
+- **The centre moves** when the Hamiltonian follows the atom. A trapped atom
+  crossing its tweezer sweeps the light shift over its whole range: for a 50 mW,
+  1 µm tweezer on Yb-171 the centre moves by 1.8e8 rad/s -- 176 radians per
+  step -- while the half-width, set by the much smaller *differential* shift,
+  barely moves. A beam moved or ramped by a modifier does the same to an atom
+  that is not moving at all.
+- **The width grows** when a differential shift grows: a trap ramped up during a
+  pulse, an atom moving into the beam, a shaped pulse whose envelope exceeds 1.
 
-The two fixes that do not work are worth recording. Bounding the light shift
-conservatively over its whole range takes `ΔE·dt` from 0.53 to 88.8 and the
-degree from 9 to 169, penalising every trapped simulation. Rebuilding the plan
-each step costs 7.3 µs against a 95 ns propagate, because it redoes the Bessel
-series.
+Refreshing `Ē` is cheap: it enters only as a scalar in the recurrence and as the
+global phase `e^{-iĒdt}`, never inside `c_k`. Widening needs new coefficients --
+7.3 µs against a 95 ns propagate -- so it happens only when the spectrum no
+longer fits, with `CHEB_WIDEN` headroom; it never narrows. The check itself is
+one `gershgorin_interval` sweep, O(nnz) and allocation-free.
 
-Refreshing `Ē` alone is neither: it enters only as a scalar in the recurrence
-and as the global phase `e^{-iĒdt}`, never inside `c_k`, so it costs one
-`gershgorin_interval` sweep -- O(nnz), no allocation -- and leaves the expensive
-work hoisted.
+Bounding every possible shift up front was measured and rejected: bounding the
+light shift over its whole range takes `ΔE·dt` from 0.53 to 88.8 and the degree
+from 9 to 169, penalising every trapped simulation.
 
 Uses the instantaneous coefficients (`peak = false`): the centre must sit where
 the spectrum actually is, not where a switched-on coupling would put it.
 """
-function recenter!(plan::ChebyshevPlan,
-                   terms::Vector{Tuple{Base.RefValue{ComplexF64},Op}})
+function track_spectrum!(plan::ChebyshevPlan,
+                         terms::Vector{Tuple{Base.RefValue{ComplexF64},Op}};
+                         recenter::Bool = true)
     lo, hi = gershgorin_interval(terms; peak = false)
+    inside = lo >= plan.Ē - plan.ΔE && hi <= plan.Ē + plan.ΔE
+    !recenter && inside && return plan
     plan.Ē = (lo + hi) / 2
+    hw = (hi - lo) / 2
+    hw > plan.ΔE && _set_width!(plan, CHEB_WIDEN * hw)
     return plan
 end
 
 """
-    recenter!(plan, terms) -> plan
+    track_spectrum!(plan, terms; recenter = true) -> plan
 
-No-op for schemes that need no spectral centre. See the `ChebyshevPlan` method
-for what recentering is and why it is needed.
+No-op for schemes that need no spectral bounds. See the `ChebyshevPlan` method.
 """
-recenter!(plan::IntegratorPlan, ::Any) = plan
+track_spectrum!(plan::IntegratorPlan, ::Any; recenter::Bool = true) = plan
 
 """
     chebyshev!(ψ, terms, dt, Emin, Emax; tol = 1e-12, ws = nothing)
@@ -561,9 +624,18 @@ The workspace is allocated here and reached only through the returned plan, so
 each task owns its own. Amortised over thousands of steps that is free: ~1 us
 becomes ~0.3 ns/call.
 """
-plan_step(::Chebyshev, ψ::Vector{ComplexF64}, dt::Float64, spec::SpectralSpec;
-          tol::Float64 = 1e-12) =
-    ChebyshevPlan(dt, spec.Emin, spec.Emax, tol, ChebyshevWorkspace(length(ψ)))
+# The half-width is at least the anti-Hermitian radius. `Emax - Emin` measures
+# only the real spread, so an MCWF effective Hamiltonian with a constant
+# Hermitian part -- free decay, nothing else -- had width 0, and the degenerate
+# plan, a global phase, dropped the decay entirely. With the floor the expansion
+# variable stays within |Im| ≤ 1, where it is validated (`propagator_theta`);
+# a Hermitian step, or one already inside that range, is unchanged.
+function plan_step(::Chebyshev, ψ::Vector{ComplexF64}, dt::Float64, spec::SpectralSpec;
+                   tol::Float64 = 1e-12)
+    hw = max((spec.Emax - spec.Emin) / 2, spec.Iradius)
+    Ē  = (spec.Emax + spec.Emin) / 2
+    ChebyshevPlan(dt, Ē - hw, Ē + hw, tol, ChebyshevWorkspace(length(ψ)))
+end
 
 """
     TaylorPlan(dt)

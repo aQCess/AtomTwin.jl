@@ -305,6 +305,23 @@ end
         end
     end
 
+    @testset "stepgrid never inflates an instruction shorter than downsample" begin
+        # It used to return `downsample` steps: a 25-step pulse under
+        # `downsample = 10_000` ran 10 000 steps (400x the cost), silently.
+        @test AtomTwin.stepgrid(250e-9, 10e-9, 10_000)[1] == 25
+        @test AtomTwin.stepgrid(250e-9, 10e-9, 25)[1] == 25
+        @test AtomTwin.stepgrid(250e-9, 10e-9, 10)[1] == 30   # whole groups, as before
+        g, e = Level("g"), Level("e")
+        atom = Atom(; levels = [g, e]); sys = System(atom)
+        c = add_coupling!(sys, atom, g => e, 2π * 1e6; active = false)
+        add_detector!(sys, PopulationDetectorSpec(atom, e; name = "Pe"))
+        seq = Sequence(10e-9; downsample = 10_000)
+        push!(seq, Pulse(c, 250e-9))
+        out = play(sys, seq; initial_state = g)
+        @test length(out.times) == 1 && out.times[end] ≈ 250e-9
+        @test out.detectors["Pe"][end] ≈ sin(2π * 1e6 * 250e-9 / 2)^2 atol = 1e-6
+    end
+
     @testset "Sequence(duration, tsteps) matches the equivalent dt" begin
         # Stating "2 µs in 2000 steps" must be identical to stating dt = 1 ns.
         function _via_tsteps()
@@ -734,4 +751,180 @@ end
             @test isapprox(run(dt, δ), exact; rtol = 0.25)
         end
     end
+end
+
+# The Chebyshev plan is built once per instruction. Anything that moves the
+# spectrum within the instruction -- a trap ramped or moved under a frozen atom,
+# a van der Waals term with no value until its first update -- used to leave the
+# expansion outside its interval, where it is not unitary: P_e came out as 1e86
+# (ramp), 1e158 (move), 1e50 (vdW), with no error raised.
+@testset "Chebyshev plan follows a spectrum that moves within an instruction" begin
+    gm = HyperfineManifold(0//1, 0; label = "¹S₀", term = l"1S0", g_F = 0.0)
+    em = HyperfineManifold(1//1, 1; label = "³P₁", term = l"3P1", g_F = 1.5)
+    g, e = gm[0], em[0]
+
+    function trap_run(dt, mode; decay = false, shots = 1)
+        tw  = TweezerArray(λ = 767e-9, w0 = 1e-6, P_total = 50e-3,
+                           row_freqs = [0.0], col_freqs = [0.0])
+        yb  = Ytterbium174Atom(; levels = [g, e])
+        sys = System([yb], [tw])
+        c   = add_coupling!(sys, yb, g => e, 2π * 1e6; active = false)
+        decay && add_decay!(sys, yb, e => g, 2π * 1e3)
+        add_detector!(sys, PopulationDetectorSpec(yb, e; name = "Pe"))
+        seq = dt === nothing ? Sequence(; tol = 1e-6) : Sequence(dt)
+        part = mode === :ramp ? RampRow(tw, 1, 0.1, 2e-6) : MoveCol(tw, 1, 1e6, 2e-6)
+        @sequence seq begin
+            Parallel([Pulse([c], 2e-6), part])
+        end
+        # frozen: this tests the frozen solvers' tracking (a moving trap makes the
+        # run non-static, which would otherwise send it to the semiclassical ones).
+        Pe = play(sys, seq; initial_state = [g], shots = shots,
+                  frozen = true).detectors["Pe"]
+        return shots == 1 ? Pe[end] : sum(Pe[end, :]) / shots
+    end
+
+    for mode in (:ramp, :move)
+        ref = trap_run(1e-9, mode)
+        @test 0 < ref < 1
+        # Coarse steps carry a discretisation error, but must stay physical.
+        @test isapprox(trap_run(50e-9, mode), ref; atol = 0.02)
+        @test 0 <= trap_run(nothing, mode) <= 1
+        @test 0 <= trap_run(50e-9, mode; decay = true, shots = 2) <= 1   # wfmc
+    end
+
+    # Two static atoms: vdW must match the same constant interaction exactly.
+    gg, rr = Level("g"), Level("r")
+    V, d = 2π * 50e6, 4e-6
+    function pair_run(kind, dt)
+        a1 = Atom(; levels = [gg, rr], x_init = [0.0, 0, 0])
+        a2 = Atom(; levels = [gg, rr], x_init = [d, 0, 0])
+        sys = System([a1, a2])
+        cs = [add_coupling!(sys, a, gg => rr, 2π * 1e6; active = false) for a in (a1, a2)]
+        kind === :vdw ? add_vdwinteraction!(sys, (a1, a2), (rr, rr) => (rr, rr), V * d^6) :
+                        add_interaction!(sys, (a1, a2), (rr, rr) => (rr, rr), V)
+        add_detector!(sys, PopulationDetectorSpec(a1, rr; name = "P1"))
+        seq = Sequence(dt)
+        @sequence seq begin
+            Pulse(cs, 0.35e-6)
+        end
+        play(sys, seq; initial_state = [gg, gg]).detectors["P1"][end]
+    end
+    @test isapprox(pair_run(:vdw, 20e-9), pair_run(:const, 20e-9); atol = 1e-9)
+end
+
+# With no jump operators the density-matrix path used to take one bare Taylor-4
+# step per `dt`: no error control, and past ‖H‖·dt ≈ 2.8 it diverged silently
+# (P_e = -2e17 for a 10 MHz Rabi drive at dt = 100 ns).
+@testset "density matrix without dissipation is error-controlled" begin
+    g, e = Level("g"), Level("e")
+    Ω = 2π * 10e6
+    for dt in (10e-9, 100e-9)
+        a = Atom(; levels = [g, e])
+        sys = System([a])
+        c = add_coupling!(sys, a, g => e, Ω; active = false)
+        add_detector!(sys, PopulationDetectorSpec(a, e; name = "Pe"))
+        seq = Sequence(dt)
+        @sequence seq begin
+            Pulse([c], 0.95e-6)
+        end
+        Pe = play(sys, seq; initial_state = [g], density_matrix = true).detectors["Pe"][end]
+        @test isapprox(Pe, sin(Ω * 0.95e-6 / 2)^2; atol = 1e-3)
+    end
+end
+
+# A move inside a `Parallel` converged at FIRST order: the move's modifier took
+# its span from a `0:dt:duration` grid that loses its endpoint to rounding, and a
+# `Parallel` (no `duration` of its own) ran on the requested step, so any
+# difference in the parts' step counts made it a step long.
+@testset "moves converge at second order" begin
+    gm = HyperfineManifold(0//1, 0; label = "¹S₀", term = l"1S0", g_F = 0.0)
+    em = HyperfineManifold(1//1, 1; label = "³P₁", term = l"3P1", g_F = 1.5)
+    g, e = gm[0], em[0]
+    function run(dt)
+        tw  = TweezerArray(λ = 767e-9, w0 = 1e-6, P_total = 50e-3,
+                           row_freqs = [0.0], col_freqs = [0.0])
+        yb  = Ytterbium174Atom(; levels = [g, e])
+        sys = System([yb], [tw])
+        c   = add_coupling!(sys, yb, g => e, 2π * 1e6; active = false)
+        add_detector!(sys, PopulationDetectorSpec(yb, e; name = "Pe"))
+        seq = Sequence(dt)
+        @sequence seq begin
+            Parallel([Pulse([c], 1e-6), MoveCol(tw, 1, 0.5e6, 1e-6; sweep = :min_jerk)])
+        end
+        play(sys, seq; initial_state = [g]).detectors["Pe"][end]
+    end
+    P = [run(dt) for dt in (4e-9, 2e-9, 1e-9)]
+    ratio = (P[1] - P[2]) / (P[2] - P[3])
+    @test 3.5 < ratio < 4.5                 # 2 for first order, 4 for second
+end
+
+@testset "MCWF photon counts match the master equation" begin
+    # A jump used to be applied at the END of the sub-step it was detected in, which
+    # lengthened every emission cycle by ~h/2: on a saturated line the photon count
+    # was ~√jtol/4 low (−2.5 % at s = 40 with the default jtol). The jump is now
+    # placed at the start or the end of its sub-step with the probabilities that
+    # make its time right on average. The manifold decay (three channels, two of
+    # them dark) checks that the jump is drawn from a state that holds the decaying
+    # amplitude: right after a jump, a sub-step's start state holds none.
+    Γ = 2π * 29.1e6; s = 40.0; Ω = Γ * sqrt(s / 2); T = 400e-9; dt = 1e-9
+    function build(clicks, manifold)
+        if manifold
+            gm, em = HyperfineManifold(0//1, 0; label = "g"), HyperfineManifold(1//1, 1; label = "e")
+            a = Atom(; levels = [gm..., em...]); g, e, decay = gm[0], em[0], em => gm
+        else
+            g, e = Level("g"), Level("e")
+            a = Atom(; levels = [g, e]); decay = e => g
+        end
+        sys = System(a)
+        c = add_coupling!(sys, a, g => e, Ω; active = false)
+        if clicks
+            pd = PhotoDetectorSpec(name = "c"); add_detector!(sys, pd)
+            add_decay!(sys, a, decay, Γ; clicks = pd)
+        else
+            add_decay!(sys, a, decay, Γ)
+            add_detector!(sys, PopulationDetectorSpec(a, e; name = "Pe"))
+        end
+        seq = Sequence(dt)
+        push!(seq, Pulse(c, T; downsample = 1)); push!(seq, Wait(60e-9; downsample = 1))
+        sys, seq, g
+    end
+    for manifold in (false, true)
+        sys, seq, g = build(false, manifold)
+        o = play(sys, seq; initial_state = g, density_matrix = true)
+        t = [0.0; o.times]; P = [0.0; real.(o.detectors["Pe"])]
+        N_exact = Γ * sum(0.5 * (P[i] + P[i-1]) * (t[i] - t[i-1]) for i in 2:length(t))
+        sys, seq, g = build(true, manifold)
+        N = vec(sum(play(sys, seq; initial_state = g, shots = 6000,
+                         rng = MersenneTwister(11)).detectors["c"], dims = 1))
+        se = std(N) / sqrt(length(N))
+        @test abs(mean(N) - N_exact) < 4se      # was 12σ low
+        @test abs(mean(N) / N_exact - 1) < 0.006
+    end
+end
+
+@testset "a shaped envelope on a position-dependent coupling is resampled within the step" begin
+    # A sub-step resampled the commanded amplitude of a PlanarCoupling (likewise
+    # GaussianCoupling, StarkShiftAC, VdWInteraction), but its coefficient --
+    # amplitude × geometric factor -- was rebuilt only by the per-`dt` `update!`:
+    # the envelope reached the Hamiltonian as a staircase at `dt`, however finely the
+    # MCWF or QME solver sub-stepped. At the origin a frozen PlanarCoupling is a
+    # GlobalCoupling, so the two must agree.
+    g, e = Level("g"), Level("e")
+    function run(planar; dm)
+        a = Atom(; levels = [g, e], x_init = zeros(3), v_init = zeros(3))
+        sys = System(a)
+        c = planar ? add_coupling!(sys, a, g => e, 2π * 5e6; active = false,
+                                   beam = PlanarBeam(780e-9, 1.0, [1.0, 0, 0], [0, 0, 1.0])) :
+                     add_coupling!(sys, a, g => e, 2π * 5e6; active = false)
+        add_detuning!(sys, a, e, 2π * 3e6)
+        add_decay!(sys, a, e => g, 2π * 1e6)
+        add_detector!(sys, PopulationDetectorSpec(a, e; name = "Pe"))
+        seq = Sequence(50e-9)                        # 4 samples across the pulse
+        push!(seq, Pulse(c, 200e-9; amplitudes = sin.(range(0, π, length = 101)) .^ 2))
+        o = play(sys, seq; initial_state = g, frozen = true, density_matrix = dm,
+                 shots = dm ? 1 : 200, rng = MersenneTwister(2))
+        o.detectors["Pe"]
+    end
+    @test run(true; dm = true) ≈ run(false; dm = true) rtol = 1e-10
+    @test run(true; dm = false) == run(false; dm = false)
 end

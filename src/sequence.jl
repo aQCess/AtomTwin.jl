@@ -104,30 +104,31 @@ function Sequence(dt::Float64; downsample::Int = 1, tol::Float64 = 1e-4,
 end
 
 """
-    Sequence(; downsample = 1, tol = 1e-6)
+    Sequence(; downsample = 1, tol = 1e-4, jtol = nothing)
 
-Create a `Sequence` with **no explicit time step**. The solver derives one per
-instruction from the Hamiltonian actually present, targeting a local relative
-error of `tol` per step.
+Create a `Sequence` with **no explicit time step**: the output grid is derived
+at build time, and the solvers meet `tol` within it.
 
-The step is chosen from `θ = ‖H‖·dt`, where `‖H‖` is a Gershgorin upper bound
-computed in O(nnz) at build time. The Taylor propagator's error per step is
-O(θ^p), so `θ` is set to `tol^(1/p)` and capped well below the stability limit
-(`2√2` at the default order 4). Because the bound is an upper bound, the derived
-step is conservative — never optimistic.
+The derived step is the output resolution, not the integration step -- by
+default one sample at the end of each instruction, or finer if the Hamiltonian
+needs it (`Dynamiq.suggested_dt`). Within a step:
+
+- the **density-matrix** solver sub-divides adaptively until each sub-step's
+  error is below `tol`, reading shaped envelopes and moving beams at every
+  sub-step, so `tol` controls the result;
+- the **statevector** solvers are exact for a Hamiltonian that is constant over
+  the step, but read a time-dependent one (a shaped pulse, a ramp, a move) once
+  per step. There `tol` does not control the error: pass `dt` fine enough to
+  resolve the drive. `compile` warns when this applies.
+
+`jtol` bounds the probability of missing a second quantum jump within one MCWF
+sub-step; `nothing` derives it from the shot count.
 
 ```julia
-seq = Sequence()                  # solver picks dt for 1e-6 local error
-seq = Sequence(; tol = 1e-9)      # tighter: smaller dt
-seq = Sequence(1e-9)              # explicit dt, unchanged behaviour
+seq = Sequence()                  # one output sample per instruction, tol = 1e-4
+seq = Sequence(; tol = 1e-9)      # tighter
+seq = Sequence(1e-9)              # explicit dt: a trace, and the control grid
 ```
-
-**When to set `dt` yourself.** `dt` is also the *control* grid: shaped pulse
-envelopes and moving beams are resampled onto it, so it fixes how finely a
-protocol is resolved, which is a physical choice rather than a numerical one. If
-a pulse has structure the derived step would smooth over, pass `dt` explicitly.
-A derived step targets accuracy of the *propagator*, not fidelity to your
-envelope.
 """
 function Sequence(; downsample::Int = 1, tol::Float64 = 1e-4,
                   jtol::Union{Float64,Nothing} = nothing)

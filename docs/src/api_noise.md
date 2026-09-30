@@ -14,7 +14,7 @@ supply — without rebuilding the system.
 
 ```julia
 Ω = Parameter(:Omega, 2π * 1.0e6)       # 1 MHz Rabi frequency
-δ = Parameter(:delta, 0.0; std = 0.1e6) # detuning with 100 kHz shot-to-shot disorder
+δ = Parameter(:delta, 0.0; std = 2π * 0.1e6) # 100 kHz shot-to-shot disorder
 
 amp = 0.5 * Ω + δ                       # ParametricExpression
 ```
@@ -51,8 +51,7 @@ noise_model = LaserPhaseNoiseModel(
     powerlaw_ampl = 0.25e5, # Hz² — white noise floor
 )
 
-coupling = add_coupling!(system, atom, g => e, Ω;
-                         noise_model = noise_model)
+coupling = add_coupling!(system, atom, g => e, Ω; noise = noise_model)
 ```
 
 Each Monte Carlo shot draws an independent noise realization; averaging over
@@ -64,7 +63,7 @@ spectra before committing to a simulation:
 
 ```julia
 freqs = range(0.1e6, 10e6; length = 500)
-psd   = laser_freq_psd.(Ref(noise_model), freqs)
+psd   = laser_freq_psd(freqs, noise_model)
 ```
 
 ```@docs

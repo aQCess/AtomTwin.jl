@@ -16,7 +16,7 @@ using ..Units: c, ε0, a0, h, hbar, e
     PolarizabilityModel
 
 Empirical polarizability model for an atomic state, defined by a set of
-discrete transitions and an optional offset.
+discrete transitions and optional scalar and tensor offsets.
 
 # Fields
 - `state::String`: Electronic state label (e.g. `"1S0"`, `"3P0"`).
@@ -29,6 +29,9 @@ discrete transitions and an optional offset.
   - `source::Symbol`: Provenance — `:measured`, `:ls_estimated`, or `:fitted`.
 - `J::Rational{Int}`: Total electronic angular momentum of the state itself.
 - `offset_Hz_per_Wm2::Float64`: Empirical offset in Hz/(W/m²).
+- `tensor_offset_Hz_per_Wm2::Float64`: Wavelength-independent `J`-level tensor
+  light-shift coefficient in Hz/(W/m²), recoupled to each hyperfine `F` like a line
+  (see the constructor).
 - `reference::String`: Bibliographic reference for the data.
 
 # Specifying transitions
@@ -89,6 +92,7 @@ struct PolarizabilityModel
                                             Symbol}}}
     J::Rational{Int}
     offset_Hz_per_Wm2::Float64
+    tensor_offset_Hz_per_Wm2::Float64
     reference::String
 end
 
@@ -151,25 +155,47 @@ function _normalize_transition(t, J_model::Rational{Int})
 end
 
 """
-    PolarizabilityModel(state, transitions; J = 0, offset_Hz_per_Wm2 = 0.0, reference = "")
+    PolarizabilityModel(state, transitions; J = 0, offset_Hz_per_Wm2 = 0.0,
+                        tensor_offset_Hz_per_Wm2 = 0.0, reference = "")
 
 Build a model for `state` from a list of `transitions`. `J` is the total electronic
 angular momentum of `state` itself; it is the default for each line's own `J`, and
 leaving it at `0` reproduces the pre-existing `J=0 → J'=1` behaviour exactly.
+
+The two offsets add wavelength-independent scalar and tensor light-shift
+coefficients (Hz per W/m², the sign of the light shift: negative attracts). The
+tensor one is the `J`-level coefficient `U₂/I` — the one that multiplies
+`(3m_J² − J(J+1))/(J(2J−1)) · (3ε_z² − 1)/2` for a nuclear-spin-free state — and is
+carried to each hyperfine `F` by the same recoupling as a line. Together they
+represent a MEASURED light shift at one wavelength, e.g. with no line list:
+
+```julia
+# Yb ¹P₁ in a π-polarised 532 nm trap (Muzi Falconi et al. 2025): m_J = ±1 magic,
+# m_J = 0 at −11.6 MHz/mK relative to ¹S₀, whose light shift is u = U/(hI) in Hz
+# per W/m².
+PolarizabilityModel("1P1", NamedTuple[]; J = 1,
+                    offset_Hz_per_Wm2 = 0.814u, tensor_offset_Hz_per_Wm2 = 0.186u)
+```
+
+A tensor offset needs `J ≥ 1`; for `J ≤ 1/2` it is an `ArgumentError`.
 """
 function PolarizabilityModel(state::String,
                              transitions::Vector;
                              J = 0//1,
                              offset_Hz_per_Wm2::Float64 = 0.0,
+                             tensor_offset_Hz_per_Wm2::Float64 = 0.0,
                              reference::String = "")
     Jm   = Rational{Int}(J)
+    (tensor_offset_Hz_per_Wm2 == 0.0 || Jm ≥ 1) || throw(ArgumentError(
+        "a tensor offset needs J ≥ 1; a state with J = $Jm has no tensor light shift"))
     norm = [_normalize_transition(t, Jm) for t in transitions]
     for t in norm
         t.J == Jm || error(
             "transition declares J = $(t.J) but the model's state has J = $Jm; " *
             "every line of a model shares the model's initial state.")
     end
-    PolarizabilityModel(state, norm, Jm, offset_Hz_per_Wm2, reference)
+    PolarizabilityModel(state, norm, Jm, offset_Hz_per_Wm2, tensor_offset_Hz_per_Wm2,
+                        reference)
 end
 
 # ======================================================================
@@ -393,6 +419,11 @@ Returns `0.0` whenever the tensor part is absent — `J ≤ 1/2` (the `{1 1 2; J
 triangle rule) or `F ≤ 1/2` (the prefactor). The sum runs over the model's lines
 with the same `f(J,J')` energy-ordering convention as the scalar part.
 
+A model's `tensor_offset_Hz_per_Wm2` adds its `J`-level coefficient as a
+polarizability, `α = −cε₀h·offset`, carried to `F` by the lines' own `F` dependence:
+`(−1)^(J−F−I) pre(F){J J 2; F F I} / (pre(J){J J 2; J J 0})`, with `pre` the
+square-root prefactor above.
+
 # Normalisation — read before comparing with a paper
 
 `α⁽²⁾` is defined only up to how the `(3m_F²−F(F+1))/(F(2F−1))` sublevel factor is
@@ -452,8 +483,18 @@ function _alpha2_si(model::PolarizabilityModel, λ_nm::Real;
         α2 += phase * pre * (2J + 1) * f_phys * Γ / (ω0^2 * (ω0^2 - ωL^2)) * w1 * w2
     end
     
-    α2 *= 3π * ε0 * c^3
-    return α2
+    α2_si = 3π * ε0 * c^3 * α2
+    # A measured J-level tensor coefficient, recoupled to F exactly as each line
+    # term above: the F dependence of a line is pre(F)·{J J 2; F F I}·(−1)^(−F−I),
+    # so relative to the nuclear-spin-free F = J it is the ratio of those.
+    if model.tensor_offset_Hz_per_Wm2 != 0.0
+        α2J = -c * ε0 * h * model.tensor_offset_Hz_per_Wm2      # α = −cε₀ U/I
+        wF  = wigner6j(J, J, 2, F, F, I)
+        wJ  = wigner6j(J, J, 2, J, J, 0)
+        sgn = iseven(round(Int, J - F - I)) ? 1.0 : -1.0
+        α2_si += α2J * sgn * pre / _tensor_prefactor(J) * wF / wJ
+    end
+    return α2_si
 end
 
 """
@@ -703,7 +744,7 @@ The species' polarizability model for `term`, or an error naming what is
 available. `term` may be a [`TermSymbol`](@ref) or its name.
 """
 function _model_for(atom::AbstractAtom, term)
-    models = getpolarizabilitymodels(atom)
+    models = _polarizability_models(atom)
     key = termname(term)
     haskey(models, key) && return models[key]
     isempty(models) && error("$(getspecies(atom)) has no polarizability models.")

@@ -40,6 +40,7 @@ import ..TermSymbol, ..TERM_REGISTRY, ..@term
 @term "1S0" 0//1      # (6s²)  ¹S₀  ground
 @term "3P0" 0//1      # (6s6p) ³P₀  clock
 @term "3P1" 1//1      # (6s6p) ³P₁  556 nm intercombination
+@term "1P1" 1//1      # (6s6p) ¹P₁  399 nm (no shipped polarizability model)
 end
 
 # ======================================================================
@@ -111,8 +112,8 @@ against 759.35 nm measured — 70× better than the ³P₁ spread. `³P₁` here
 extrapolation of that model: the effective-resonance idea reused with a refitted
 width, on LS-coupling branching ratios never validated against ³P₁ data.
 
-See `studies/polarizability-refit/` in the harness for the analysis, and for why
-adopting a refitted width would trade one arbitrary compromise for another.
+Refitting the width to one of those wavelengths was considered and not adopted:
+it would trade one arbitrary compromise for another.
 
 For a tensor model constrained by precision measurements, see
 [`SR88_POLARIZABILITY_3P1`](@ref).

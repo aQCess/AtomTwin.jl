@@ -51,6 +51,7 @@ function evolve!(state::Tuple{Matrix{ComplexF64},Vector{<:NLevelAtom}},
         end
     end
 
+    refresh_fields!(fields)     # the stability check below reads the coefficients
     L = Tuple{Base.RefValue{ComplexF64},Op}[(d._coeff, d.H) for d in fields]
     J = Tuple{Base.RefValue{ComplexF64},Op,Vector{Float64}}[
         (j._coeff, j.J, j.LdagL_diag) for j in jumps
@@ -58,7 +59,9 @@ function evolve!(state::Tuple{Matrix{ComplexF64},Vector{<:NLevelAtom}},
 
     warn_if_step_too_large(L, length(tspan) > 1 ? tspan[2] - tspan[1] : 0.0,
                            get(kwargs, :integrator, Chebyshev()))
-    if frozen || isempty(beams)
+    # `play` freezes a run in which nothing can move (`_is_static`); a free atom
+    # driven by plane waves has no beams yet still feels radiation pressure.
+    if frozen
         qme(ρ, L, J, tspan; fields = fields, kwargs...)
     else
         qme_semiclassical(ρ, atoms, L, J, tspan; beams = beams, fields = fields, kwargs...)
@@ -80,13 +83,15 @@ function evolve!(state::Tuple{Vector{ComplexF64},Vector{<:NLevelAtom}},
                  frozen::Bool                     = false,
                  rng = Random.Xoshiro(),
                  kwargs...)
+    # Both caches: `Hnh` for the propagation, `LdagL_diag` for the jump-rate
+    # bound that sizes the sub-steps (`jump_rate_bound` skips a jump without it).
     for j in jumps
-        if isnothing(j.Hnh)
-            precompute!(j, Vector)
-        end
+        isnothing(j.Hnh)        && precompute!(j, Vector)
+        isnothing(j.LdagL_diag) && precompute!(j, Matrix)
     end
 
     psi, atoms = state
+    refresh_fields!(fields)     # the stability check below reads the coefficients
     _dt_probe = length(tspan) > 1 ? tspan[2] - tspan[1] : 0.0
     H = Tuple{Base.RefValue{ComplexF64},Op}[(d._coeff, d.H) for d in fields]
     warn_if_step_too_large(H, _dt_probe, get(kwargs, :integrator, Chebyshev()))
@@ -114,6 +119,25 @@ end
 #------------------------------------------------------------------------------
 # Schrödinger evolution
 #------------------------------------------------------------------------------
+
+"""
+    refresh_fields!(fields)
+
+Evaluate every field at the current atom and beam state.
+
+Called before an instruction's propagator plan is built, so the spectrum it
+bounds is this instruction's. A field otherwise holds whatever its last `update!`
+left -- the end of the previous instruction, or of the previous shot -- and a
+`VdWInteraction` holds its bare `C6` until its first update. A plan built from
+that is either invalid (the spectrum leaves its interval) or history-dependent
+(shots with identical initial conditions differ at the propagator tolerance).
+"""
+function refresh_fields!(fields)
+    for f in fields
+        update!(f, 0)
+    end
+    return
+end
 
 """
     write_detectors!(detectors, i, steps, downsample)
@@ -174,9 +198,9 @@ function tdse(psi::Vector{ComplexF64},
 
     steps = length(tspan)
     dt    = _step_of(tspan, dt)
-    # Once per instruction: `spectral_spec` bounds over the whole sequence
-    # (`peak = true`), so the interval stays valid for every step even as a
-    # shaped pulse changes the coefficients.
+    # Once per instruction, from the fields as they stand now; `track_spectrum!`
+    # below keeps it valid.
+    refresh_fields!(fields)
     spec = spectral_spec(H)
     plan = plan_step(integrator, psi, dt, spec; tol = tol)
 
@@ -185,16 +209,15 @@ function tdse(psi::Vector{ComplexF64},
     has_detectors = !isempty(detectors)
 
     @inbounds for i in 1:steps
-        if has_modifiers
-            for m in modifiers
-                update!(m, _modifier_time(m, (i - 0.5) * dt, dt))
-            end
-        end
+        _resample!(modifiers, (i - 0.5) * dt, dt)
         if has_fields
             for f in fields
                 update!(f, i)
             end
         end
+        # A modifier can move the spectrum within the instruction: a ramped or
+        # moving beam shifts a frozen atom's levels.
+        has_modifiers && track_spectrum!(plan, H; recenter = false)
         propagate!(integrator, psi, H, plan)
         has_detectors && write_detectors!(detectors, i, steps, downsample)
     end
@@ -205,8 +228,11 @@ end
 
 Time-dependent Schrödinger solver with semiclassical atomic motion.
 
-Quantum dynamics is driven by `H` while classical trajectories evolve
-under the optical forces from `beams`. `tspan` is assumed equidistant.
+Quantum dynamics is driven by `H` while classical trajectories evolve under the
+optical forces from `beams` and the radiation pressure of plane-wave drives
+([`RadiationPressure`](@ref)); with planar drives each step is sub-divided so the
+driven states rotate by at most `RAD_THETA` per sub-step. `tspan` is assumed
+equidistant.
 """
 function tdse_semiclassical(psi::Vector{ComplexF64},
                             atoms::Vector{A},
@@ -225,19 +251,23 @@ function tdse_semiclassical(psi::Vector{ComplexF64},
 
     steps = length(tspan)
     dt    = _step_of(tspan, dt)
+    refresh_fields!(fields)
     spec  = spectral_spec(H)
-    plan  = plan_step(integrator, psi, dt, spec; tol = tol)
-
-    has_modifiers = !isempty(modifiers)
     has_fields    = !isempty(fields)
     has_detectors = !isempty(detectors)
+    has_modifiers = !isempty(modifiers)
+
+    # Plane-wave drives push the atom. The exact propagator takes one step per `dt`,
+    # which would sample the Rabi-frequency population flow once; sub-divide so the
+    # driven states rotate by at most `RAD_THETA` per sub-step (trapezoid error
+    # ≲ 0.3 % on a π pulse). Without planar drives nothing changes.
+    rp   = radiation_pressure(fields, atoms)
+    nsub = rp === nothing ? 1 : _radiation_substeps(rp, H, dt, modifiers)
+    h    = dt / nsub
+    plan = plan_step(integrator, psi, h, spec; tol = tol)
 
     @inbounds for i in 1:steps
-        if has_modifiers
-            for m in modifiers
-                update!(m, _modifier_time(m, (i - 0.5) * dt, dt))
-            end
-        end
+        _resample!(modifiers, (i - 0.5) * dt, dt)
         for atom in atoms
             updatepop!(atom, psi)
             fclassical!(dt, atom, beams)
@@ -247,12 +277,48 @@ function tdse_semiclassical(psi::Vector{ComplexF64},
                 update!(f, i)
             end
         end
-        # The atoms just moved, so the trap light shift moved with them. Track
-        # the spectrum's centre; ΔE and the Bessel coefficients stay put.
-        recenter!(plan, H)
-        propagate!(integrator, psi, H, plan)
+        # The atoms just moved, so the trap light shift moved with them.
+        track_spectrum!(plan, H)
+        if rp === nothing
+            propagate!(integrator, psi, H, plan)
+        else
+            radiation_eval!(rp, psi, 1.0)
+            t0 = (i - 1) * dt
+            for q in 1:nsub
+                if has_modifiers && nsub > 1
+                    _resample!(modifiers, t0 + (q - 0.5) * h, h)
+                    track_spectrum!(plan, H; recenter = false)
+                    radiation_eval!(rp, psi, 1.0)  # the drives changed: restart the trapezoid
+                end
+                propagate!(integrator, psi, H, plan)
+                radiation_step!(rp, psi, 1.0, h)
+            end
+        end
         has_detectors && write_detectors!(detectors, i, steps, downsample)
     end
+end
+
+"""
+    RAD_THETA
+
+Rotation tolerated per sub-step when integrating the radiation force of a coherent
+evolution. See [`tdse_semiclassical`](@ref).
+"""
+const RAD_THETA = 0.1
+
+# Sub-steps per `dt` for the TDSE radiation impulse. The drives' population flow
+# oscillates at the rotation rate of the states they couple: the Gershgorin span of
+# their own rows, not of the whole spectrum, which an undriven far-detuned level
+# would inflate. `peak` takes the drives at their nominal amplitude; a shaped
+# envelope may exceed it, so the rate is scaled by the instruction's largest one.
+function _radiation_substeps(rp, H, dt, modifiers)
+    rows = unique!(sort!([k for d in rp.drives for (i, j, _) in d.H.forward for k in (i, j)]))
+    lo, hi = gershgorin_interval(H, rows; peak = true)
+    amax = 1.0
+    for m in modifiers
+        m isa AmplitudeModifier && !isempty(m.vals) && (amax = max(amax, maximum(abs, m.vals)))
+    end
+    return max(1, ceil(Int, amax * (hi - lo) / 2 * dt / RAD_THETA))
 end
 
 #------------------------------------------------------------------------------
@@ -314,8 +380,10 @@ function force(atom::A, beams::Vector{<:AbstractBeam}) where {A}
             end
         end
 
-        # Σᵢ α[λ][i]·P[i] -- the only level-dependent part.
-        αλ = atom.alpha[λ]
+        # Σᵢ α[λ][i]·P[i] -- the only level-dependent part. An atom with no
+        # polarizability at λ (no model for its species) feels no force from it.
+        αλ = get(atom.alpha, λ, nothing)
+        αλ === nothing && continue
         c = 0.0
         for i in 1:atom.n
             c += αλ[i] * atom._P[i]
@@ -408,16 +476,10 @@ function newton(atoms::Vector{A},
     # 2.8x at 16, 4.7x at 42, 5.9x at 256, and loses only at N=2 (0.80x). So the
     # crossover is just above 2. `qme_semiclassical` uses the same threshold.
     parallel = length(atoms) > 2
-
-    has_modifiers = !isempty(modifiers)
     has_detectors = !isempty(detectors)
 
     @inbounds for i in 1:steps
-        if has_modifiers
-            for m in modifiers
-                update!(m, _modifier_time(m, (i - 0.5) * dt, dt))
-            end
-        end
+        _resample!(modifiers, (i - 0.5) * dt, dt)
         if parallel
             @batch for atom in atoms
                 fclassical!(dt, atom, beams)
@@ -483,6 +545,7 @@ function wfmc(psi::Vector{ComplexF64},
     # `dt` is the SAMPLING resolution; the jump test needs its own, possibly
     # finer, step, bounded BOTH by `jtol` (two-jump omission) and by the
     # spectral width of H_eff (jump-time resolution) -- see `jump_substeps`.
+    refresh_fields!(fields)
     spec = spectral_spec(Heff_terms)
     ΔE   = (spec.Emax - spec.Emin) / 2
     nsub = jump_substeps(dt, jump_rate_bound(jumps), jtol, ΔE)
@@ -490,11 +553,7 @@ function wfmc(psi::Vector{ComplexF64},
     plan = plan_step(integrator, psi, h, spec; tol = tol)
 
     @inbounds for i in 1:steps
-        if has_modifiers
-            for m in modifiers
-                update!(m, _modifier_time(m, (i - 0.5) * dt, dt))
-            end
-        end
+        _resample!(modifiers, (i - 0.5) * dt, dt)
         if has_fields
             for f in fields
                 update!(f, i)
@@ -504,10 +563,17 @@ function wfmc(psi::Vector{ComplexF64},
         for q in 1:nsub
             # Drives are read at each sub-step's own midpoint, not frozen across
             # the sampling step -- see `strang_substeps!` for why.
-            has_modifiers && _resample!(modifiers, t0 + (q - 0.5) * h, h)
+            if has_modifiers
+                _resample!(modifiers, t0 + (q - 0.5) * h, h)
+                track_spectrum!(plan, Heff_terms; recenter = false)
+            end
             propagate!(integrator, psi, Heff_terms, plan)
-            quantum_jump!(psi, jumps, photo_detectors, i, steps, downsample,
-                          _prob, _q1, _q2, rng)
+            _, early = quantum_jump!(psi, norm(psi), jumps, photo_detectors, i, steps,
+                                     downsample, _prob, _q1, _q2, rng)
+            if early                   # the jump opened the sub-step: see `quantum_jump!`
+                propagate!(integrator, psi, Heff_terms, plan)
+                _renormalise!(psi, norm(psi))
+            end
         end
         has_detectors && write_detectors!(state_detectors, i, steps, downsample)
     end
@@ -524,7 +590,23 @@ function updatepop!(atom::AbstractAtom, psi::Vector{ComplexF64})
     for lvl in 1:atom.n
         a = 0.0
         for j in atom._pidx[lvl]
-            a += abs2(psi[j[1]])
+            a += abs2(psi[j])
+        end
+        atom._P[lvl] = a
+    end
+end
+
+"""
+    updatepop!(atom, rho)
+
+Density-matrix form: the level populations are the diagonal of `rho` summed over
+the same index lists.
+"""
+function updatepop!(atom::AbstractAtom, rho::Matrix{ComplexF64})
+    for lvl in 1:atom.n
+        a = 0.0
+        for j in atom._pidx[lvl]
+            a += real(rho[j, j])
         end
         atom._P[lvl] = a
     end
@@ -533,15 +615,15 @@ end
 """
     wfmc_semiclassical(psi, atoms, H, Hnh, jumps, tspan; kwargs...)
 
-[`wfmc`](@ref) with semiclassical atomic motion: each step also advances the
-atoms under [`fclassical!`](@ref) and applies the radiation-pressure impulse from
-[`fdipole!`](@ref).
+[`wfmc`](@ref) with semiclassical atomic motion: each step also advances the atoms
+under [`fclassical!`](@ref), and each sub-step applies the radiation pressure of the
+plane-wave drives ([`RadiationPressure`](@ref)).
 """
 function wfmc_semiclassical(psi::Vector{ComplexF64},
                             atoms::Vector{A},
                             H::Vector{Tuple{Base.RefValue{ComplexF64},Op}},
                             Hnh::Vector{Tuple{Base.RefValue{ComplexF64},Op}},
-                            jumps::Vector{},
+                            jumps::Vector{Jump},
                             tspan::AbstractVector{Float64};
                             beams::Vector{<:AbstractBeam}        = AbstractBeam[],
                             modifiers::Vector{<:AbstractModifier} = AbstractModifier[],
@@ -570,40 +652,53 @@ function wfmc_semiclassical(psi::Vector{ComplexF64},
     has_detectors   = !isempty(state_detectors)
 
     Heff_terms = vcat(H, Hnh)          # see `wfmc`
+    refresh_fields!(fields)
     spec = spectral_spec(Heff_terms)
     ΔE   = (spec.Emax - spec.Emin) / 2
     nsub = jump_substeps(dt, jump_rate_bound(jumps), jtol, ΔE)
     h    = dt / nsub
     plan = plan_step(integrator, psi, h, spec; tol = tol)
+    rp   = radiation_pressure(fields, atoms; conditional = true)   # `nothing` without planar drives
+    radiation_resume!(rp, psi)
 
     @inbounds for i in 1:steps
-        if has_modifiers
-            for m in modifiers
-                update!(m, _modifier_time(m, (i - 0.5) * dt, dt))
-            end
-        end
+        _resample!(modifiers, (i - 0.5) * dt, dt)
         for atom in atoms
             updatepop!(atom, psi)
             fclassical!(dt, atom, beams)
-            fdipole!(dt, psi, atom, fields, jumps, _q1)
         end
         if has_fields
             for f in fields
                 update!(f, i)
             end
         end
-        # The atoms just moved, so the trap light shift moved with them. Track
-        # the spectrum's centre; ΔE and the Bessel coefficients stay put. Hoisted
-        # out of the sub-step loop: only the drives vary inside it, not positions.
-        recenter!(plan, Heff_terms)
+        # The atoms just moved, so the trap light shift moved with them. Hoisted
+        # out of the sub-step loop: only the drives vary inside it, and those are
+        # tracked there when there are modifiers.
+        track_spectrum!(plan, Heff_terms)
+        # The plane-wave phases moved with the atoms too.
+        radiation_eval!(rp, psi, 1.0)
         t0 = (i - 1) * dt
         for q in 1:nsub
             # Drives are read at each sub-step's own midpoint, not frozen across
             # the sampling step -- see `strang_substeps!` for why.
-            has_modifiers && _resample!(modifiers, t0 + (q - 0.5) * h, h)
+            if has_modifiers
+                _resample!(modifiers, t0 + (q - 0.5) * h, h)
+                track_spectrum!(plan, Heff_terms; recenter = false)
+                radiation_eval!(rp, psi, 1.0)      # the drives changed: restart the trapezoid
+            end
             propagate!(integrator, psi, Heff_terms, plan)
-            quantum_jump!(psi, jumps, photo_detectors, i, steps, downsample,
-                          _prob, _q1, _q2, rng)
+            n = norm(psi)
+            radiation_step!(rp, psi, 1 / (n * n), h)
+            fired, early = quantum_jump!(psi, n, jumps, photo_detectors, i, steps,
+                                         downsample, _prob, _q1, _q2, rng)
+            fired === nothing || radiation_jump!(rp, fired, psi, 1.0)
+            if early                   # the jump opened the sub-step: see `quantum_jump!`
+                propagate!(integrator, psi, Heff_terms, plan)
+                n = norm(psi)
+                radiation_step!(rp, psi, 1 / (n * n), h)
+                _renormalise!(psi, n)
+            end
         end
         has_detectors && write_detectors!(state_detectors, i, steps, downsample)
     end
@@ -638,8 +733,6 @@ function qme(rho::Matrix{ComplexF64},
 
     steps = length(tspan)
     dt    = _step_of(tspan, dt)
-
-    has_modifiers  = !isempty(modifiers)
     has_fields     = !isempty(fields)
     has_detectors  = !isempty(detectors)
 
@@ -651,11 +744,7 @@ function qme(rho::Matrix{ComplexF64},
     strang_reset!(ctl)
 
     @inbounds for i in 1:steps
-        if has_modifiers
-            for m in modifiers
-                update!(m, _modifier_time(m, (i - 0.5) * dt, dt))
-            end
-        end
+        _resample!(modifiers, (i - 0.5) * dt, dt)
         if has_fields
             for f in fields
                 update!(f, i)
@@ -671,7 +760,8 @@ end
     qme_semiclassical(rho, atoms, L, J, tspan; kwargs...)
 
 [`qme`](@ref) with semiclassical atomic motion: each step also advances the atoms
-under [`fclassical!`](@ref), in parallel when `length(atoms) > 2`.
+under [`fclassical!`](@ref), in parallel when `length(atoms) > 2`, and applies the
+mean radiation pressure of the plane-wave drives ([`RadiationPressure`](@ref)).
 """
 function qme_semiclassical(rho::Matrix{ComplexF64},
                            atoms::Vector{A},
@@ -695,9 +785,11 @@ function qme_semiclassical(rho::Matrix{ComplexF64},
     dt    = _step_of(tspan, dt)
 
     parallel      = length(atoms) > 2     # see `newton` for the measurement
-    has_modifiers = !isempty(modifiers)
     has_fields    = !isempty(fields)
     has_detectors = !isempty(detectors)
+    # The ensemble-mean radiation force of the planar drives, integrated over the
+    # controller's accepted sub-step pairs (see `RadiationPressure`).
+    rp            = radiation_pressure(fields, atoms)
 
     ctl = strang_control(size(rho, 1))    # see `qme`
     ctl.k = 1
@@ -705,17 +797,17 @@ function qme_semiclassical(rho::Matrix{ComplexF64},
     strang_reset!(ctl)
 
     @inbounds for i in 1:steps
-        if has_modifiers
-            for m in modifiers
-                update!(m, _modifier_time(m, (i - 0.5) * dt, dt))
-            end
-        end
+        _resample!(modifiers, (i - 0.5) * dt, dt)
+        # The dipole force weights each level's polarizability by its
+        # population, so refresh `_P` from ρ first, as `tdse`/`wfmc` do from ψ.
         if parallel
             @batch for atom in atoms
+                updatepop!(atom, rho)
                 fclassical!(dt, atom, beams)
             end
         else
             for atom in atoms
+                updatepop!(atom, rho)
                 fclassical!(dt, atom, beams)
             end
         end
@@ -724,8 +816,10 @@ function qme_semiclassical(rho::Matrix{ComplexF64},
                 update!(f, i)
             end
         end
+        radiation_begin!(rp, rho)
         strang_substeps!(dt, rho, L, J, steptol, ctl, _q1, _q2,
-                         taylor_order(integrator), modifiers, (i - 1) * dt)
+                         taylor_order(integrator), modifiers, (i - 1) * dt, rp)
+        radiation_commit!(rp)
         has_detectors && write_detectors!(detectors, i, steps, downsample)
     end
 end
