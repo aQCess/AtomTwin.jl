@@ -477,53 +477,68 @@ end
 """
     intensity(b::GeneralGaussianBeam, r)
 
-Intensity of the elliptical Gaussian beam at position `r`.
+Intensity of the elliptical paraxial Gaussian beam at position `r`.
 
-In local coordinates \\((x', y')\\),
+In local coordinates \\((x', y', z')\\), with \\(w_x(z') = w_{0x}\\sqrt{1 + (z'/z_{Rx})^2}\\)
+and likewise for \\(y\\),
 
 \\[
-I(r) = I_0 \\exp\\bigl[-2(x'^2 / w_{0x}^2 + y'^2 / w_{0y}^2)\\bigr] \\,
-|c|^2,
+I(r) = I_0 \\frac{w_{0x} w_{0y}}{w_x w_y}
+\\exp\\bigl[-2(x'^2 / w_x^2 + y'^2 / w_y^2)\\bigr] \\, |c|^2,
 \\]
 
-with an 8-waist cutoff ellipse
-\\(x'^2 / w_{0x}^2 + y'^2 / w_{0y}^2 \\le 16\\).
+so the power through every transverse plane is conserved and \\(I = |E|^2 c\\varepsilon_0/2\\)
+for the field of [`Efield`](@ref). Zero outside the 8-waist cutoff ellipse
+\\(x'^2 / w_x^2 + y'^2 / w_y^2 > 16\\).
 """
 @inline function intensity(b::GeneralGaussianBeam, r::Vector{Float64})
     x′, y′ = local_coords(r, b)
+    z′ = sum((r[i] - b.r0[i]) * b.k[i] for i in 1:3)
+    wx2, wy2 = _waists2(b, z′)
 
-    # 8w0 cutoff ellipse
-    if x′^2 / b.w0x^2 + y′^2 / b.w0y^2 > 16
-        return 0.0
-    else
-        return b.I0 * exp(-2 * (x′^2 / b.w0x^2 + y′^2 / b.w0y^2)) *
-               abs2(b._coeff[])
-    end
+    q = x′^2 / wx2 + y′^2 / wy2
+    q > 16 && return 0.0
+    return b.I0 * (b.w0x * b.w0y / sqrt(wx2 * wy2)) * exp(-2q) * abs2(b._coeff[])
+end
+
+"Squared local waists \\(w_x^2(z'), w_y^2(z')\\) of a `GeneralGaussianBeam`."
+@inline function _waists2(b::GeneralGaussianBeam, z′)
+    zRx = π * b.w0x^2 / b.λ
+    zRy = π * b.w0y^2 / b.λ
+    return b.w0x^2 * (1 + (z′ / zRx)^2), b.w0y^2 * (1 + (z′ / zRy)^2)
 end
 
 """
     dIdx(b::GeneralGaussianBeam, r) -> (dI_dx, dI_dy, dI_dz)
 
-Gradient of the intensity of an elliptical Gaussian beam at global position `r`.
+Gradient of the intensity of an elliptical paraxial Gaussian beam at global
+position `r` (see [`intensity`](@ref)), including the axial dependence.
 
-The computation is performed in local coordinates \\((x', y')\\) and then
-mapped back to global coordinates via the local axes `u` and `v`.
+The computation is performed in local coordinates \\((x', y', z')\\) and then
+mapped back to global coordinates via the local axes `u`, `v` and `k`.
 Returns a tuple of three real numbers.
 """
 @inline function dIdx(b::GeneralGaussianBeam, r::Vector{Float64})
     x′, y′ = local_coords(r, b)
+    z′ = sum((r[i] - b.r0[i]) * b.k[i] for i in 1:3)
+    wx2, wy2 = _waists2(b, z′)
 
-    if x′^2 / b.w0x^2 + y′^2 / b.w0y^2 > 16
-        return (0.0, 0.0, 0.0)
-    else
-        m = -4 * b.I0 * exp(-2 * (x′^2 / b.w0x^2 + y′^2 / b.w0y^2)) *
-            abs2(b._coeff[])
+    q = x′^2 / wx2 + y′^2 / wy2
+    q > 16 && return (0.0, 0.0, 0.0)
+    I = b.I0 * (b.w0x * b.w0y / sqrt(wx2 * wy2)) * exp(-2q) * abs2(b._coeff[])
 
-        # Gradient in global coordinates
-        grad = [m * (x′ / b.w0x^2) * b.u[i] + m * (y′ / b.w0y^2) * b.v[i]
-                for i in 1:3]
-        return (grad[1], grad[2], grad[3])
-    end
+    zRx = π * b.w0x^2 / b.λ
+    zRy = π * b.w0y^2 / b.λ
+    dwx2 = 2 * b.w0x^2 * z′ / zRx^2             # d(w_x²)/dz′
+    dwy2 = 2 * b.w0y^2 * z′ / zRy^2
+    dI_dx′ = -4 * I * x′ / wx2
+    dI_dy′ = -4 * I * y′ / wy2
+    dI_dz′ = I * (-(dwx2 / wx2 + dwy2 / wy2) / 2 +
+                  2 * (x′^2 * dwx2 / wx2^2 + y′^2 * dwy2 / wy2^2))
+
+    return (dI_dx′ * b.u[1] + dI_dy′ * b.v[1] + dI_dz′ * b.k[1],
+            dI_dx′ * b.u[2] + dI_dy′ * b.v[2] + dI_dz′ * b.k[2],
+            dI_dx′ * b.u[3] + dI_dy′ * b.v[3] + dI_dz′ * b.k[3])
 end
 
 """
@@ -568,9 +583,9 @@ at position `r`.
 
 This function accounts for:
 
-- z'-dependent waists `wx(z')`, `wy(z')`.
+- z'-dependent waists `wx(z')`, `wy(z')`; on-axis amplitude √(w0x w0y / (wx wy)).
 - Curvatures `Rx(z')`, `Ry(z')`.
-- Gouy phases `ζx(z')`, `ζy(z')`.
+- Gouy phase (ζx(z') + ζy(z'))/2.
 - Arbitrary beam orientation via local coordinates.
 - Elliptical transverse profile.
 
@@ -610,9 +625,9 @@ Returns zero if the point lies outside the 8-waist cutoff ellipse.
     ζx = atan(z′ / zRx)
     ζy = atan(z′ / zRy)
 
-    amp = sqrt(2/(c*ε0)) * sqrt(b.I0) * (w0x / wx) * (w0y / wy)
+    amp = sqrt(2/(c*ε0)) * sqrt(b.I0) * sqrt((w0x / wx) * (w0y / wy))
     G = exp(- (x′^2 / wx2 + y′^2 / wy2))
-    φ = k * z′ + k * (x′^2 / (2 * Rx) + y′^2 / (2 * Ry)) - (ζx + ζy)
+    φ = k * z′ + k * (x′^2 / (2 * Rx) + y′^2 / (2 * Ry)) - (ζx + ζy) / 2
 
     scalar = amp * G * cis(-φ) * b._coeff[]
 
@@ -652,9 +667,9 @@ polarization vector. Used by `force` to avoid a temporary allocation.
     ζx = atan(z′ / zRx)
     ζy = atan(z′ / zRy)
 
-    amp = sqrt(2/(c*ε0)) * sqrt(b.I0) * (w0x / wx) * (w0y / wy)
+    amp = sqrt(2/(c*ε0)) * sqrt(b.I0) * sqrt((w0x / wx) * (w0y / wy))
     G   = exp(-(x′^2 / wx2 + y′^2 / wy2))
-    φ   = k * z′ + k * (x′^2 / (2 * Rx) + y′^2 / (2 * Ry)) - (ζx + ζy)
+    φ   = k * z′ + k * (x′^2 / (2 * Rx) + y′^2 / (2 * Ry)) - (ζx + ζy) / 2
 
     return amp * G * cis(-φ) * b._coeff[]
 end
@@ -700,9 +715,9 @@ Returns a tuple of three complex numbers.
     ζx = atan(z′ / zRx)
     ζy = atan(z′ / zRy)
 
-    amp = sqrt(2/(c*ε0)) * sqrt(b.I0) * (w0x / wx) * (w0y / wy)
+    amp = sqrt(2/(c*ε0)) * sqrt(b.I0) * sqrt((w0x / wx) * (w0y / wy))
     G   = exp(- (x′^2 / wx2 + y′^2 / wy2))
-    φ   = k * z′ + k * (x′^2 / (2 * Rx) + y′^2 / (2 * Ry)) - (ζx + ζy)
+    φ   = k * z′ + k * (x′^2 / (2 * Rx) + y′^2 / (2 * Ry)) - (ζx + ζy) / 2
     cphase = cis(-φ) * b._coeff[]
     E      = amp * G * cphase
 
@@ -715,16 +730,16 @@ Returns a tuple of three complex numbers.
     # Derivative with respect to z′
     d_wx_dz′ = w0x * (z′ / zRx^2) / sqrt(1 + (z′ / zRx)^2)
     d_wy_dz′ = w0y * (z′ / zRy^2) / sqrt(1 + (z′ / zRy)^2)
-    d_amp_dz′ = amp * (-d_wx_dz′ / wx - d_wy_dz′ / wy)
+    d_amp_dz′ = amp * (-d_wx_dz′ / wx - d_wy_dz′ / wy) / 2
     dG_dz′ = G * (2 * x′^2 / wx3 * d_wx_dz′ + 2 * y′^2 / wy3 * d_wy_dz′)
 
-    dRx_dz′ = z′ != 0.0 ? (1 + (zRx / z′)^2) - 2 * zRx^2 / z′^3 : 0.0
-    dRy_dz′ = z′ != 0.0 ? (1 + (zRy / z′)^2) - 2 * zRy^2 / z′^3 : 0.0
+    # d(1/R)/dz′ with 1/R = z′/(z′² + z_R²): smooth through the focus
+    dinvRx_dz′ = (zRx^2 - z′^2) / (z′^2 + zRx^2)^2
+    dinvRy_dz′ = (zRy^2 - z′^2) / (z′^2 + zRy^2)^2
     dζx_dz′ = zRx / (zRx^2 + z′^2)
     dζy_dz′ = zRy / (zRy^2 + z′^2)
-    dφ_dz′  = k + k * (x′^2 / (2 * Rx^2) * dRx_dz′ +
-                       y′^2 / (2 * Ry^2) * dRy_dz′) -
-              (dζx_dz′ + dζy_dz′)
+    dφ_dz′  = k + k * (x′^2 / 2 * dinvRx_dz′ + y′^2 / 2 * dinvRy_dz′) -
+              (dζx_dz′ + dζy_dz′) / 2
 
     dE_dz′ = (d_amp_dz′ * G + amp * dG_dz′) * cphase - im * dφ_dz′ * E
 
