@@ -96,6 +96,12 @@ struct PolarizabilityModel
     reference::String
 end
 
+# Convert an offset given in atomic-unit polarizability to AtomTwin's
+# offset_Hz_per_Wm2, so the two forms stay in sync if the tails are re-tuned:
+#   α_SI = α_au · 4π ε₀ a₀³;  U/I = −α_SI/(2 c ε₀);  offset_Hz_per_Wm2 = (U/I)/h.
+_au_to_offset_Hz_per_Wm2(α_au) =
+    -(α_au * 4π * ε0 * a0^3) / (2 * c * ε0) / h
+
 """
     _dipole_to_gamma_MHz(freq_THz, dipole_ea0, Je) -> Float64
 

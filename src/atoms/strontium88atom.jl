@@ -23,8 +23,8 @@ References:
 # ======================================================================
 #
 # Each clock state is a J=0 level, so every listed line is J=0 → J'=1 and we can
-# supply the recommended reduced dipole matrix element directly via `dipole_ea0`
-# with `Jg = 0`. Transition energies are the experimental values (Table IV,
+# supply the recommended reduced dipole matrix element directly via `dipole_ea0`.
+# Transition energies are the experimental values (Table IV,
 # column E_expt) in cm⁻¹, converted to THz (1 cm⁻¹ = 29.9792458 GHz).
 #
 # The line lists reproduce the reference STATIC scalar polarizabilities almost
@@ -45,12 +45,6 @@ References:
 # uncertainty). This is the standard semi-empirical construction, not a fit to
 # invented data: the dominant lines are fixed by spectroscopy; only the unmeasured
 # tail is set by one experimental number.
-
-# Convert an offset given in atomic-unit polarizability to AtomTwin's
-# offset_Hz_per_Wm2, so the two forms stay in sync if the tails are re-tuned:
-#   α_SI = α_au · 4π ε₀ a₀³;  U/I = −α_SI/(c ε₀);  offset_Hz_per_Wm2 = (U/I)/h.
-_au_to_offset_Hz_per_Wm2(α_au) =
-    -(α_au * 4π * ε0 * a0^3) / (2c * ε0) / h
 
 """
     SR88_POLARIZABILITY_1S0

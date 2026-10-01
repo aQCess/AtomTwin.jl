@@ -44,8 +44,8 @@ const RB87_POLARIZABILITY_5S12 = PolarizabilityModel(
     ];
     J = 1//2,                       # 5S₁/₂ ground state
     # Static ionic-core (Rb⁺) + valence-tail polarizability, α_core ≈ 9.08 a.u.:
-    #   offset_Hz_per_Wm2 = -α_core·(4πε₀a₀³) / (c ε₀ h).
-    offset_Hz_per_Wm2 = -8.5118e-5,
+    #   offset_Hz_per_Wm2 = -α_core·(4πε₀a₀³) / (2 c ε₀ h).
+    offset_Hz_per_Wm2 = _au_to_offset_Hz_per_Wm2(9.08),
     reference = "Steck 2019 (D lines); Safronova & Clark PRA 69, 022509 (2004) (6P/7P + core)",
 )
 
