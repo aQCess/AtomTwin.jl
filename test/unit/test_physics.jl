@@ -977,3 +977,29 @@ end
     seq4 = Sequence(1e-9); push!(seq4, Pulse(δ, 1e-7; ampl = -exp(im * π)))  # rounding residue
     @test play(s, seq4; initial_state = l0 + l1).detectors["P1"][end] ≈ 0.5 atol = 1e-10
 end
+
+@testset "GeneralGaussianBeam follows the paraxial axial profile" begin
+    # The on-axis field fell as w0²/w² (power not conserved), the Gouy phase was doubled,
+    # and `intensity`/`dIdx` ignored z: a GeneralGaussianBeam tweezer had no axial light
+    # shift, its dipole force gave √2 × the axial trap frequency, and |E|² ≠ intensity.
+    λ, w0 = 759.35e-9, 0.6e-6
+    b  = GeneralGaussianBeam(λ, w0, w0, 1e-3, [0.0, 0.0, 1.0], [1.0, 0.0, 0.0])
+    zR = π * w0^2 / λ
+    E(r) = Dynamiq.efield_scalar(b, r)
+    @test abs(E([0.0, 0.0, zR])) / abs(E([0.0, 0.0, 0.0])) ≈ 1 / √2 rtol = 1e-12
+    @test abs(angle(E([0.0, 0.0, zR]) * cis(2π / λ * zR) / E([0.0, 0.0, 0.0]))) ≈ π / 4 rtol = 1e-9
+    @test Dynamiq.intensity(b, [0.0, 0.0, zR]) / Dynamiq.intensity(b, [0.0, 0.0, 0.0]) ≈ 0.5 rtol = 1e-12
+    cε = AtomTwin.Units.c * AtomTwin.Units.ε0
+    h = 1e-12
+    for r in ([0.2e-6, -0.1e-6, 0.7e-6], [0.35e-6, 0.3e-6, -1.8e-6], [0.0, 0.0, 0.4e-6])
+        @test cε * abs2(E(r)) / 2 ≈ Dynamiq.intensity(b, r) rtol = 1e-12
+        gI, gE = Dynamiq.dIdx(b, r), Dynamiq.dEdr(b, r)
+        for i in 1:3
+            e = zeros(3); e[i] = h
+            fdI = (Dynamiq.intensity(b, r .+ e) - Dynamiq.intensity(b, r .- e)) / 2h
+            fdE = (E(r .+ e) - E(r .- e)) / 2h
+            @test gI[i] ≈ fdI rtol = 1e-6 atol = 1e-6 * Dynamiq.intensity(b, r) / w0
+            @test gE[i] ≈ fdE rtol = 1e-6 atol = 1e-6 * abs(E(r)) / w0
+        end
+    end
+end
