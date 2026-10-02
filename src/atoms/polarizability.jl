@@ -132,7 +132,7 @@ end
 function _normalize_transition(t, J_model::Rational{Int})
     freq  = haskey(t, :freq_THz) ? t.freq_THz : 1.0   # only the sign is used
     J     = haskey(t, :J)   ? Rational{Int}(t.J)   : J_model
-    J_f   = haskey(t, :J_f) ? Rational{Int}(t.J_f) : 1//1
+    J_f   = haskey(t, :J_f) ? Rational{Int}(t.J_f) : error("PolarizabilityModel transition must specify `J_f`")
     src   = haskey(t, :source) ? Symbol(t.source) : :measured
     src in (:measured, :ls_estimated, :fitted) || error(
         "PolarizabilityModel transition `source` must be :measured, :ls_estimated " *
@@ -187,10 +187,15 @@ A tensor offset needs `J ≥ 1`; for `J ≤ 1/2` it is an `ArgumentError`.
 """
 function PolarizabilityModel(state::String,
                              transitions::Vector;
-                             J = 0//1,
+                             J = nothing,
                              offset_Hz_per_Wm2::Float64 = 0.0,
                              tensor_offset_Hz_per_Wm2::Float64 = 0.0,
                              reference::String = "")
+    
+    J != nothing || throw(ArgumentError(
+        "PolarizabilityModel constructor must be given J, the total angular momentum " *
+        "of the state itself; it is used to normalise the line strengths and to " *
+        "recouple the tensor offset to each hyperfine F."))
     Jm   = Rational{Int}(J)
     (tensor_offset_Hz_per_Wm2 == 0.0 || Jm ≥ 1) || throw(ArgumentError(
         "a tensor offset needs J ≥ 1; a state with J = $Jm has no tensor light shift"))
@@ -323,6 +328,7 @@ Compute total light shift per intensity U/I for a given model and wavelength.
 - `U/I` in J/(W/m²).
 """
 function _U_over_I(model::PolarizabilityModel, λ_nm::Real)
+    @warn "_U_over_I is deprecated; use light_shift_coeff_Hz_per_Wcm2 instead, which returns an equivalent result."
     ωL = 2π * c / (λ_nm * 1e-9)
 
     U_over_I = 0.0

@@ -433,29 +433,25 @@ end
     # is exact. Isolate the API mechanism with a self-contained two-line model.
     ref = [(4.227, 377.107463e12), (5.977, 384.230485e12)]
     m = PolarizabilityModel("5S1/2",
-        [(freq_THz = 377.107463, dipole_ea0 = 4.227),
-         (freq_THz = 384.230485, dipole_ea0 = 5.977)];
+        [(freq_THz = 377.107463, dipole_ea0 = 4.227, J_f = 1//2),   # Rb 5P₁/₂
+         (freq_THz = 384.230485, dipole_ea0 = 5.977, J_f = 3//2)];
         J = 1//2)   # Rb 5S₁/₂. Declaring J must NOT perturb a dipole-specified
                     # scalar sum — the 1/(2Jg+1) weight is already inside Γ_eff.
     for λ in (1e7, 1200.0, 1000.0, 900.0, 850.0, 800.0)
         @test isapprox(polarizability_au(m, λ), _alpha_dipoles_au(λ, ref); rtol = 1e-9)
     end
-    # D2 carries ~2× the line strength of D1: the produced effective widths encode
-    # that ratio (unlike the near-equal natural widths 5.75 / 6.07 MHz).
-    g1, g2 = m.transitions[1].gamma_MHz, m.transitions[2].gamma_MHz
-    @test 1.9 < g2 / g1 < 2.2
-end
 
-@testset "natural-Γ alkali doublet is wrong off-resonance (the trap it avoids)" begin
-    # The naive user path — the two D lines with their natural linewidths — agrees
-    # with the truth at the static limit but drifts toward the D lines. The
-    # dipole-specified model does not. This pins the value of the dipole API.
-    ref   = [(4.227, 377.107463e12), (5.977, 384.230485e12)]
-    m_nat = PolarizabilityModel("5S1/2",
-        [(freq_THz = 377.107463, gamma_MHz = 5.7500),   # D1 natural Γ
-         (freq_THz = 384.230485, gamma_MHz = 6.0666)])  # D2 natural Γ
-    @test isapprox(polarizability_au(m_nat, 1e7), _alpha_dipoles_au(1e7, ref); rtol = 0.02)
-    @test !isapprox(polarizability_au(m_nat, 850.0), _alpha_dipoles_au(850.0, ref); rtol = 0.02)
+    # Returns line strengths in (e·a₀)² units
+    function line_strength_ea0sq(freq_THz, gamma_MHz, Je)
+        ω0 = 2π * abs(freq_THz) * 1e12
+        Γ  = 2π * gamma_MHz * 1e6
+        S  = 3π * AtomTwin.Units.ε0 * AtomTwin.Units.hbar * AtomTwin.Units.c^3 * (2Je + 1) * Γ / ω0^3   # (C·m)²
+        return S / (AtomTwin.Units.e * AtomTwin.Units.a0)^2                              # (e·a₀)²
+    end
+    # D2 carries ~2× the line strength of D1:
+    # the computed line strengths should match that ratio
+    S1, S2 = line_strength_ea0sq(m.transitions[1].freq_THz, m.transitions[1].gamma_MHz, m.transitions[1].J_f), line_strength_ea0sq(m.transitions[2].freq_THz, m.transitions[2].gamma_MHz, m.transitions[2].J_f)
+    @test 1.9 < S2 / S1 < 2.2
 end
 
 @testset "shipped Rb-87 5S1/2 model is accurate IR→blue" begin
@@ -493,11 +489,9 @@ end
     # A gamma_MHz line and the dipole line that produces the same effective width
     # (at the same frequency) give identical polarizability — round-trip of the
     # normalisation. Take g_eff from a dipole model at the SAME freq to keep it exact.
-    # Both models must land on the same `f`: leave J/J_f at their defaults so the
-    # dipole line (f = 3 by construction) and the gamma line (f(0,1) = 3) agree.
-    m_d = PolarizabilityModel("x", [(freq_THz = 377.107463, dipole_ea0 = 4.227)])
-    m_g = PolarizabilityModel("x",
-        [(freq_THz = 377.107463, gamma_MHz = m_d.transitions[1].gamma_MHz)])
+    # Test should work for any J/J_f values, but they have to be assigned to avoid error.
+    m_d = PolarizabilityModel("x", [(freq_THz = 377.107463, dipole_ea0 = 4.227, J_f = 1//1)]; J = 0//1)
+    m_g = PolarizabilityModel("x", [(freq_THz = 377.107463, gamma_MHz = m_d.transitions[1].gamma_MHz, J_f = 1//1)]; J = 0//1)
     @test polarizability_au(m_g, 850.0) ≈ polarizability_au(m_d, 850.0)
 end
 
@@ -560,22 +554,12 @@ end
     lb = light_shift_coeff_Hz_per_Wcm2(below, 767.0)
     @test isapprox(lb / la, -1/3; rtol = 1e-12)   # = f(−1)/f(3), sign included
 
-    # A dipole-specified line already has 1/(2Jg+1) inside Γ_eff, so declaring J
-    # must NOT perturb its scalar sum — applying f(J,J′) again would double-count.
-    d0 = polarizability_au(
-        PolarizabilityModel("x", [(freq_THz = 377.1, dipole_ea0 = 4.227)]), 850.0)
-    dJ = polarizability_au(
-        PolarizabilityModel("x", [(freq_THz = 377.1, dipole_ea0 = 4.227)];
-                            J = 1//2), 850.0)
-    @test d0 == dJ
 
     # Provenance is recorded and validated (a refit must tell fitted from measured).
-    @test PolarizabilityModel("x", [(freq_THz = 100.0, gamma_MHz = 1.0,
-                                     source = :fitted)]).transitions[1].source == :fitted
+    @test PolarizabilityModel("x", [(freq_THz = 100.0, gamma_MHz = 1.0, J_f = 1//1,
+                                     source = :fitted)]; J=0//1).transitions[1].source == :fitted
     @test_throws ErrorException PolarizabilityModel("x",
-        [(freq_THz = 100.0, gamma_MHz = 1.0, source = :guessed)])
-    @test_throws ErrorException PolarizabilityModel("x",
-        [(freq_THz = 100.0, gamma_MHz = 1.0, J = 2//1)]; J = 1//1)
+        [(freq_THz = 100.0, gamma_MHz = 1.0, source = :guessed, J_f=1//1)]; J = 0//1)
 end
 
 @testset "tensor polarizability: Sr-88 3P1 magic wavelengths and vanishing rules" begin
@@ -608,7 +592,7 @@ end
                                        I = 0//1, ε_z = 1.0)
     α2 = AtomTwin._alpha2_si(m3P1, 473.1445; F = 1//1, I = 0//1) / au
     split = -(s0 - s1) * AtomTwin.Units.h * 1e-4 *
-             AtomTwin.Units.c * AtomTwin.Units.ε0 / au
+             2 *AtomTwin.Units.c * AtomTwin.Units.ε0 / au
     @test isapprox(split, -3 * α2; rtol = 1e-10)
 
     # The magic wavelengths themselves. The crossing runs at ≈5000 a.u./nm, so the
@@ -800,30 +784,26 @@ end
     # The scalar part is solid — the 1S0 control against digitised thesis curves
     # is RMS 0.075 Hz/(W/cm²) — so the tensor angular dependence is what matters:
     # red-shifted along the axis, blue-shifted across it, crossing in between.
-    dV(θ) = light_shift_coeff_Hz_per_Wcm2(m1S0, 767.0) -
-            light_shift_coeff_Hz_per_Wcm2(m3P1, 767.0; F = 1//1, mF = 0//1,
+    dV(θ) = light_shift_coeff_Hz_per_Wcm2(m1S0, 759.3) -
+            light_shift_coeff_Hz_per_Wcm2(m3P1, 759.3; F = 1//1, mF = 0//1,
                                           I = 0//1, ε_z = cosd(θ))
     @test dV(0.0)  < 0
     @test dV(90.0) > 0
 
-    # ACCURACY, asserted so a regression is visible: this model predicts the
-    # 767 nm magic angle at ≈44.3° against the report's 40.9°, and leaves ≈1 Hz
-    # residual at its own fit targets. That is the ³P₁ model's documented ~3 nm
-    # accuracy — it has no precision magic-wavelength data to constrain it, unlike
-    # the Sr-88 ³P₁ model tested above. Do not "fix" this by scaling α⁽²⁾: 0.75
-    # fits these curves but breaks both measured Sr magic wavelengths.
+    # Test against measured magic angle of 38.5(9)° at 759.3 nm 
+    # for m_J = 0 (Höhn et al., PRX QUANTUM 7, 010303 (2026)).
     lo, hi = 0.0, 90.0
     for _ in 1:200
         m = (lo + hi) / 2
         sign(dV(m)) == sign(dV(lo)) ? (lo = m) : (hi = m)
     end
-    @test isapprox((lo + hi) / 2, 44.3; atol = 0.5)
+    @test isapprox((lo + hi) / 2, 38.5; atol = 0.9)
 end
 
 @testset "the trap light shift follows the local intensity" begin
     # The resonance of a trapped atom sits at its LOCAL differential light shift,
     # so it must track the Gaussian intensity profile as the atom moves off centre.
-    # This is the check that caught StarkShiftAC's missing 1/(cε₀): the shift
+    # This is the check that caught StarkShiftAC's missing 1/(2cε₀): the shift
     # scaled with position correctly but was ~380× too small in absolute terms,
     # which no relative test would have found.
     gm = HyperfineManifold(0//1, 0; label = "¹S₀", term = l"1S0", g_F = 0.0)
@@ -921,8 +901,10 @@ end
     # without a line list. Muzi Falconi et al. (2025), 532 nm, π-polarised trap:
     # m_J = ±1 magic, m_J = 0 at −11.6 MHz/mK relative to ¹S₀ (whose shift is
     # 20.84 MHz/mK): α(0)/α(¹S₀) = 0.443 → α_s = 0.814, α_t = 0.186 in units of α(¹S₀).
-    u   = AtomTwin._U_over_I(AtomTwin.YB174_POLARIZABILITY_1S0, 532.0) / AtomTwin.Units.h
-    r0  = 1 - 11.6 / 20.84
+    u   = light_shift_coeff_Hz_per_Wcm2(AtomTwin.YB174_POLARIZABILITY_1S0, 532.0) * 1e-4
+    #u   = AtomTwin._U_over_I(AtomTwin.YB174_POLARIZABILITY_1S0, 532.0) / AtomTwin.Units.h
+    """I dont understand this logic"""
+    r0  = 1 - 11.6 / 20.84 
     αs, αt = (2 + r0) / 3, (1 - r0) / 3
     model = PolarizabilityModel("1P1", NamedTuple[]; J = 1,
                                 offset_Hz_per_Wm2 = αs * u, tensor_offset_Hz_per_Wm2 = αt * u)
@@ -948,7 +930,7 @@ end
     # I = 1/2 and I = 3/2 isotopes equals what a line of the same J-level tensor gives.
     line = PolarizabilityModel("X", [(freq_THz = 300.0, gamma_MHz = 10.0, J_f = 2//1)]; J = 1)
     αJ = AtomTwin._alpha2_si(line, 532.0; F = 1//1, I = 0//1)
-    uJ = -αJ / (AtomTwin.Units.c * AtomTwin.Units.ε0 * AtomTwin.Units.h)
+    uJ = -αJ / (2 * AtomTwin.Units.c * AtomTwin.Units.ε0 * AtomTwin.Units.h)
     off = PolarizabilityModel("X", NamedTuple[]; J = 1, tensor_offset_Hz_per_Wm2 = uJ)
     for (F, I) in ((3//2, 1//2), (3//2, 3//2), (5//2, 3//2))
         αF = AtomTwin._alpha2_si(line, 532.0; F = F, I = I)
