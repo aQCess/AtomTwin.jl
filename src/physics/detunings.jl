@@ -188,7 +188,7 @@ computed at the wavelengths the system's beams use.
 
 # Reference level
 
-By default each level is shifted by its own trap potential `U/ħ = −α I/(c ε₀ ħ)`
+By default each level is shifted by its own trap potential `U/ħ = −α I/(2c ε₀ ħ)`
 — down, where it is trapped. Pass `reference` to measure
 against one level instead, which sets that level's shift to zero and leaves the
 others as differences — convenient when only a transition frequency matters.

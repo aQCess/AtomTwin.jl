@@ -84,8 +84,8 @@ the atom has polarizability data, so no extra call is needed.
 ````julia
 I0    = 2 * P_trap / (π * w0^2)
 α_g   = polarizability_si(yb, l"1S0", λ_trap * 1e9)
-U0    = α_g * I0 / (c * Units.ε0)                     # trap depth (J)
-ω_r   = sqrt(4 * α_g * I0 / (174amu * c * Units.ε0 * w0^2))
+U0    = α_g * I0 / (2c * Units.ε0)                    # trap depth (J), U = αI/(2cε₀)
+ω_r   = sqrt(4U0 / (174amu * w0^2))
 
 @printf("trap depth      = %.0f µK  (%.2f MHz)\n", U0 / kb * 1e6, U0 / (2π * hbar) / 1e6)
 @printf("radial freq     = %.1f kHz\n", ω_r / 2π / 1e3)

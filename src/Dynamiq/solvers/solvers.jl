@@ -333,10 +333,11 @@ Total optical dipole force on `atom` at `atom.x`, as `(Fx, Fy, Fz)`.
 Beams of the SAME wavelength are summed coherently in the complex field, so
 interference is included; different wavelengths add incoherently. Per wavelength
 
-    F = -2 (Σᵢ α[λ][i]·P[i]) Re(E* ∇E)
+    F = ½ (Σᵢ α[λ][i]·P[i]) Re(E* ∇E)
 
-with `α[λ][i]` the level-`i` polarizability at `λ`, `P` the level populations and
-`E` the total complex field.
+with `α[λ][i]` the level-`i` polarizability at `λ` (standard convention,
+U = −α|E|²/4 = −α I/(2c ε₀)), `P` the level populations and `E` the total complex
+field (`|E|² = 2I/(c ε₀)`): F = −∇U.
 """
 function force(atom::A, beams::Vector{<:AbstractBeam}) where {A}
     Fx, Fy, Fz = 0.0, 0.0, 0.0
@@ -388,6 +389,7 @@ function force(atom::A, beams::Vector{<:AbstractBeam}) where {A}
         for i in 1:atom.n
             c += αλ[i] * atom._P[i]
         end
+        c *= 0.5                                   # F = −∇(−α|E|²/4) = ½α Re(E*∇E)
         c == 0.0 && continue
 
         Etot_conj = conj(Etot)

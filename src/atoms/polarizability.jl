@@ -108,15 +108,19 @@ Effective line-strength width (MHz, linear) for a transition specified by its
 reduced dipole matrix element `dipole_ea0` = `|⟨Jg‖er‖Je⟩|` in `e·a₀`, such that
 the two-level light-shift form reproduces the multi-level scalar polarizability.
 
-    Γ_eff = (2/9π) · |d|² ω₀³ / ((2Jg+1) ε₀ c³ ħ)      [rad/s]
+    Γ_eff = (1/9π) · |d|² ω₀³ / ((2Jg+1) ε₀ c³ ħ)      [rad/s]
 
 `Jg` is the ground-state total angular momentum (the `1/(2Jg+1)` line-strength
-normalisation). See [`PolarizabilityModel`](@ref).
+normalisation; `d` in the Racah convention of Safronova's tables, e.g. Rb D2 =
+5.977 e a₀). With the fixed weight f = 3 this gives the standard
+α = 2|d|²ω₀ / (3(2Jg+1) ħ (ω₀² − ω²)) through U/I = −α/(2ε₀c). It was 2/9π, which
+made every dipole-specified line — every Rb and Sr trap — twice as deep.
+See [`PolarizabilityModel`](@ref).
 """
 function _dipole_to_gamma_MHz(freq_THz::Real, dipole_ea0::Real, Jg::Real)
     ω0 = 2π * freq_THz * 1e12
     d  = dipole_ea0 * e * a0                       # C·m
-    Γ_eff = (2 / (9π)) * d^2 * ω0^3 / ((2Jg + 1) * ε0 * c^3 * hbar)   # rad/s
+    Γ_eff = (1 / (9π)) * d^2 * ω0^3 / ((2Jg + 1) * ε0 * c^3 * hbar)   # rad/s
     return Γ_eff / (2π * 1e6)                       # → MHz (linear)
 end
 
@@ -385,7 +389,7 @@ triangle rule) or `F ≤ 1/2` (the prefactor). The sum runs over the model's lin
 with the same `f(J,J')` energy-ordering convention as the scalar part.
 
 A model's `tensor_offset_Hz_per_Wm2` adds its `J`-level coefficient as a
-polarizability, `α = −cε₀h·offset`, carried to `F` by the lines' own `F` dependence:
+polarizability, `α = −2cε₀h·offset`, carried to `F` by the lines' own `F` dependence:
 `(−1)^(J−F−I) pre(F){J J 2; F F I} / (pre(J){J J 2; J J 0})`, with `pre` the
 square-root prefactor above.
 
@@ -452,19 +456,21 @@ function _alpha2_si(model::PolarizabilityModel, λ_nm::Real;
 
         α2 += phase * pre * (2J + 1) * f_phys * Γ / (ω0^2 * (ω0^2 - ωL^2)) * w1 * w2
     end
-    # 2π, not the notes' 3π. Their α⁽²⁾ carries an explicit (2J+1) on top of
-    # matrix elements already normalised the other way — Steck §7.3.4's two
-    # reduced-matrix-element conventions — so it double-counts (2J+1). Our scalar
-    # already agrees with Kestler (4195 vs 4146(117)), which pins the mapping and
-    # leaves α⁽²⁾ no remaining freedom. Net effect 3/2, not 3, because the
-    # 3π-with-1/(2cε₀) pairing absorbs a compensating 2.
-    α2_si = 2π * ε0 * c^3 * α2
+    # 4π with the standard U = −α I/(2cε₀), not the notes' 3π. Their α⁽²⁾ carries an
+    # explicit (2J+1) on top of matrix elements already normalised the other way —
+    # Steck §7.3.4's two reduced-matrix-element conventions — so it double-counts
+    # (2J+1). Our scalar agrees with Kestler (4195 vs 4146(117)), which pins the
+    # mapping and leaves α⁽²⁾ no remaining freedom: the Sr ³P₁ anchor (−509 a.u.,
+    # Kestler Table II) is absolute. (Formerly 2π with U = −α I/(cε₀) — the same
+    # shift from a gamma_MHz line, half the α⁽²⁾; the dipole lines' doubled width
+    # had hidden that against the anchor.)
+    α2_si = 4π * ε0 * c^3 * α2
 
     # A measured J-level tensor coefficient, recoupled to F exactly as each line
     # term above: the F dependence of a line is pre(F)·{J J 2; F F I}·(−1)^(−F−I),
     # so relative to the nuclear-spin-free F = J it is the ratio of those.
     if model.tensor_offset_Hz_per_Wm2 != 0.0
-        α2J = -c * ε0 * h * model.tensor_offset_Hz_per_Wm2      # α = −cε₀ U/I
+        α2J = -2c * ε0 * h * model.tensor_offset_Hz_per_Wm2     # α = −2cε₀ U/I
         wF  = wigner6j(J, J, 2, F, F, I)
         wJ  = wigner6j(J, J, 2, J, J, 0)
         sgn = iseven(round(Int, J - F - I)) ? 1.0 : -1.0
@@ -541,9 +547,10 @@ function light_shift_coeff_Hz_per_Wcm2(model::PolarizabilityModel, λ_nm::Real;
         abs(mFr) <= Fr || throw(ArgumentError("need |mF| ≤ F; got mF = $mFr, F = $Fr"))
         α2 = _alpha2_si(model, λ_nm; F = Fr, I = Ir)
         if α2 != 0.0
-            # One convention across the whole file: `polarizability_si` defines
-            # α_SI = −c ε₀ (U/I), so every α converts with 1/(c ε₀).
-            U += -α2 * _polarization_factor(ε_z) * _tensor_geometry(Fr, mFr) / (c * ε0)
+            # One convention across the whole file, the standard one:
+            # `polarizability_si` defines α_SI = −2c ε₀ (U/I), so every α converts
+            # with 1/(2c ε₀).
+            U += -α2 * _polarization_factor(ε_z) * _tensor_geometry(Fr, mFr) / (2c * ε0)
         end
     end
     ν_over_I = U / h              # Hz/(W/m²)
@@ -581,15 +588,17 @@ Dynamic electric polarizability α in SI units (C·m²·V⁻¹) for the given
 model and wavelength.
 
 # Definition
-Uses the relation
+Uses the standard relation (Grimm, Weidemüller & Ovchinnikov, *Adv. At. Mol. Opt.
+Phys.* **42**, 95 (2000), eq. 10, with I = c ε₀ |E|²/2)
 
-    U/I = -α_SI / (c ε₀)
+    U/I = -α_SI / (2 c ε₀)
 
 which gives
 
-    α_SI = -c ε₀ (U/I)
+    α_SI = -2 c ε₀ (U/I)
 
-where U/I is the light shift per intensity in J/(W/m²).
+where U/I is the light shift per intensity in J/(W/m²). (This once read U/I = −α/(c ε₀),
+and every α it returned was half the standard value.)
 
 # Units
 Returns polarizability in C·m²·V⁻¹ (or equivalently F·m²), which is the
@@ -597,7 +606,7 @@ standard SI unit for electric polarizability.
 """
 function polarizability_si(model::PolarizabilityModel, λ_nm::Real)
     U = _U_over_I(model, λ_nm)
-    α_SI = - c * ε0 * U
+    α_SI = -2c * ε0 * U
     return α_SI
 end
 

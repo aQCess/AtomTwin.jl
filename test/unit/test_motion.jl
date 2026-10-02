@@ -22,7 +22,7 @@
     # Analytical trap frequency
     α_SI   = polarizability_si(AtomTwin.YB171_POLARIZABILITY_1S0, λ_nm)
     I0     = 2 * P / (π * w0^2)
-    ω_trap = sqrt(4 * α_SI * I0 / (m * c_v * ε0_v * w0^2))
+    ω_trap = sqrt(2 * α_SI * I0 / (m * c_v * ε0_v * w0^2))   # U0 = α I0/(2c ε₀)
     T_trap = 2π / ω_trap
 
     # Initial displacement: 10% of waist in x

@@ -446,16 +446,25 @@ end
     @test 1.9 < g2 / g1 < 2.2
 end
 
-@testset "natural-Γ alkali doublet is wrong off-resonance (the trap it avoids)" begin
-    # The naive user path — the two D lines with their natural linewidths — agrees
-    # with the truth at the static limit but drifts toward the D lines. The
-    # dipole-specified model does not. This pins the value of the dipole API.
+@testset "natural-Γ alkali doublet needs J and J′ (the line weights)" begin
+    # With natural widths a line's weight is f(J,J′) = (2J′+1)/(2J+1): D1 : D2 = 1 : 2
+    # for Rb 5S₁/₂. Left at their defaults (J = 0, J′ = 1) both lines take the
+    # J = 0 → 1 weight 3 and α doubles. (This testset used to call that naive model
+    # right at the static limit and wrong near the D lines: it matched only while
+    # `polarizability_si` halved every α.) With J and J′ given, natural widths and
+    # Racah dipoles are the same two-line model at every wavelength — Steck's Γ and
+    # d agree to 0.3 %. This pins the dipole API to the physical line weights.
     ref   = [(4.227, 377.107463e12), (5.977, 384.230485e12)]
-    m_nat = PolarizabilityModel("5S1/2",
+    naive = PolarizabilityModel("5S1/2",
         [(freq_THz = 377.107463, gamma_MHz = 5.7500),   # D1 natural Γ
          (freq_THz = 384.230485, gamma_MHz = 6.0666)])  # D2 natural Γ
-    @test isapprox(polarizability_au(m_nat, 1e7), _alpha_dipoles_au(1e7, ref); rtol = 0.02)
-    @test !isapprox(polarizability_au(m_nat, 850.0), _alpha_dipoles_au(850.0, ref); rtol = 0.02)
+    @test isapprox(polarizability_au(naive, 1e7), 2 * _alpha_dipoles_au(1e7, ref); rtol = 0.02)
+    m_nat = PolarizabilityModel("5S1/2",
+        [(freq_THz = 377.107463, gamma_MHz = 5.7500, J_f = 1//2),
+         (freq_THz = 384.230485, gamma_MHz = 6.0666, J_f = 3//2)]; J = 1//2)
+    for λ in (1e7, 1064.0, 850.0)
+        @test isapprox(polarizability_au(m_nat, λ), _alpha_dipoles_au(λ, ref); rtol = 0.01)
+    end
 end
 
 @testset "shipped Rb-87 5S1/2 model is accurate IR→blue" begin
@@ -499,6 +508,31 @@ end
     m_g = PolarizabilityModel("x",
         [(freq_THz = 377.107463, gamma_MHz = m_d.transitions[1].gamma_MHz)])
     @test polarizability_au(m_g, 850.0) ≈ polarizability_au(m_d, 850.0)
+end
+
+@testset "standard α: U = −α I/(2c ε₀), dipole lines at their true strength" begin
+    # Two factor-2 errors used to cancel in every α anchor in this file:
+    # `polarizability_si` took U/I = −α/(c ε₀), halving every α, and
+    # `_dipole_to_gamma_MHz` had 2/9π, doubling every dipole-specified line. So Rb
+    # and Sr α matched the literature while their traps were 2× too deep per
+    # intensity, and Yb's (gamma_MHz) α printed at half its value.
+    U = AtomTwin.Units
+    for (m, λ) in ((AtomTwin.RB87_POLARIZABILITY_5S12, 1064.0),
+                   (AtomTwin.SR88_POLARIZABILITY_1S0, 813.4),
+                   (AtomTwin.YB174_POLARIZABILITY_1S0, 759.35))
+        @test polarizability_si(m, λ) ≈ -2U.c * U.ε0 * AtomTwin._U_over_I(m, λ) rtol = 1e-12
+    end
+    # Absolute, independent of AtomTwin's line data: Grimm, Weidemüller &
+    # Ovchinnikov (2000) eq. 20 for Rb 5S₁/₂ at 1064 nm, linear polarisation, D2 and
+    # D1 with weights 2 : 1, the natural width (Steck), counter-rotating terms kept.
+    # The remaining ~1 % is the core and the 6P/7P lines.
+    Γ, ωL = 2π * 6.0666e6, 2π * U.c / 1064e-9
+    grimm = sum(w * -(π * U.c^2 * Γ / (2ω0^3)) * (1 / (ω0 - ωL) + 1 / (ω0 + ωL))
+                for (ω0, w) in ((2π * 384.2304844685e12, 2), (2π * 377.107463380e12, 1)))
+    @test isapprox(AtomTwin._U_over_I(AtomTwin.RB87_POLARIZABILITY_5S12, 1064.0), grimm; rtol = 0.02)
+    # …and the Yb ground state, built from measured widths, keeps its light shift but
+    # now reports its standard α: ≈ 141 a.u. static (it printed 70.8).
+    @test isapprox(polarizability_au(AtomTwin.YB174_POLARIZABILITY_1S0, 1e7), 141.5; rtol = 0.01)
 end
 
 @testset "Sr atom-facing polarizability methods resolve" begin
@@ -608,7 +642,7 @@ end
                                        I = 0//1, ε_z = 1.0)
     α2 = AtomTwin._alpha2_si(m3P1, 473.1445; F = 1//1, I = 0//1) / au
     split = -(s0 - s1) * AtomTwin.Units.h * 1e-4 *
-             AtomTwin.Units.c * AtomTwin.Units.ε0 / au
+             2AtomTwin.Units.c * AtomTwin.Units.ε0 / au
     @test isapprox(split, -3 * α2; rtol = 1e-10)
 
     # The magic wavelengths themselves. The crossing runs at ≈5000 a.u./nm, so the
@@ -721,9 +755,9 @@ end
     inner = AtomTwin.Dynamiq.NLevelAtom(2)
     AtomTwin.initialize!(sr0, inner; beams = [tw0], q_axis = [0.0, 0.0, 1.0])
     αs = inner.alpha[520e-9]
-    # U = -α I/(c ε₀), so the angular frequency is -α I/(c ε₀ ħ).
+    # U = -α I/(2c ε₀), so the angular frequency is -α I/(2c ε₀ ħ).
     Tπ = π / abs((αs[2] - αs[1]) * tw0.I0 /
-                 (AtomTwin.Units.c * AtomTwin.Units.ε0 * AtomTwin.Units.hbar))
+                 (2AtomTwin.Units.c * AtomTwin.Units.ε0 * AtomTwin.Units.hbar))
 
     @test ramsey(Tπ)                   < 0.01    # automatic: the trap alone
     @test ramsey(Tπ; P = 0.0)          > 0.99    # no trap, no shift
@@ -742,9 +776,9 @@ end
         end
         job = compile(sys, seq)
         fs = [f for f in job.fields if f isa StarkShiftAC]
-        # The applied shift is the trap potential −α I/(c ε₀ ħ) at the atom — an
+        # The applied shift is the trap potential −α I/(2c ε₀ ħ) at the atom — an
         # angular frequency, NEGATIVE for a trapped level. NOT α I/ħ, and NOT
-        # +α I/(c ε₀ ħ): this assertion previously encoded each error in turn, which
+        # +α I/(2c ε₀ ħ): this assertion previously encoded each error in turn, which
         # is why it caught neither. Anchored to the trap depth, with its sign, below.
         #
         # Read the shift as `H` value × coefficient rather than from `_coeff`
@@ -755,14 +789,14 @@ end
         AtomTwin.Dynamiq.update!(fs[end], 1)
         @test isapprox(shift(fs[end]),
                        -fs[end].alpha * AtomTwin.Dynamiq.intensity(tw, sr.inner.x) /
-                       (AtomTwin.Units.c * AtomTwin.Units.ε0 * AtomTwin.Units.hbar);
+                       (2AtomTwin.Units.c * AtomTwin.Units.ε0 * AtomTwin.Units.hbar);
                        rtol = 1e-12)
         # Absolute anchor: the ground-state shift IS the trap potential in rad/s,
         # −U0/ħ: the trapped ground state is lowered, as the force says. (An `abs`
         # here once let the opposite sign through.)
         if !explicit
             U0 = AtomTwin.polarizability_si(AtomTwin.SR88_POLARIZABILITY_1S0, 520.0) *
-                 tw.I0 / (AtomTwin.Units.c * AtomTwin.Units.ε0)
+                 tw.I0 / (2AtomTwin.Units.c * AtomTwin.Units.ε0)
             AtomTwin.Dynamiq.update!(fs[1], 1)
             @test U0 > 0
             @test isapprox(shift(fs[1]), -U0 / AtomTwin.Units.hbar; rtol = 1e-9)
@@ -955,7 +989,7 @@ end
     # I = 1/2 and I = 3/2 isotopes equals what a line of the same J-level tensor gives.
     line = PolarizabilityModel("X", [(freq_THz = 300.0, gamma_MHz = 10.0, J_f = 2//1)]; J = 1)
     αJ = AtomTwin._alpha2_si(line, 532.0; F = 1//1, I = 0//1)
-    uJ = -αJ / (AtomTwin.Units.c * AtomTwin.Units.ε0 * AtomTwin.Units.h)
+    uJ = -αJ / (2AtomTwin.Units.c * AtomTwin.Units.ε0 * AtomTwin.Units.h)
     off = PolarizabilityModel("X", NamedTuple[]; J = 1, tensor_offset_Hz_per_Wm2 = uJ)
     for (F, I) in ((3//2, 1//2), (3//2, 3//2), (5//2, 3//2))
         αF = AtomTwin._alpha2_si(line, 532.0; F = F, I = I)
