@@ -331,14 +331,16 @@ The stored `alpha` is read from `atom.alpha` at the beam's wavelength — the sa
 array the dipole force uses, so the shift an atom feels and the force that moves it
 come from one number.
 
-`update!` evaluates the local intensity at the atom's position and sets the
-coefficient to `α I / ħ`, an angular frequency.
+`update!` evaluates the local intensity at the atom's position; the level's energy
+moves by its trap potential `U = −α I/(c ε₀)`, i.e. `−α I/(c ε₀ ħ)` in angular
+frequency. A trapped level (`α > 0`) is **lowered**, by the same potential whose
+gradient is the dipole force.
 
 # Reference level
 
-By default the shift is **absolute**: level `lvl` is shifted by its own `α I/ħ`.
-Pass `reference = i` to shift by `(α[lvl] − α[i]) I/ħ` instead, which puts level
-`i` at zero — convenient when only a transition frequency matters.
+By default the shift is **absolute**: level `lvl` is shifted by its own `U/ħ`.
+Pass `reference = i` to shift by `−(α[lvl] − α[i]) I/(c ε₀ ħ)` instead, which puts
+level `i` at zero — convenient when only a transition frequency matters.
 
 !!! note "Changed behaviour"
     This previously subtracted `mean(alphas)`, the mean over *every* level in the
@@ -375,7 +377,12 @@ mutable struct StarkShiftAC{A} <: AbstractField
     end
 end
 
-_peak_shift(α, beam) = α * peak_intensity(beam) / (c * ε0 * hbar)
+# The level's potential U = −α I/(c ε₀) at peak intensity, in rad/s: NEGATIVE for a
+# trapped level. The sign was once +, which raised trapped levels while the force
+# (`force`, attractive) lowered them: every differential light shift came out
+# mirrored about the bare line, and an absorption–emission cycle did not conserve
+# energy.
+_peak_shift(α, beam) = -α * peak_intensity(beam) / (c * ε0 * hbar)
 
 """
     set_alpha!(f::StarkShiftAC, α) -> f
@@ -404,12 +411,12 @@ end
     update!(f::StarkShiftAC, step)
 
 Update the AC Stark shift coefficient from the instantaneous beam
-intensity at the atomic position. The stored coefficient is
-\\(\alpha I / \\hbar\\) in angular-frequency units.
+intensity at the atomic position: the term is `_peak_shift × I(x)/I₀`, the level's
+trap potential `U(x)/ħ = −α I(x)/(c ε₀ ħ)` in angular-frequency units.
 """
 function update!(f::StarkShiftAC{A}, ::Real) where A
     # U = -α I/(c ε₀) is the convention `polarizability_si` sets, so the angular
-    # frequency is α I/(c ε₀ ħ) -- NOT α I/ħ. The missing 1/(c ε₀) is the vacuum
+    # frequency is -α I/(c ε₀ ħ) -- NOT α I/ħ. The missing 1/(c ε₀) is the vacuum
     # impedance, 376.73, and it made every trap light shift ~380x too small.
     # This was unexercised until `add_light_shift!` existed: StarkShiftAC shipped
     # in v0.1.0 but was never constructed anywhere.
