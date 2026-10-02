@@ -375,7 +375,7 @@ mutable struct StarkShiftAC{A} <: AbstractField
     end
 end
 
-_peak_shift(α, beam) = α * peak_intensity(beam) / (c * ε0 * hbar)
+_peak_shift(α, beam) = - α * peak_intensity(beam) / (2 * c * ε0 * hbar)
 
 """
     set_alpha!(f::StarkShiftAC, α) -> f
