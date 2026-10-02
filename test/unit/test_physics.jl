@@ -705,9 +705,9 @@ end
     inner = AtomTwin.Dynamiq.NLevelAtom(2)
     AtomTwin.initialize!(sr0, inner; beams = [tw0], q_axis = [0.0, 0.0, 1.0])
     αs = inner.alpha[520e-9]
-    # U = -α I/(c ε₀), so the angular frequency is α I/(c ε₀ ħ).
+    # U = -α I/(2 c ε₀), so the angular frequency is α I/(2 c ε₀ ħ).
     Tπ = π / abs((αs[2] - αs[1]) * tw0.I0 /
-                 (AtomTwin.Units.c * AtomTwin.Units.ε0 * AtomTwin.Units.hbar))
+                 (2 * AtomTwin.Units.c * AtomTwin.Units.ε0 * AtomTwin.Units.hbar))
 
     @test ramsey(Tπ)                   < 0.01    # automatic: the trap alone
     @test ramsey(Tπ; P = 0.0)          > 0.99    # no trap, no shift
@@ -726,7 +726,7 @@ end
         end
         job = compile(sys, seq)
         fs = [f for f in job.fields if f isa StarkShiftAC]
-        # The applied shift is α I/(c ε₀ ħ) at the atom — an angular frequency.
+        # The applied shift is - α I/(2 c ε₀ ħ) at the atom — an angular frequency.
         # NOT α I/ħ: this assertion previously encoded that error, which is why
         # it never caught it. Anchored to the trap depth as well, below.
         #
@@ -737,15 +737,15 @@ end
         shift(f) = real(f.H.forward[1][3] * f._coeff[])
         AtomTwin.Dynamiq.update!(fs[end], 1)
         @test isapprox(shift(fs[end]),
-                       fs[end].alpha * AtomTwin.Dynamiq.intensity(tw, sr.inner.x) /
-                       (AtomTwin.Units.c * AtomTwin.Units.ε0 * AtomTwin.Units.hbar);
+                       - fs[end].alpha * AtomTwin.Dynamiq.intensity(tw, sr.inner.x) /
+                       (2 * AtomTwin.Units.c * AtomTwin.Units.ε0 * AtomTwin.Units.hbar);
                        rtol = 1e-12)
         # Absolute anchor: the ground-state shift IS the trap depth in rad/s.
         if !explicit
-            U0 = AtomTwin.polarizability_si(AtomTwin.SR88_POLARIZABILITY_1S0, 520.0) *
-                 tw.I0 / (AtomTwin.Units.c * AtomTwin.Units.ε0)
+            U0 = - AtomTwin.polarizability_si(AtomTwin.SR88_POLARIZABILITY_1S0, 520.0) *
+                 tw.I0 / (2 * AtomTwin.Units.c * AtomTwin.Units.ε0)
             AtomTwin.Dynamiq.update!(fs[1], 1)
-            @test isapprox(abs(shift(fs[1])), U0 / AtomTwin.Units.hbar; rtol = 1e-9)
+            @test isapprox(shift(fs[1]), U0 / AtomTwin.Units.hbar; rtol = 1e-9)
         end
         explicit && @test fs[1].alpha == 0.0      # reference = g sits at zero
         length(fs)
@@ -815,14 +815,15 @@ end
     I0 = 2 * 50e-3 / (π * w0^2)
 
     # Analytic differential shift at the trap centre.
-    Δ0 = (light_shift_coeff_Hz_per_Wcm2(AtomTwin.YB174_POLARIZABILITY_1S0, 767.0) -
-          light_shift_coeff_Hz_per_Wcm2(AtomTwin.YB174_POLARIZABILITY_3P1, 767.0;
-                F = 1//1, mF = 0//1, I = 0//1, ε_z = cosd(θ))) * I0 * 1e-4
+    Δ0 = (light_shift_coeff_Hz_per_Wcm2(AtomTwin.YB174_POLARIZABILITY_3P1, 767.0;
+                F = 1//1, mF = 0//1, I = 0//1, ε_z = cosd(θ)) - 
+          light_shift_coeff_Hz_per_Wcm2(AtomTwin.YB174_POLARIZABILITY_1S0, 767.0)) * I0 * 1e-4
+          
 
     "Detuning of the peak excitation for a static atom held at x₀."
     function resonance(x0)
         yb = Ytterbium174Atom(; levels = [gm..., e...], x_init = [x0, 0.0, 0.0])
-        ds = range(-2.0, 12.0; length = 141)
+        ds = range(-12.0, 2.0; length = 300)
         y = map(ds) do d
             sys = System(yb, tw)
             add_quantization_axis!(sys, [0.0, 0.0, 1.0])
