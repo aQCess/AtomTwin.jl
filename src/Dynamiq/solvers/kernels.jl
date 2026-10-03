@@ -445,18 +445,28 @@ radiation_commit!(::Nothing) = nothing
 """
     recoil!(J, rng)
 
-Apply an isotropic recoil kick of magnitude `ħk` to `J`'s atom, with
-`k = 2π / J.atom.lambda[J.transition]`.
+Apply a recoil kick of magnitude `ħk` to `J`'s atom, with
+`k = 2π / J.atom.lambda[J.transition]`. The direction is isotropic, or, if the
+transition has a dipole `d̂` (`add_decay!(...; dipole)`), drawn from its emission
+pattern `∝ 1 − |n̂·d̂|²`: sin²θ about a linear dipole, (1 + cos²θ)/2 about the axis
+of a circular one.
 """
 Base.@inline function recoil!(J::Jump, rng::AbstractRNG)
-    _x, _y, _z = randn(rng), randn(rng), randn(rng)
-    _norm = sqrt(_x * _x + _y * _y + _z * _z)
+    d = get(J.atom.dipole, J.transition, nothing)
+    while true
+        _x, _y, _z = randn(rng), randn(rng), randn(rng)
+        _n2 = _x * _x + _y * _y + _z * _z
+        # Rejection from isotropic: accept with 1 − |n̂·d̂|² ≤ 1 (2/3 on average).
+        # Without a dipole no extra draw, so isotropic runs keep their RNG stream.
+        d === nothing || rand(rng) < 1 - abs2(_x * d[1] + _y * d[2] + _z * d[3]) / _n2 || continue
 
-    k = 2 * pi / J.atom.lambda[J.transition]
-    c = hbar * k / J.atom.m / _norm
+        k = 2 * pi / J.atom.lambda[J.transition]
+        c = hbar * k / J.atom.m / sqrt(_n2)
 
-    J.atom.v[1] += c * _x
-    J.atom.v[2] += c * _y
-    J.atom.v[3] += c * _z
+        J.atom.v[1] += c * _x
+        J.atom.v[2] += c * _y
+        J.atom.v[3] += c * _z
+        return
+    end
 end
 

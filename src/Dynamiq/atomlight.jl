@@ -561,7 +561,7 @@ end
 
 """
     NLevelAtom(n; x = [0, 0, 0], v = [0, 0, 0],
-                  m = 1amu, alphas = Dict(), lambdas = Dict())
+                  m = 1amu, alphas = Dict(), lambdas = Dict(), dipoles = Dict())
 
 Minimal `n`-level atomic model with classical center-of-mass motion.
 
@@ -569,6 +569,8 @@ Minimal `n`-level atomic model with classical center-of-mass motion.
 - `m`: atomic mass.
 - `alphas`: dictionary of scalar or tensor polarizabilities keyed by wavelength.
 - `lambdas`: dictionary of transition wavelengths keyed by level pairs.
+- `dipoles`: dictionary of unit transition dipoles (complex 3-vectors, lab frame)
+  keyed by level pairs; sets the angular pattern of the emission recoil.
 
 Internal fields: `_P` and `_pidx` cache populations and basis-dependent index
 mappings; `_F`/`_Fvalid` the velocity-Verlet force of the previous step; `_Eb` the
@@ -582,6 +584,7 @@ mutable struct NLevelAtom <: AbstractAtom
     m::Float64
     alpha::Dict{Float64,Vector{Float64}}
     lambda::Dict{Pair{Int,Int},Float64}
+    dipole::Dict{Pair{Int,Int},NTuple{3,ComplexF64}}
 
     _P::Vector{Float64}           # populations, used for intermediate computations
     _pidx::Vector{Vector{Int}}    # updated when a basis is constructed
@@ -595,8 +598,9 @@ mutable struct NLevelAtom <: AbstractAtom
                         v       = [0.0, 0.0, 0.0],
                         m       = 1amu,
                         alphas  = Dict(),
-                        lambdas = Dict())
-        new(n, x, v, m, alphas, lambdas, zeros(n), [[0]], zeros(3), false, zeros(3))
+                        lambdas = Dict(),
+                        dipoles = Dict())
+        new(n, x, v, m, alphas, lambdas, dipoles, zeros(n), [[0]], zeros(3), false, zeros(3))
     end
 end
 
@@ -604,7 +608,7 @@ end
     copy(a::NLevelAtom)
 
 Create a deep copy of an `NLevelAtom`, including position, velocity,
-polarizabilities, transition wavelengths, and internal cache fields.
+polarizabilities, transition wavelengths and dipoles, and internal cache fields.
 """
 function copy(a::NLevelAtom)
     # Recreate via public API
@@ -615,6 +619,7 @@ function copy(a::NLevelAtom)
         m       = a.m,
         alphas  = Dict(k => copy(v) for (k, v) in a.alpha),
         lambdas = copy(a.lambda),
+        dipoles = copy(a.dipole),
     )
     # Copy internal/derived state
     b._P      = copy(a._P)

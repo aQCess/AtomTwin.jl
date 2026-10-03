@@ -166,6 +166,47 @@ end
     @test isapprox(v, sqrt(N) * vrec; rtol = 0.20)
 end
 
+@testset "emission recoil follows the transition dipole pattern" begin
+    # Recoil was always isotropic. With one dipole dominating the scattering that
+    # misplaces the heating: a dipole along x̂ puts 1/5 of its recoil energy along x,
+    # not 1/3. For the pattern 1 − |n̂·d̂|², ⟨n_i n_j⟩ = (2δ_ij − Re d_i d_j*)/5.
+    g = Level("g"; term = l"1S0")
+    e = Level("e"; term = l"3P1")
+    vrec = AtomTwin.Units.hbar * (2π / 556e-9) / (174 * AtomTwin.Units.amu)
+
+    function kicks(dipole; n = 20_000, seed = 20261003)
+        yb  = Ytterbium174Atom(; levels = [g, e])
+        sys = System(yb, GaussianBeam(λ = 767e-9, w0 = 50e-6, P = 1e-3, pol = [0, 0, 1]))
+        J = dipole === nothing ? add_decay!(sys, yb, e => g, 2π * 182e3; λ = 556e-9) :
+                                 add_decay!(sys, yb, e => g, 2π * 182e3; λ = 556e-9, dipole = dipole)
+        rng = MersenneTwister(seed)
+        v = zeros(3, n)
+        for i in 1:n
+            fill!(J.atom.v, 0.0)
+            AtomTwin.Dynamiq.recoil!(J, rng)
+            v[:, i] .= J.atom.v ./ vrec
+        end
+        v
+    end
+    second(v) = [mean(v[i, :] .* v[j, :]) for i in 1:3, j in 1:3]
+
+    # Every kick is exactly ħk; the pattern sets only the direction.
+    for d in (nothing, [1, 0, 0], [1, im, 0])
+        @test all(isapprox.(sqrt.(sum(abs2, kicks(d; n = 200); dims = 1)), 1; atol = 1e-12))
+    end
+    # Isotropic by default: 1/3 per axis.
+    @test isapprox(second(kicks(nothing)), [1 0 0; 0 1 0; 0 0 1] / 3; atol = 0.01)
+    # Linear dipole along x̂: 1/5 along it, 2/5 across it.
+    @test isapprox(second(kicks([1, 0, 0])), [1 0 0; 0 2 0; 0 0 2] / 5; atol = 0.01)
+    # σ⁺ about ẑ (unnormalised input): (1 + cos²θ)/2, i.e. 3/10, 3/10, 2/5.
+    @test isapprox(second(kicks([1, im, 0])), [3 0 0; 0 3 0; 0 0 4] / 10; atol = 0.01)
+    # Off-axis linear dipole (x̂ + ŷ)/√2: ⟨n_x n_y⟩ = −1/10.
+    @test isapprox(second(kicks([1, 1, 0])), [3 -1 0; -1 3 0; 0 0 4] / 10; atol = 0.01)
+    # A dipole without λ has no kick to shape.
+    yb = Ytterbium174Atom(; levels = [g, e])
+    @test_throws ErrorException add_decay!(System(yb), yb, e => g, 1.0; dipole = [1, 0, 0])
+end
+
 @testset "shots start from a fresh atom, not where the last one stopped" begin
     # `initialize!` reset the atom's position only when `x_init` was given (and its
     # velocity only when `v_init` was), but `inner` is reused across shots. An atom
