@@ -840,22 +840,39 @@ end
     gm = HyperfineManifold(0//1, 0; label = "¹S₀", term = l"1S0", g_F = 0.0)
     em = HyperfineManifold(1//1, 1; label = "³P₁", term = l"3P1", g_F = 1.5)
     g, e = gm[0], em[0]
-    function run(dt)
+    function run(dt; density_matrix = false, Γ = 0.0)
         tw  = TweezerArray(λ = 767e-9, w0 = 1e-6, P_total = 50e-3,
                            row_freqs = [0.0], col_freqs = [0.0])
         yb  = Ytterbium174Atom(; levels = [g, e])
         sys = System([yb], [tw])
         c   = add_coupling!(sys, yb, g => e, 2π * 1e6; active = false)
+        Γ > 0 && add_decay!(sys, yb, e => g, Γ)
         add_detector!(sys, PopulationDetectorSpec(yb, e; name = "Pe"))
         seq = Sequence(dt)
         @sequence seq begin
             Parallel([Pulse([c], 1e-6), MoveCol(tw, 1, 0.5e6, 1e-6; sweep = :min_jerk)])
         end
-        play(sys, seq; initial_state = [g]).detectors["Pe"][end]
+        real(play(sys, seq; initial_state = [g], density_matrix = density_matrix,
+                  rng = MersenneTwister(1)).detectors["Pe"][end])
     end
-    P = [run(dt) for dt in (4e-9, 2e-9, 1e-9)]
-    ratio = (P[1] - P[2]) / (P[2] - P[3])
-    @test 3.5 < ratio < 4.5                 # 2 for first order, 4 for second
+    # Use fine steps: at coarse dt a large dt² error can mask first-order ones.
+    # This happened before: two O(dt) error terms in the semiclassical step
+    # (the end-of-step force used start-of-step populations, and the Hamiltonian
+    # used end-of-step atom positions with midpoint beam positions) partly
+    # cancelled. With steps of 4/2/1 ns the ratio was 4.63, which looked second
+    # order and passed. Only at the smaller steps below did the dt² term become
+    # negligible, and the ratio dropped to 1.70, revealing first-order convergence.
+    #
+    # Each semiclassical solver has its own step loop, so each is checked:
+    # statevector (`tdse_semiclassical`), density matrix with decay
+    # (`qme_semiclassical`), and MCWF (`wfmc_semiclassical`). The MCWF decay is
+    # weak enough that no jump fires, which keeps the run deterministic: shot
+    # noise would swamp the ~1e-7 differences measured here.
+    for kw in ((;), (density_matrix = true, Γ = 2π * 10e3), (Γ = 2π * 10.0,))
+        P = [run(dt; kw...) for dt in (0.125e-9, 0.0625e-9, 0.03125e-9)]
+        ratio = (P[1] - P[2]) / (P[2] - P[3])
+        @test 3.8 < ratio < 4.2             # 2 for first order, 4 for second
+    end
 end
 
 @testset "MCWF photon counts match the master equation" begin
