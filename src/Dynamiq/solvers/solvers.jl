@@ -265,18 +265,17 @@ function tdse_semiclassical(psi::Vector{ComplexF64},
     nsub = rp === nothing ? 1 : _radiation_substeps(rp, H, dt, modifiers)
     h    = dt / nsub
     plan = plan_step(integrator, psi, h, spec; tol = tol)
+    xbuf = [similar(a.x) for a in atoms]
 
+    # Velocity Verlet split around the quantum step. Two first-order errors of
+    # opposite sign hid behind a dt² term when the whole Verlet step ran first:
+    # the force at the step's end used the populations of its START, and the
+    # Hamiltonian paired the midpoint beams with the END-of-step atoms.
     @inbounds for i in 1:steps
+        _drift_atoms!(atoms, psi, xbuf, beams, modifiers, i, dt, false)
+        # The quantum step is the exponential midpoint rule: beams AND atoms at t_mid.
         _resample!(modifiers, (i - 0.5) * dt, dt)
-        for atom in atoms
-            updatepop!(atom, psi)
-            fclassical!(dt, atom, beams)
-        end
-        if has_fields
-            for f in fields
-                update!(f, i)
-            end
-        end
+        has_fields && _update_fields_at_midpoint!(fields, atoms, xbuf, i)
         # The atoms just moved, so the trap light shift moved with them.
         track_spectrum!(plan, H)
         if rp === nothing
@@ -294,6 +293,7 @@ function tdse_semiclassical(psi::Vector{ComplexF64},
                 radiation_step!(rp, psi, 1.0, h)
             end
         end
+        _kick_atoms!(atoms, psi, beams, modifiers, i, dt, false)
         has_detectors && write_detectors!(detectors, i, steps, downsample)
     end
 end
@@ -444,6 +444,100 @@ function fclassical!(dt::Float64, atom::A, beams::Vector{<:AbstractBeam}) where 
         # Carry F_new forward as the next step's F_old.
         atom._F[1] = Fx; atom._F[2] = Fy; atom._F[3] = Fz
     end
+end
+
+"""
+    fdrift!(dt, atom, beams)
+
+The drift half of [`fclassical!`](@ref): `x ← x + v dt + (F_old/2m) dt²`,
+priming `F_old` on the first step of an instruction.
+
+Split from the kick so a semiclassical solver can run the quantum step between
+them: the force weights each level's α by its population, so the force at the
+step's end needs the populations at the step's end. Taking it before the quantum
+step lags the internal state's back-action on the motion by `dt` -- first order.
+"""
+function fdrift!(dt::Float64, atom::A, beams::Vector{<:AbstractBeam}) where {A}
+    @inbounds begin
+        if !atom._Fvalid
+            f0x, f0y, f0z = force(atom, beams)
+            atom._F[1] = f0x; atom._F[2] = f0y; atom._F[3] = f0z
+            atom._Fvalid = true
+        end
+        hdt2 = 0.5 * dt * dt / atom.m
+        atom.x[1] = muladd(atom.v[1], dt, muladd(atom._F[1], hdt2, atom.x[1]))
+        atom.x[2] = muladd(atom.v[2], dt, muladd(atom._F[2], hdt2, atom.x[2]))
+        atom.x[3] = muladd(atom.v[3], dt, muladd(atom._F[3], hdt2, atom.x[3]))
+    end
+    return
+end
+
+"""
+    fkick!(dt, atom, beams)
+
+The kick half of [`fclassical!`](@ref): one force evaluation `F_new` at the
+current `x`, beams and populations, then `v ← v + ((F_old + F_new)/2m) dt`, and
+`F_new` is carried forward as the next step's `F_old`. See [`fdrift!`](@ref).
+"""
+function fkick!(dt::Float64, atom::A, beams::Vector{<:AbstractBeam}) where {A}
+    half = 0.5 * dt / atom.m
+    Fx, Fy, Fz = force(atom, beams)
+    @inbounds begin
+        atom.v[1] = muladd(atom._F[1] + Fx, half, atom.v[1])
+        atom.v[2] = muladd(atom._F[2] + Fy, half, atom.v[2])
+        atom.v[3] = muladd(atom._F[3] + Fz, half, atom.v[3])
+        atom._F[1] = Fx; atom._F[2] = Fy; atom._F[3] = Fz
+    end
+    return
+end
+
+# The two halves of a semiclassical step's velocity Verlet, shared by
+# `tdse_semiclassical`, `wfmc_semiclassical` and `qme_semiclassical`. The caller
+# runs the quantum step between them, with the beams at t_mid and the fields
+# updated by `_update_fields_at_midpoint!`. `state` is ψ or ρ.
+#
+# Drift with the force F₀ of the step's start; `xbuf` receives the start
+# positions. The first step of an instruction primes F₀ with the beams and
+# populations at t₀ -- outside the parallel loop, since it moves the shared beams.
+function _drift_atoms!(atoms, state, xbuf, beams, modifiers, i::Int, dt::Float64,
+                       parallel::Bool)
+    if any(a -> !a._Fvalid, atoms)
+        _sample_at!(modifiers, (i - 1) * dt)
+        for atom in atoms
+            updatepop!(atom, state)
+        end
+    end
+    if parallel
+        @batch for k in eachindex(atoms)
+            copyto!(xbuf[k], atoms[k].x)
+            fdrift!(dt, atoms[k], beams)
+        end
+    else
+        for k in eachindex(atoms)
+            copyto!(xbuf[k], atoms[k].x)
+            fdrift!(dt, atoms[k], beams)
+        end
+    end
+    return
+end
+
+# Kick with F₁: the atoms at x₁, the beams at t₁ and -- the force weights α by
+# population -- the populations at t₁, after the quantum step.
+function _kick_atoms!(atoms, state, beams, modifiers, i::Int, dt::Float64,
+                      parallel::Bool)
+    _sample_at!(modifiers, i * dt)
+    if parallel
+        @batch for atom in atoms
+            updatepop!(atom, state)
+            fkick!(dt, atom, beams)
+        end
+    else
+        for atom in atoms
+            updatepop!(atom, state)
+            fkick!(dt, atom, beams)
+        end
+    end
+    return
 end
 
 """
@@ -660,18 +754,13 @@ function wfmc_semiclassical(psi::Vector{ComplexF64},
     plan = plan_step(integrator, psi, h, spec; tol = tol)
     rp   = radiation_pressure(fields, atoms; conditional = true)   # `nothing` without planar drives
     radiation_resume!(rp, psi)
+    xbuf = [similar(a.x) for a in atoms]
 
+    # Velocity Verlet split around the quantum step, as in `tdse_semiclassical`.
     @inbounds for i in 1:steps
+        _drift_atoms!(atoms, psi, xbuf, beams, modifiers, i, dt, false)
         _resample!(modifiers, (i - 0.5) * dt, dt)
-        for atom in atoms
-            updatepop!(atom, psi)
-            fclassical!(dt, atom, beams)
-        end
-        if has_fields
-            for f in fields
-                update!(f, i)
-            end
-        end
+        has_fields && _update_fields_at_midpoint!(fields, atoms, xbuf, i)
         # The atoms just moved, so the trap light shift moved with them. Hoisted
         # out of the sub-step loop: only the drives vary inside it, and those are
         # tracked there when there are modifiers.
@@ -700,6 +789,8 @@ function wfmc_semiclassical(psi::Vector{ComplexF64},
                 _renormalise!(psi, n)
             end
         end
+        # After every sub-step's jump: `quantum_jump!` has left ψ normalised.
+        _kick_atoms!(atoms, psi, beams, modifiers, i, dt, false)
         has_detectors && write_detectors!(state_detectors, i, steps, downsample)
     end
 end
@@ -760,7 +851,8 @@ end
     qme_semiclassical(rho, atoms, L, J, tspan; kwargs...)
 
 [`qme`](@ref) with semiclassical atomic motion: each step also advances the atoms
-under [`fclassical!`](@ref), in parallel when `length(atoms) > 2`, and applies the
+by velocity Verlet split around the quantum step ([`fdrift!`](@ref) before,
+[`fkick!`](@ref) after), in parallel when `length(atoms) > 2`, and applies the
 mean radiation pressure of the plane-wave drives ([`RadiationPressure`](@ref)).
 """
 function qme_semiclassical(rho::Matrix{ComplexF64},
@@ -796,30 +888,20 @@ function qme_semiclassical(rho::Matrix{ComplexF64},
     ctl.seeded = false
     strang_reset!(ctl)
 
+    xbuf = [similar(a.x) for a in atoms]
+
+    # Velocity Verlet split around the quantum step, as in `tdse_semiclassical`.
+    # The dipole force weights each level's polarizability by its population, so
+    # the kick refreshes `_P` from ρ after the step, as `tdse`/`wfmc` do from ψ.
     @inbounds for i in 1:steps
+        _drift_atoms!(atoms, rho, xbuf, beams, modifiers, i, dt, parallel)
         _resample!(modifiers, (i - 0.5) * dt, dt)
-        # The dipole force weights each level's polarizability by its
-        # population, so refresh `_P` from ρ first, as `tdse`/`wfmc` do from ψ.
-        if parallel
-            @batch for atom in atoms
-                updatepop!(atom, rho)
-                fclassical!(dt, atom, beams)
-            end
-        else
-            for atom in atoms
-                updatepop!(atom, rho)
-                fclassical!(dt, atom, beams)
-            end
-        end
-        if has_fields
-            for f in fields
-                update!(f, i)
-            end
-        end
+        has_fields && _update_fields_at_midpoint!(fields, atoms, xbuf, i)
         radiation_begin!(rp, rho)
         strang_substeps!(dt, rho, L, J, steptol, ctl, _q1, _q2,
                          taylor_order(integrator), modifiers, (i - 1) * dt, rp)
         radiation_commit!(rp)
+        _kick_atoms!(atoms, rho, beams, modifiers, i, dt, parallel)
         has_detectors && write_detectors!(detectors, i, steps, downsample)
     end
 end
