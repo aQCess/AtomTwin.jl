@@ -577,17 +577,15 @@ function newton(atoms::Vector{A},
     parallel = length(atoms) > 2
     has_detectors = !isempty(detectors)
 
+    xbuf = [similar(a.x) for a in atoms]
+
+    # Velocity Verlet with time-dependent beams, using the same drift/kick helpers
+    # as the semiclassical solvers: the drift uses F₀ (beams at t₀), the kick
+    # computes F₁ with the beams at t₁. There is no quantum state (`nothing`), so
+    # the populations stay fixed and nothing runs between the two halves.
     @inbounds for i in 1:steps
-        _resample!(modifiers, (i - 0.5) * dt, dt)
-        if parallel
-            @batch for atom in atoms
-                fclassical!(dt, atom, beams)
-            end
-        else
-            for atom in atoms
-                fclassical!(dt, atom, beams)
-            end
-        end
+        _drift_atoms!(atoms, nothing, xbuf, beams, modifiers, i, dt, parallel)
+        _kick_atoms!(atoms, nothing, beams, modifiers, i, dt, parallel)
         has_detectors && write_detectors!(detectors, i, steps, downsample)
     end
 end
@@ -710,6 +708,17 @@ function updatepop!(atom::AbstractAtom, rho::Matrix{ComplexF64})
         atom._P[lvl] = a
     end
 end
+
+"""
+    updatepop!(atom, nothing)
+
+Method for runs without a quantum state (`newton`). It does nothing: the
+populations stay at their initial values (every atom in its ground level, set by
+`evolve!`), and the dipole force uses them as they are. It exists so that
+`newton` can share `_drift_atoms!` and `_kick_atoms!` with the semiclassical
+solvers, which refresh the populations from ψ or ρ before computing a force.
+"""
+updatepop!(::AbstractAtom, ::Nothing) = nothing
 
 """
     wfmc_semiclassical(psi, atoms, H, Hnh, jumps, tspan; kwargs...)
