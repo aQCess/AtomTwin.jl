@@ -832,6 +832,7 @@ end
     end
 end
 
+
 # A move inside a `Parallel` converged at FIRST order: the move's modifier took
 # its span from a `0:dt:duration` grid that loses its endpoint to rounding, and a
 # `Parallel` (no `duration` of its own) ran on the requested step, so any
@@ -877,6 +878,45 @@ end
         P = [run(dt; kw...) for dt in dts]
         for k in 1:length(P) - 2
             ratio = (P[k] - P[k+1]) / (P[k+1] - P[k+2])
+            @test 3.8 < ratio < 4.2         # 2 for first order, 4 for second
+        end
+    end
+end
+
+# The classical solver (`newton`, used when no `initial_state` is given) must be
+# second order in dt for a moving trap as well as a static one. Velocity Verlet's
+# force at the end of a step needs the beams at the step's end time; a force
+# computed with the beams at any other time is first order once the trap moves.
+@testset "classical moves converge at second order" begin
+    g = Level("1S0")
+    function run(dt; moving)
+        tw  = TweezerArray(λ = 767e-9, w0 = 1e-6, P_total = 50e-3,
+                           row_freqs = [0.0], col_freqs = [0.0])
+        yb  = Ytterbium174Atom(; levels = [g], x_init = [moving ? 0.0 : 0.1e-6, 0.0, 0.0],
+                               v_init = [0.0, 0.0, 0.0])
+        sys = System([yb], [tw])
+        add_detector!(sys, MotionDetectorSpec(yb; dims = [1], name = "x"))
+        seq = Sequence(dt)
+        if moving
+            # The trap moves 1.5 µm in 1 µs, faster than the atom can follow, so
+            # the force on the atom changes in time as the trap sweeps past.
+            @sequence seq begin
+                MoveCol(tw, 1, 0.5e6, 1e-6; sweep = :min_jerk)
+            end
+        else
+            # Control: a static trap, with the atom displaced from its centre.
+            @sequence seq begin
+                Wait(1e-6)
+            end
+        end
+        o = @test_logs (:warn, r"Initial state not specified") play(sys, seq)
+        o.detectors["x"][end, 1]
+    end
+    dts = [8e-9 / 2^k for k in 0:8]          # 8 ns down to 0.03125 ns
+    for moving in (false, true)
+        X = [run(dt; moving) for dt in dts]
+        for k in 1:length(X) - 2
+            ratio = (X[k] - X[k+1]) / (X[k+1] - X[k+2])
             @test 3.8 < ratio < 4.2         # 2 for first order, 4 for second
         end
     end
