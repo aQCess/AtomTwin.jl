@@ -26,7 +26,6 @@ discrete transitions and optional scalar and tensor offsets.
   - `gamma_MHz::Float64`: Effective line width in MHz (linear) — see below.
   - `J::Rational{Int}`: Total angular momentum of the model's own state.
   - `J_f::Rational{Int}`: Total angular momentum of the final state.
-  - `f::Rational{Int}`: The line's weight in the scalar sum (see below).
   - `source::Symbol`: Provenance — `:measured`, `:ls_estimated`, or `:fitted`.
 - `J::Rational{Int}`: Total electronic angular momentum of the state itself.
 - `offset_Hz_per_Wm2::Float64`: Empirical offset in Hz/(W/m²).
@@ -40,19 +39,37 @@ discrete transitions and optional scalar and tensor offsets.
 Each transition weights the dynamic polarizability by its **line strength**. Two
 equivalent ways to supply that weight are accepted by the constructor:
 
-1. `(freq_THz = …, gamma_MHz = …)` — the transition's effective line-strength
+1. `(freq_THz = …, gamma_MHz = …)` — the transition's effective line
    width. This equals the natural linewidth **only for a `J=0 → J'=1` line**
    (e.g. every Yb `¹S₀` line), where the upper level decays to a single ground
    level. For such lines just use the natural linewidth.
 
 2. `(freq_THz = …, dipole_ea0 = …)` — the reduced dipole matrix element
-   `|⟨Jg‖er‖Je⟩|` in units of `e·a₀` (Steck's D-line convention), optionally with
-   `Jg = …` (ground total angular momentum, default `1/2`). This is the robust
+   `|⟨Jg‖er‖Je⟩|` in units of `e·a₀` (Steck's D-line convention). This is the robust
    choice for a **multiplet** such as an alkali D₁/D₂ doublet, where the two lines
    share a ground state but have unequal line strengths (D₂ carries twice the
-   strength of D₁). The constructor converts the dipole to the effective width via
+   strength of D₁). 
 
-       Γ_eff = (2/9π) · |d|² ω₀³ / ((2Jg+1) ε₀ c³ ħ)                    (rad/s)
+   The constructor converts the dipole to the effective width, taking into account 
+   different normalization conventions for the reduced dipole matrix element:
+
+    1. Wigner-3j, dipole_convention = "wigner3j" (default)
+
+    In this convention, |(Jg‖d‖Je)|² is symmetric in Jg ↔ Je and equals the 
+    line strength S directly: S = |(Jg‖d‖Je)|².
+
+    2. Clebsch-Gordan, dipole_convention = "clebschgordan"
+
+    In this convention, |⟨Jg‖d‖Je⟩|² is NOT symmetric in Jg ↔ Je and is related 
+    to the line strength by: S = (2Jg + 1) |⟨Jg‖d‖Je⟩|²
+
+    These boil down to two conventions for the Wigner-Ekhart theorem, where 
+    the (2Jg+1) is related to the numerical factor required to convert from 
+    a Wigner-3j symbol to the equivalent Clebsch-Gordan coefficient. 
+    The transition line width is computed from the Wigner-3j convention 
+    reduced dipole matrix element |(Jg‖d‖Je)| as:
+
+       Γ_eff = (1/3π) ·  ω₀³ |(J‖d‖J′)|² / ((2Je+1) ε₀ c³ ħ)         [rad/s]
 
    so that AtomTwin's two-level light-shift sum reproduces the multi-level scalar
    polarizability α(ω) = (1/(2Jg+1)) Σᵢ (2/3) |dᵢ|² ω₀ᵢ / (ħ(ω₀ᵢ²−ω²)) exactly.
@@ -60,28 +77,6 @@ equivalent ways to supply that weight are accepted by the constructor:
 Do **not** feed natural linewidths for an alkali doublet: the near-equal D₁/D₂
 natural widths under-weight D₂ and mis-split the light shift off-resonance, while
 still agreeing at the static limit (a silent error). Use `dipole_ea0` instead.
-
-# Angular momentum and the line-strength factor
-
-Each line enters the scalar sum with a weight `f`. How that weight is obtained
-depends on which of the two specifications above was used, and the distinction
-matters:
-
-- A **`gamma_MHz`** line is a physical decay rate `Γ(J,J')`, so its angular-momentum
-  weight is still outstanding and is computed as `f(J,J')` (see
-  `_line_strength_factor`). With the defaults `J = 0`, `J_f = 1` this gives
-  `f = 3`, which is what the scalar sum assumed implicitly before these fields
-  existed — hence every pre-existing `¹S₀`/`³P₀` model is unchanged. A state with
-  `J > 0`, notably `³P₁`, **must** declare `J` and `J_f`: a line *below* it in
-  energy (negative `freq_THz`) carries `f = −1`, the opposite sign, which is why
-  the two states of a two-level atom take opposite light shifts.
-
-- A **`dipole_ea0`** line already has its `1/(2Jg+1)` normalisation folded into
-  `Γ_eff` by the conversion above, precisely so the sum closes with a fixed `f = 3`.
-  Applying `f(J,J')` again would double-count the angular momentum. Such lines
-  therefore keep `f = 3`, and declaring `J` on the model is safe — it documents the
-  state and feeds the tensor part without disturbing the scalar sum. A `dipole_ea0`
-  line must lie above the state; use `gamma_MHz` for one below.
 
 # Provenance
 
@@ -92,76 +87,77 @@ via an LS-coupling branching ratio — the asterisked entries in the Yb literatu
 """
 struct PolarizabilityModel
     state::String
-    transitions::Vector{NamedTuple{(:freq_THz, :gamma_MHz, :J, :J_f, :f, :source),
+    transitions::Vector{NamedTuple{(:freq_THz, :gamma_MHz, :J, :J_f, :source),
                                    Tuple{Float64, Float64, Rational{Int}, Rational{Int},
-                                         Rational{Int}, Symbol}}}
+                                            Symbol}}}
     J::Rational{Int}
     offset_Hz_per_Wm2::Float64
     tensor_offset_Hz_per_Wm2::Float64
     reference::String
 end
 
+# Convert an offset given in atomic-unit polarizability to AtomTwin's
+# offset_Hz_per_Wm2, so the two forms stay in sync if the tails are re-tuned:
+#   α_SI = α_au · 4π ε₀ a₀³;  U/I = −α_SI/(2 c ε₀);  offset_Hz_per_Wm2 = (U/I)/h.
+_au_to_offset_Hz_per_Wm2(α_au) =
+    -(α_au * 4π * ε0 * a0^3) / (2 * c * ε0) / h
+
 """
-    _dipole_to_gamma_MHz(freq_THz, dipole_ea0, Jg) -> Float64
+    _dipole_to_gamma_MHz(freq_THz, dipole_ea0, Je) -> Float64
 
 Effective line-strength width (MHz, linear) for a transition specified by its
-reduced dipole matrix element `dipole_ea0` = `|⟨Jg‖er‖Je⟩|` in `e·a₀`, such that
+reduced dipole matrix element `dipole_ea0` = `|(Jg‖er‖Je)|` in `e·a₀`, such that
 the two-level light-shift form reproduces the multi-level scalar polarizability.
 
-    Γ_eff = (2/9π) · |d|² ω₀³ / ((2Jg+1) ε₀ c³ ħ)      [rad/s]
+    Γ_eff = (1/3π) ·  ω₀³ |(J‖d‖J′)|² / ((2Je+1) ε₀ c³ ħ)         [rad/s]
 
-`Jg` is the ground-state total angular momentum (the `1/(2Jg+1)` line-strength
-normalisation). See [`PolarizabilityModel`](@ref).
+`dipole_ea0` is assumed to be in the Wigner-3j convention (see @ref PolarizabilityModel)   
+`Je` is the excited-state total angular momentum.
 """
-function _dipole_to_gamma_MHz(freq_THz::Real, dipole_ea0::Real, Jg::Real)
-    ω0 = 2π * freq_THz * 1e12
+function _dipole_to_gamma_MHz(freq_THz::Real, dipole_ea0::Real, Je::Real)
+    ω0 = 2π * abs(freq_THz) * 1e12  # gamma is a positive quantity
     d  = dipole_ea0 * e * a0                       # C·m
-    Γ_eff = (2 / (9π)) * d^2 * ω0^3 / ((2Jg + 1) * ε0 * c^3 * hbar)   # rad/s
+    Γ_eff = (1 / (3π)) * d^2 * ω0^3 / ((2Je + 1) * ε0 * c^3 * hbar)   # rad/s
     return Γ_eff / (2π * 1e6)                       # → MHz (linear)
 end
 
 # Normalise a single user transition entry to the internal
-# (freq_THz, gamma_MHz, J, J_f, f, source) form.
+# (freq_THz, gamma_MHz, J, J_f, source) form.
 #
-# The stored `f` is the line's weight in the scalar sum, and WHICH weight is right
-# depends on how the line was specified:
-#
-#   * `gamma_MHz` is a physical decay rate Γ(J,J'), so the angular-momentum factor
-#     is still outstanding: f = _line_strength_factor(J, J_f, freq).
-#
-#   * `dipole_ea0` is converted by `_dipole_to_gamma_MHz`, which ALREADY folds the
-#     1/(2Jg+1) line-strength normalisation into Γ_eff precisely so the sum closes
-#     with the fixed f = 3. Applying f(J,J') on top would double-count the angular
-#     momentum — for Rb that is a factor 1/3 on D₁ and 2/3 on D₂. So dipole lines
-#     keep f = 3 and carry their angular momentum inside Γ_eff.
+#   * `dipole_ea0` is converted by `_dipole_to_gamma_MHz` according 
+#   to the convention the dipole value is given in (see @ref PolarizabilityModel)
 #
 # Hence declaring `J` on a dipole-specified model is safe: it documents the state
 # and feeds the tensor part, without disturbing the scalar sum.
 function _normalize_transition(t, J_model::Rational{Int})
-    J   = haskey(t, :J)   ? Rational{Int}(t.J)   : J_model
-    J_f = haskey(t, :J_f) ? Rational{Int}(t.J_f) : 1//1
-    src = haskey(t, :source) ? Symbol(t.source) : :measured
+    freq  = haskey(t, :freq_THz) ? t.freq_THz : 1.0   # only the sign is used
+    J     = haskey(t, :J)   ? Rational{Int}(t.J)   : J_model
+    J_f   = haskey(t, :J_f) ? Rational{Int}(t.J_f) : error("PolarizabilityModel transition must specify `J_f`")
+    src   = haskey(t, :source) ? Symbol(t.source) : :measured
     src in (:measured, :ls_estimated, :fitted) || error(
         "PolarizabilityModel transition `source` must be :measured, :ls_estimated " *
         "or :fitted; got $(repr(src))")
 
     if haskey(t, :gamma_MHz)
         γ = Float64(t.gamma_MHz)
-        f = _line_strength_factor(J, J_f, t.freq_THz)
     elseif haskey(t, :dipole_ea0)
-        Jg = haskey(t, :Jg) ? t.Jg : 1//2   # historical default (alkali D lines)
-        γ  = _dipole_to_gamma_MHz(t.freq_THz, t.dipole_ea0, Jg)
-        f  = 3 // 1                          # already folded into Γ_eff
-        t.freq_THz ≥ 0 || error(
-            "a `dipole_ea0` line must lie above the state (freq_THz > 0); the " *
-            "dipole normalisation assumes an upward transition. Use `gamma_MHz` " *
-            "with a negative `freq_THz` for a line below the state.")
+        Je, Jg = freq > 0 ? (J_f, J) : (J, J_f)
+        convention = haskey(t, :dipole_convention) ? Symbol(t.dipole_convention) : :wigner3j
+        convention in (:wigner3j, :clebschgordan) || error(
+            "PolarizabilityModel transition `dipole_convention` must be :wigner3j, " *
+            "or :clebschgordan; got $(repr(convention))")
+
+        if convention == :wigner3j
+            γ  = _dipole_to_gamma_MHz(t.freq_THz, t.dipole_ea0, Je)
+        elseif convention == :clebschgordan
+            γ  = _dipole_to_gamma_MHz(t.freq_THz, t.dipole_ea0*sqrt(2Jg+1), Je)
+        end
     else
         error("PolarizabilityModel transition must have either `gamma_MHz` or " *
               "`dipole_ea0`; got keys $(keys(t))")
     end
     return (freq_THz = Float64(t.freq_THz), gamma_MHz = γ,
-            J = J, J_f = J_f, f = f, source = src)
+            J = J, J_f = J_f, source = src)
 end
 
 """
@@ -191,10 +187,15 @@ A tensor offset needs `J ≥ 1`; for `J ≤ 1/2` it is an `ArgumentError`.
 """
 function PolarizabilityModel(state::String,
                              transitions::Vector;
-                             J = 0//1,
+                             J = nothing,
                              offset_Hz_per_Wm2::Float64 = 0.0,
                              tensor_offset_Hz_per_Wm2::Float64 = 0.0,
                              reference::String = "")
+    
+    J != nothing || throw(ArgumentError(
+        "PolarizabilityModel constructor must be given J, the total angular momentum " *
+        "of the state itself; it is used to normalise the line strengths and to " *
+        "recouple the tensor offset to each hyperfine F."))
     Jm   = Rational{Int}(J)
     (tensor_offset_Hz_per_Wm2 == 0.0 || Jm ≥ 1) || throw(ArgumentError(
         "a tensor offset needs J ≥ 1; a state with J = $Jm has no tensor light shift"))
@@ -232,10 +233,7 @@ symmetric under label exchange,
 `|⟨J‖d‖J'⟩|² = ((2J'+1)/(2J+1))·|⟨J'‖d‖J⟩|²`, and `Γ` is only defined downward.
 The `−1` is why the two states of a two-level atom take opposite light shifts.
 
-For the `J=0 → J'=1` lines that every ¹S₀-type model is built from, `f = 3` — the
-value that was hard-coded into this kernel before the angular momenta were tracked,
-which is why those models were correct. A `J>0` state such as ³P₁ has lines both
-above and below it and genuinely needs the sign.
+For the `J=0 → J'=1` lines that every ¹S₀-type model is built from, `f = 3`
 
 Reference: Höhn-model derivation in the AtomTwin polarizability notes; Steck,
 *Quantum and Atom Optics*, §7.3.4 (reduced-matrix-element conventions).
@@ -244,24 +242,6 @@ function _line_strength_factor(J::Rational{Int}, J_f::Rational{Int}, freq_THz::R
     return freq_THz ≥ 0 ? (2J_f + 1) // (2J + 1) : -1 // 1
 end
 
-"""
-    _calc_light_shift(ω0, Γ, ωL, f = 3) -> Float64
-
-Light-shift contribution from a single electric-dipole transition.
-
-# Arguments
-- `ω0`: Transition angular frequency [rad/s]. Use `|ω₀|`; the sign of the
-  transition frequency enters through `f` (see `_line_strength_factor`).
-- `Γ` : Radiative linewidth (angular) [rad/s].
-- `ωL`: Laser angular frequency [rad/s].
-- `f` : Angular-momentum line-strength factor; `3` for a `J=0 → J'=1` line.
-
-# Returns
-- `U/I`: Energy shift per intensity in J/(W/m²).
-"""
-function _calc_light_shift(ω0::Float64, Γ::Float64, ωL::Float64, f::Real = 3)
-    return -π * c^2 * f * Γ / (ω0^2 * (ω0^2 - ωL^2))
-end
 
 """
     _calc_scattering_rate(ω0, Γ, ωL) -> Float64
@@ -313,7 +293,30 @@ function _Gamma_sc_over_I(model::PolarizabilityModel, λ_nm::Real)
 end
 
 """
+    _calc_light_shift(ω0, Γ, ωL, f = 3) -> Float64
+
+DEPRECATED
+
+Light-shift contribution from a single electric-dipole transition.
+
+# Arguments
+- `ω0`: Transition angular frequency [rad/s]. Use `|ω₀|`; the sign of the
+  transition frequency enters through `f` (see `_line_strength_factor`).
+- `Γ` : Radiative linewidth (angular) [rad/s].
+- `ωL`: Laser angular frequency [rad/s].
+- `f` : Angular-momentum line-strength factor; `3` for a `J=0 → J'=1` line.
+
+# Returns
+- `U/I`: Energy shift per intensity in J/(W/m²).
+"""
+function _calc_light_shift(ω0::Float64, Γ::Float64, ωL::Float64, f::Real = 3)
+    return -π * c^2 * f * Γ / (ω0^2 * (ω0^2 - ωL^2))
+end
+
+"""
     _U_over_I(model::PolarizabilityModel, λ_nm::Real) -> Float64
+
+DEPRECATED
 
 Compute total light shift per intensity U/I for a given model and wavelength.
 
@@ -325,6 +328,7 @@ Compute total light shift per intensity U/I for a given model and wavelength.
 - `U/I` in J/(W/m²).
 """
 function _U_over_I(model::PolarizabilityModel, λ_nm::Real)
+    @warn "_U_over_I is deprecated; use light_shift_coeff_Hz_per_Wcm2 instead, which returns an equivalent result."
     ωL = 2π * c / (λ_nm * 1e-9)
 
     U_over_I = 0.0
@@ -336,6 +340,49 @@ function _U_over_I(model::PolarizabilityModel, λ_nm::Real)
 
     U_over_I += model.offset_Hz_per_Wm2 * h
     return U_over_I
+end
+
+# ======================================================================
+# Scalar polarizability
+# ======================================================================
+
+"""
+    _alpha0_si(model, λ_nm) -> Float64
+
+Dynamic scalar polarizability α⁽⁰⁾(ω) in SI units (C·m²·V⁻¹).
+
+    α⁽⁰⁾(ω) = 2π ε₀ c³ Σ_J' f(J,J') Γ(J,J') / [ω₀² (ω₀² − ω²)]
+
+where the sum runs over all dipole-allowed transitions from the state `J` to
+final states `J'`, and the line strength factor `f(J,J')` is the physically
+relevant angular-momentum factor for the transition. The offset term is added
+as a constant background contribution in the same units.
+
+# Arguments
+- `model::PolarizabilityModel`: Polarizability model for a single state.
+- `λ_nm`: Laser wavelength in nanometres.
+
+# Returns
+- Scalar polarizability in SI units.
+"""
+function _alpha0_si(model, λ_nm)
+    ωL = 2π * c / (λ_nm * 1e-9)
+    α0 = 0.0
+    Ji = model.J
+    for t in model.transitions
+        ω0 = 2π * t.freq_THz * 1e12
+        Γ = 2π * t.gamma_MHz * 1e6
+        Jf = t.J_f
+
+        f_phys = _line_strength_factor(Ji, Jf, t.freq_THz)
+
+        α0 += f_phys * Γ / (ω0^2 * (ω0^2 - ωL^2))
+    end
+
+    α0 *= 2π * ε0 * c^3
+    α0 += -model.offset_Hz_per_Wm2 * h * 2 * c * ε0
+
+    return α0
 end
 
 # ======================================================================
@@ -373,7 +420,7 @@ end
 
 Dynamic **tensor** polarizability `α⁽²⁾(F; ω)` in SI units (C·m²·V⁻¹).
 
-    α⁽²⁾ = 2π ε₀ c³ Σ_J' (−1)^(−2J−J'−F−I) √(40F(2F+1)(2F−1)/(3(F+1)(2F+3))) (2J+1)
+    α⁽²⁾ = 3π ε₀ c³ Σ_J' (−1)^(−2J−J'−F−I) √(40F(2F+1)(2F−1)/(3(F+1)(2F+3))) (2J+1)
                         × f(J,J') Γ(J,J') / (ω₀² (ω₀² − ω²))
                         × {1 1 2; J J J'} {J J 2; F F I}
 
@@ -441,30 +488,19 @@ function _alpha2_si(model::PolarizabilityModel, λ_nm::Real;
         # are non-zero, so round before exponentiating rather than going complex.
         phase = iseven(round(Int, -2J - J_f - F - I)) ? 1.0 : -1.0
 
-        # The PHYSICAL f(J,J'), never the stored `t.f`. For a `gamma_MHz` line the
-        # two coincide, but a `dipole_ea0` line stores f = 3 because the scalar sum
-        # wants the 1/(2Jg+1) weight that `_dipole_to_gamma_MHz` already folded into
-        # Γ_eff. The tensor sum carries its own angular-momentum algebra in the two
-        # 6-j symbols and the (2J+1), so it needs the true ratio: using the stored 3
-        # inflates a line by 3/f — ×9 for J'=0, ×3 for J'=1, ×9/5 for J'=2. On Sr ³P₁,
-        # dominated by 5p² ³P₂, that aggregated to a deceptively clean ≈×2.
+        # physical line strength factor f(J, J')
+
         f_phys = _line_strength_factor(J, J_f, t.freq_THz)
 
         α2 += phase * pre * (2J + 1) * f_phys * Γ / (ω0^2 * (ω0^2 - ωL^2)) * w1 * w2
     end
-    # 2π, not the notes' 3π. Their α⁽²⁾ carries an explicit (2J+1) on top of
-    # matrix elements already normalised the other way — Steck §7.3.4's two
-    # reduced-matrix-element conventions — so it double-counts (2J+1). Our scalar
-    # already agrees with Kestler (4195 vs 4146(117)), which pins the mapping and
-    # leaves α⁽²⁾ no remaining freedom. Net effect 3/2, not 3, because the
-    # 3π-with-1/(2cε₀) pairing absorbs a compensating 2.
-    α2_si = 2π * ε0 * c^3 * α2
-
+    
+    α2_si = 3π * ε0 * c^3 * α2
     # A measured J-level tensor coefficient, recoupled to F exactly as each line
     # term above: the F dependence of a line is pre(F)·{J J 2; F F I}·(−1)^(−F−I),
     # so relative to the nuclear-spin-free F = J it is the ratio of those.
     if model.tensor_offset_Hz_per_Wm2 != 0.0
-        α2J = -c * ε0 * h * model.tensor_offset_Hz_per_Wm2      # α = −cε₀ U/I
+        α2J = -2c * ε0 * h * model.tensor_offset_Hz_per_Wm2      # α = −2cε₀ U/I
         wF  = wigner6j(J, J, 2, F, F, I)
         wJ  = wigner6j(J, J, 2, J, J, 0)
         sgn = iseven(round(Int, J - F - I)) ? 1.0 : -1.0
@@ -502,6 +538,75 @@ _polarization_factor(ε_z::Real) = (3 * abs2(ε_z) - 1) / 2
 # ======================================================================
 
 """
+    polarizability_si(model::PolarizabilityModel, λ_nm::Real) -> Float64
+
+Dynamic electric polarizability α in SI units (C·m²·V⁻¹) for the given
+model and wavelength. This polarizability relates to the physical shift in 
+energy U per unit intensity I through the relation:
+
+    U/I = -α_SI / ( 2 c ε₀)
+
+# Arguments
+- `model`: Polarizability model for a single atomic state.
+- `λ_nm`: Laser wavelength in nanometres.
+
+# Keyword arguments (tensor light shift)
+Supplying `F` adds the **tensor** contribution for the sublevel `|F, mF⟩`:
+
+- `F`: hyperfine quantum number. Omit (the default) for the scalar shift alone.
+- `mF`: magnetic sublevel, `-F ≤ mF ≤ F`.
+- `I`: nuclear spin; `0` for a zero-spin isotope, where `F = J`.
+- `ε_z`: projection of the (linear) polarisation unit vector on the quantisation
+  axis, i.e. `cos θ`. `1` means polarisation along the axis.
+
+The tensor term vanishes identically for `J ≤ 1/2` or `F ≤ 1/2`, so passing `F`
+for a `¹S₀` or `³P₀` state is harmless and returns the scalar result.
+
+Valid only for linear polarisation: the vector (rank-1) term, which would enter
+for elliptical light, is not included.
+
+# Units
+Returns polarizability in C·m²·V⁻¹ (or equivalently F·m²), which is the
+standard SI unit for electric polarizability.
+"""
+function polarizability_si(model::PolarizabilityModel, λ_nm::Real;
+                                       F  = nothing,
+                                       mF = 0//1,
+                                       I  = 0//1,
+                                       ε_z::Real = 1.0)
+    α = _alpha0_si(model, λ_nm)
+    if F !== nothing
+        Fr, mFr, Ir = Rational{Int}(F), Rational{Int}(mF), Rational{Int}(I)
+        abs(mFr) <= Fr || throw(ArgumentError("need |mF| ≤ F; got mF = $mFr, F = $Fr"))
+        α2 = _alpha2_si(model, λ_nm; F = Fr, I = Ir)
+        if α2 != 0.0
+            α += α2 * _polarization_factor(ε_z) * _tensor_geometry(Fr, mFr)
+        end
+    end
+    return α
+end
+
+"""
+    polarizability_au(model::PolarizabilityModel, λ_nm::Real) -> Float64
+
+Dynamic electric polarizability α in atomic units (a₀³) for the given
+model and wavelength.
+
+# Definition
+Converts from SI units via
+
+    α_au = α_SI / (4π ε₀ a₀³)
+"""
+function polarizability_au(model::PolarizabilityModel, λ_nm::Real;
+                                       F  = nothing,
+                                       mF = 0//1,
+                                       I  = 0//1,
+                                       ε_z::Real = 1.0)
+    α_SI = polarizability_si(model, λ_nm; F=F, mF=mF, I=I, ε_z=ε_z)
+    return α_SI / (4π * ε0 * a0^3)
+end
+
+"""
     light_shift_coeff_Hz_per_Wcm2(model, λ_nm; F = nothing, mF = 0, I = 0, ε_z = 1) -> Float64
 
 Light-shift coefficient Δν/I in Hz/(W/cm²) for the given model and wavelength.
@@ -510,6 +615,10 @@ Light-shift coefficient Δν/I in Hz/(W/cm²) for the given model and wavelength
 For a beam intensity `I` in W/cm², the light shift is
 
     Δν = light_shift_coeff_Hz_per_Wcm2(model, λ_nm) * I
+
+Uses the relation
+
+    U/I = -α_SI / ( 2 c ε₀)
 
 # Arguments
 - `model`: Polarizability model for a single atomic state.
@@ -535,17 +644,10 @@ function light_shift_coeff_Hz_per_Wcm2(model::PolarizabilityModel, λ_nm::Real;
                                        mF = 0//1,
                                        I  = 0//1,
                                        ε_z::Real = 1.0)
-    U = _U_over_I(model, λ_nm)
-    if F !== nothing
-        Fr, mFr, Ir = Rational{Int}(F), Rational{Int}(mF), Rational{Int}(I)
-        abs(mFr) <= Fr || throw(ArgumentError("need |mF| ≤ F; got mF = $mFr, F = $Fr"))
-        α2 = _alpha2_si(model, λ_nm; F = Fr, I = Ir)
-        if α2 != 0.0
-            # One convention across the whole file: `polarizability_si` defines
-            # α_SI = −c ε₀ (U/I), so every α converts with 1/(c ε₀).
-            U += -α2 * _polarization_factor(ε_z) * _tensor_geometry(Fr, mFr) / (c * ε0)
-        end
-    end
+    α = polarizability_si(model, λ_nm; F=F, mF=mF, I=I, ε_z=ε_z)
+    # One convention across the whole file: `polarizability_si` defines
+    # α_SI = − 2 c ε₀ (U/I), so every α converts with 1/(2 c ε₀).
+    U = -α / (2 * c * ε0)
     ν_over_I = U / h              # Hz/(W/m²)
     return ν_over_I * 1e4         # Hz/(W/cm²)
 end
@@ -574,48 +676,7 @@ function scattering_rate_per_Wcm2(model::PolarizabilityModel, λ_nm::Real)
     return Γsc_over_I * 1e4                       # (1/s)/(W/cm²)
 end
 
-"""
-    polarizability_si(model::PolarizabilityModel, λ_nm::Real) -> Float64
 
-Dynamic electric polarizability α in SI units (C·m²·V⁻¹) for the given
-model and wavelength.
-
-# Definition
-Uses the relation
-
-    U/I = -α_SI / (c ε₀)
-
-which gives
-
-    α_SI = -c ε₀ (U/I)
-
-where U/I is the light shift per intensity in J/(W/m²).
-
-# Units
-Returns polarizability in C·m²·V⁻¹ (or equivalently F·m²), which is the
-standard SI unit for electric polarizability.
-"""
-function polarizability_si(model::PolarizabilityModel, λ_nm::Real)
-    U = _U_over_I(model, λ_nm)
-    α_SI = - c * ε0 * U
-    return α_SI
-end
-
-"""
-    polarizability_au(model::PolarizabilityModel, λ_nm::Real) -> Float64
-
-Dynamic electric polarizability α in atomic units (a₀³) for the given
-model and wavelength.
-
-# Definition
-Converts from SI units via
-
-    α_au = α_SI / (4π ε₀ a₀³)
-"""
-function polarizability_au(model::PolarizabilityModel, λ_nm::Real)
-    α_SI = polarizability_si(model, λ_nm)
-    return α_SI / (4π * ε0 * a0^3)
-end
 
 
 # ======================================================================
@@ -716,4 +777,38 @@ for f in (:light_shift_coeff_Hz_per_Wcm2, :scattering_rate_per_Wcm2,
         $f(atom::AbstractAtom, term, λ_nm::Real; kwargs...) =
             $f(_model_for(atom, term), λ_nm; kwargs...)
     end
+end
+
+"""
+    print_polarizability_model(model::PolarizabilityModel; io::IO = stdout)
+
+Print a single `PolarizabilityModel` in a structured, human-readable format.
+"""
+function print_polarizability_model(model::PolarizabilityModel; io::IO = stdout)
+    println(io, "PolarizabilityModel")
+    println(io, "  state: ", model.state)
+    println(io, "  J: ", model.J)
+    println(io, "  offset_Hz_per_Wm2: ", model.offset_Hz_per_Wm2)
+    println(io, "  reference: ", isempty(model.reference) ? "(none)" : model.reference)
+    println(io, "  transitions:")
+
+    if isempty(model.transitions)
+        println(io, "    (none)")
+        return nothing
+    end
+
+    for (idx, t) in enumerate(model.transitions)
+        print(io, "    [", idx, "]: ")
+        print(io, "freq_THz: ", t.freq_THz, ", ")
+        print(io, "gamma_MHz: ", t.gamma_MHz, "MHz, ")
+        print(io, "J: ", t.J, ", ")
+        print(io, "J_f: ", t.J_f, ", ")
+        print(io, "source: ", t.source)
+        println()
+    end
+    return nothing
+end
+
+function Base.show(io::IO, model::PolarizabilityModel)
+    print_polarizability_model(model; io = io)
 end
