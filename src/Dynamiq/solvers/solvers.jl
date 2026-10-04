@@ -269,10 +269,11 @@ function tdse_semiclassical(psi::Vector{ComplexF64},
 
     # Each step is velocity Verlet split around the quantum step, so that every
     # quantity is evaluated at a consistent time:
-    #   1. drift:   update the position x₀ → x₁ using F₀, the force at t₀
+    #   1. drift:   update the position x₀ → x₁ using F_old, the force at t₀
     #   2. quantum: propagate with H(t_mid) -- beams at t_mid, atoms at (x₀ + x₁)/2
-    #   3. kick:    compute F₁, the force at t₁ (position x₁, beams at t₁,
-    #               populations after step 2), and update the velocity with (F₀ + F₁)/2
+    #   3. kick:    compute F_new, the force at t₁ (position x₁, beams at t₁,
+    #               populations after step 2), and update the velocity with
+    #               (F_old + F_new)/2
     # This keeps the coupled atom-light evolution second order in dt.
     # Velocity Verlet consists of a drift (update x) and a kick (update v) with one force evaluation per step. 
     # Here the quantum step is inserted between the drift and kick, hence split velocity Verlet.
@@ -496,14 +497,23 @@ function fkick!(dt::Float64, atom::A, beams::Vector{<:AbstractBeam}) where {A}
     return
 end
 
-# The two halves of a semiclassical step's velocity Verlet, shared by
-# `tdse_semiclassical`, `wfmc_semiclassical` and `qme_semiclassical`. The caller
-# runs the quantum step between them, with the beams at t_mid and the fields
-# updated by `_update_fields_at_midpoint!`. `state` is ψ or ρ.
+# Velocity Verlet for all atoms, split into a drift (`_drift_atoms!`) and a kick
+# (`_kick_atoms!`).
 #
-# Drift with the force F₀ of the step's start; `xbuf` receives the start
-# positions. The first step of an instruction primes F₀ with the beams and
-# populations at t₀ -- outside the parallel loop, since it moves the shared beams.
+# All solvers that move atoms use these two functions. `newton` calls them one
+# after the other. The semiclassical solvers (`tdse_semiclassical`,
+# `wfmc_semiclassical`, `qme_semiclassical`) run the quantum step in between.
+#
+# `state` is the quantum state used to refresh the populations before a force is
+# computed: ψ, ρ, or `nothing` for `newton`, which has no quantum state and keeps
+# the populations fixed.
+#
+# Drift each atom with F_old, the force at the step's start; `xbuf` receives the
+# start positions. F_old is normally the F_new cached by the previous step's
+# kick. On the first step of an instruction there is none, so it is computed
+# here: the beams are set to t₀ and the populations refreshed, then `fdrift!`
+# computes F_old. The beams are set once, before the per-atom loop, because all
+# atoms share them and the loop may run on several threads.
 function _drift_atoms!(atoms, state, xbuf, beams, modifiers, i::Int, dt::Float64,
                        parallel::Bool)
     if any(a -> !a._Fvalid, atoms)
@@ -526,8 +536,14 @@ function _drift_atoms!(atoms, state, xbuf, beams, modifiers, i::Int, dt::Float64
     return
 end
 
-# Kick with F₁: the atoms at x₁, the beams at t₁ and -- the force weights α by
-# population -- the populations at t₁, after the quantum step.
+# Kick each atom with F_new, the force at the step's end.
+#
+# F_new is computed with everything at t₁: the atoms at x₁, the beams at t₁,
+# and the populations at t₁. The populations matter because the dipole force
+# weights each level's polarizability by its population; in the semiclassical
+# solvers they are read after the quantum step.
+#
+# F_new is then cached as the next step's F_old.
 function _kick_atoms!(atoms, state, beams, modifiers, i::Int, dt::Float64,
                       parallel::Bool)
     _sample_at!(modifiers, i * dt)
@@ -580,9 +596,9 @@ function newton(atoms::Vector{A},
     xbuf = [similar(a.x) for a in atoms]
 
     # Velocity Verlet with time-dependent beams, using the same drift/kick helpers
-    # as the semiclassical solvers: the drift uses F₀ (beams at t₀), the kick
-    # computes F₁ with the beams at t₁. There is no quantum state (`nothing`), so
-    # the populations stay fixed and nothing runs between the two halves.
+    # as the semiclassical solvers: the drift uses F_old (beams at t₀), the kick
+    # computes F_new with the beams at t₁. There is no quantum state (`nothing`),
+    # so the populations stay fixed and nothing runs between the two halves.
     @inbounds for i in 1:steps
         _drift_atoms!(atoms, nothing, xbuf, beams, modifiers, i, dt, parallel)
         _kick_atoms!(atoms, nothing, beams, modifiers, i, dt, parallel)
