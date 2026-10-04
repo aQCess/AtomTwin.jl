@@ -178,6 +178,34 @@ end
     return false
 end
 
+# Every modifier's value at the instant `t`, with no staircase shift: what the
+# Verlet force at a grid point needs, as opposed to a step's midpoint quadrature.
+@inline function _sample_at!(modifiers, t::Float64)
+    isempty(modifiers) && return
+    @inbounds for m in modifiers
+        _sample_at_one!(m, t)
+    end
+    return
+end
+@inline _sample_at_one!(m, t::Float64) = (update!(m, t); nothing)
+
+# Update the position-dependent fields with every atom at the midpoint of the
+# step it just took. `xbuf[k]` holds atom k's position at the step's START on
+# entry and at its END on exit; the atoms are left at the END, where Verlet put
+# them. (x₀ + x₁)/2 is x(t_mid) to O(dt²), which keeps the scheme second order.
+function _update_fields_at_midpoint!(fields, atoms, xbuf, i)
+    @inbounds for (a, xb) in zip(atoms, xbuf), k in eachindex(xb)
+        x1 = a.x[k]; a.x[k] = 0.5 * (xb[k] + x1); xb[k] = x1
+    end
+    for f in fields
+        update!(f, i)
+    end
+    @inbounds for (a, xb) in zip(atoms, xbuf)
+        copyto!(a.x, xb)
+    end
+    return
+end
+
 # Re-evaluate every time-dependent modifier for a (sub-)step of length `h`
 # centred on `tmid`. A no-op when there are none, which is the common case.
 @inline function _resample!(modifiers, tmid::Float64, h::Float64)
