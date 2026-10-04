@@ -267,10 +267,15 @@ function tdse_semiclassical(psi::Vector{ComplexF64},
     plan = plan_step(integrator, psi, h, spec; tol = tol)
     xbuf = [similar(a.x) for a in atoms]
 
-    # Velocity Verlet split around the quantum step. Two first-order errors of
-    # opposite sign hid behind a dt² term when the whole Verlet step ran first:
-    # the force at the step's end used the populations of its START, and the
-    # Hamiltonian paired the midpoint beams with the END-of-step atoms.
+    # Each step is velocity Verlet split around the quantum step, so that every
+    # quantity is evaluated at a consistent time:
+    #   1. drift:   update the position x₀ → x₁ using F₀, the force at t₀
+    #   2. quantum: propagate with H(t_mid) -- beams at t_mid, atoms at (x₀ + x₁)/2
+    #   3. kick:    compute F₁, the force at t₁ (position x₁, beams at t₁,
+    #               populations after step 2), and update the velocity with (F₀ + F₁)/2
+    # This keeps the coupled atom-light evolution second order in dt.
+    # Velocity Verlet consists of a drift (update x) and a kick (update v) with one force evaluation per step. 
+    # Here the quantum step is inserted between the drift and kick, hence split velocity Verlet.
     @inbounds for i in 1:steps
         _drift_atoms!(atoms, psi, xbuf, beams, modifiers, i, dt, false)
         # The quantum step is the exponential midpoint rule: beams AND atoms at t_mid.
@@ -452,10 +457,10 @@ end
 The drift half of [`fclassical!`](@ref): `x ← x + v dt + (F_old/2m) dt²`,
 priming `F_old` on the first step of an instruction.
 
-Split from the kick so a semiclassical solver can run the quantum step between
-them: the force weights each level's α by its population, so the force at the
-step's end needs the populations at the step's end. Taking it before the quantum
-step lags the internal state's back-action on the motion by `dt` -- first order.
+Split from [`fkick!`](@ref) so a semiclassical solver can run the quantum step
+between the two halves. The force weights each level's α by its population, so
+the kick's force at the step's end is computed from the populations after the
+quantum step.
 """
 function fdrift!(dt::Float64, atom::A, beams::Vector{<:AbstractBeam}) where {A}
     @inbounds begin
