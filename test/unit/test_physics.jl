@@ -823,7 +823,7 @@ end
     "Detuning of the peak excitation for a static atom held at x₀."
     function resonance(x0)
         yb = Ytterbium174Atom(; levels = [gm..., e...], x_init = [x0, 0.0, 0.0])
-        ds = range(-12.0, 2.0; length = 300)
+        ds = range(-12.0, 2.0; length = 150)
         y = map(ds) do d
             sys = System(yb, tw)
             add_quantization_axis!(sys, [0.0, 0.0, 1.0])
