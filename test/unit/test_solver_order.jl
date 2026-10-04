@@ -848,30 +848,37 @@ end
         c   = add_coupling!(sys, yb, g => e, 2π * 1e6; active = false)
         Γ > 0 && add_decay!(sys, yb, e => g, Γ)
         add_detector!(sys, PopulationDetectorSpec(yb, e; name = "Pe"))
-        seq = Sequence(dt)
+        # A tight `tol` keeps the density-matrix solver's adaptive sub-steps from
+        # limiting the error: with the default, the controller's tolerance is
+        # comparable to the dt² error at coarse dt and hides its scaling.
+        seq = Sequence(dt; tol = 1e-10)
         @sequence seq begin
             Parallel([Pulse([c], 1e-6), MoveCol(tw, 1, 0.5e6, 1e-6; sweep = :min_jerk)])
         end
         real(play(sys, seq; initial_state = [g], density_matrix = density_matrix,
                   rng = MersenneTwister(1)).detectors["Pe"][end])
     end
-    # Use fine steps: at coarse dt a large dt² error can mask first-order ones.
-    # This happened before: two O(dt) error terms in the semiclassical step
-    # (the end-of-step force used start-of-step populations, and the Hamiltonian
-    # used end-of-step atom positions with midpoint beam positions) partly
-    # cancelled. With steps of 4/2/1 ns the ratio was 4.63, which looked second
-    # order and passed. Only at the smaller steps below did the dt² term become
-    # negligible, and the ratio dropped to 1.70, revealing first-order convergence.
+    # Sweep from coarse to fine steps: at coarse dt a large dt² error can mask
+    # first-order ones. This happened before: two O(dt) error terms in the
+    # semiclassical step (the end-of-step force used start-of-step populations,
+    # and the Hamiltonian used end-of-step atom positions with midpoint beam
+    # positions) partly cancelled. With steps of 4/2/1 ns the ratio was 4.27,
+    # which looked second order and passed. At smaller steps the dt² term became
+    # negligible: the ratio rose to 47.6, turned negative and then fell toward 2,
+    # revealing first-order convergence. Every ratio in the sweep must be ≈ 4.
     #
     # Each semiclassical solver has its own step loop, so each is checked:
     # statevector (`tdse_semiclassical`), density matrix with decay
     # (`qme_semiclassical`), and MCWF (`wfmc_semiclassical`). The MCWF decay is
     # weak enough that no jump fires, which keeps the run deterministic: shot
     # noise would swamp the ~1e-7 differences measured here.
+    dts = [8e-9 / 2^k for k in 0:8]          # 8 ns down to 0.03125 ns
     for kw in ((;), (density_matrix = true, Γ = 2π * 10e3), (Γ = 2π * 10.0,))
-        P = [run(dt; kw...) for dt in (0.125e-9, 0.0625e-9, 0.03125e-9)]
-        ratio = (P[1] - P[2]) / (P[2] - P[3])
-        @test 3.8 < ratio < 4.2             # 2 for first order, 4 for second
+        P = [run(dt; kw...) for dt in dts]
+        for k in 1:length(P) - 2
+            ratio = (P[k] - P[k+1]) / (P[k+1] - P[k+2])
+            @test 3.8 < ratio < 4.2         # 2 for first order, 4 for second
+        end
     end
 end
 
