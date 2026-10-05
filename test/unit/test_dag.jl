@@ -69,6 +69,7 @@ end
     @test_throws ErrorException AtomTwin._topological_sort(AtomTwin.AbstractNode[a, b])
 end
 
+
 @testset "recompile! rebinds Parameters when auto light shifts are present" begin
     # `compile` builds job.fields as [auto light shifts..., then one per DAG node],
     # but `recompile!` walked nodes while indexing job.fields from 1 — so every node
@@ -106,8 +107,18 @@ end
     @test job.n_auto_fields > 0
 
     photons(o) = mean(sum(o.detectors["clicks"], dims = 1))
-    on  = photons(play(job, sys; shots = 32, initial_state = st, δ_img = -2.595))
-    off = photons(play(job, sys; shots = 32, initial_state = st, δ_img = -3.5))
+
+    # Obtain detuning to be on resonance withthe trap-shifted σ⁺ line (mF = +1), 
+    # from the light shift model
+    I0 = 2 * 2e-3 / (π * (1e-6)^2) * 1e-4                                  # W/cm²
+    LS = (light_shift_coeff_Hz_per_Wcm2(AtomTwin.YB174_POLARIZABILITY_3P1, 767.0;
+              F = 1//1, mF = 1//1, I = 0//1, ε_z = 1.0) -
+          light_shift_coeff_Hz_per_Wcm2(AtomTwin.YB174_POLARIZABILITY_1S0, 767.0)) * I0
+    Z  = 1.493 * AtomTwin.BOHR_MAGNETON_RAD_S_TESLA * 7.18e-5 / 2π
+    δ_on = -(Z + LS) / 1e6  
+  
+    on  = photons(play(job, sys; shots = 32, initial_state = st, δ_img = δ_on))
+    off = photons(play(job, sys; shots = 32, initial_state = st, δ_img = δ_on - 2.0))
 
     @test on > 20                # on resonance it really is scattering
     @test off < 0.2 * on         # …and the Parameter change actually took effect
