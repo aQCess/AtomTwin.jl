@@ -99,11 +99,8 @@ function Efield_spherical(beam, r::AbstractVector{<:Real};
     Ex, Ey, Ez = AtomTwin.Dynamiq.Efield(beam, r)
     E = ComplexF64[Ex, Ey, Ez]
 
-    # --- orthonormal basis aligned with q_axis (same as rabi_frequency) ---
-    ezp = normalize(collect(q_axis))
-    ref  = abs(ezp[1]) < 0.9 ? [1.0, 0.0, 0.0] : [0.0, 1.0, 0.0]
-    exp  = normalize(ref - dot(ref, ezp)*ezp)   # Gram-Schmidt
-    eyp  = cross(ezp, exp)
+    # --- orthonormal basis aligned with q_axis (shared with the tensor light shift) ---
+    exp, eyp, ezp = _quantization_frame(q_axis)
 
     # project E into primed basis
     Exp = sum(E .* exp)

@@ -738,6 +738,43 @@ end
                                     beams = [b([0,0,1]), b([1,0,0])])
 end
 
+@testset "the tensor light shift is quantised along the trap polarisation" begin
+    # The tensor shift was applied on the m-diagonal only, right only for ε along
+    # (or circular about) the quantization axis. In general it mixes Δm = ±1, ±2, and
+    # the shifts and the force cannot depend on which axis m is counted along.
+    using LinearAlgebra
+    D = AtomTwin.Dynamiq
+    e = HyperfineManifold(1//1, 1; label = "³P₁", term = l"3P1")
+    ε = [sind(45), 0, cosd(45)]
+    function trap(q)
+        sr  = Strontium88Atom(; levels = [e...])
+        tw  = GaussianBeam(λ = 520e-9, w0 = 1e-6, P = 10e-3, pol = ε)
+        sys = System(sr, tw)
+        add_quantization_axis!(sys, q)
+        seq = Sequence(1e-9)
+        @sequence seq begin
+            Wait(1e-9)
+        end
+        job = compile(sys, seq)
+        fs  = [f for f in job.fields if f isa StarkShiftAC || f isa D.StarkShiftACTensor]
+        H   = sum(f -> (D.update!(f, 1); real(f._coeff[]) .* Matrix(D.sparse(f.H))), fs)
+        E, V = eigen(Hermitian(H))
+        a = job.atoms[1]
+        a.x .= [0.3e-6, 0.0, 0.0]
+        D.updatepop!(a, ComplexF64.(V[:, 1]))          # the most deeply trapped state
+        E, D.force(a, [tw])[1], count(f -> f isa D.StarkShiftACTensor, fs)
+    end
+    E0, F0, n0 = trap(ε)                     # m along ε: diagonal
+    @test n0 == 0
+    @test E0[2] ≈ E0[3] rtol = 1e-12         # m_ε = ±1 degenerate
+    for q in ([0, 0, 1], [0, 1, 0], [1, 1, 1])
+        E, F, n = trap(q)
+        @test n == 1
+        @test E ≈ E0 rtol = 1e-12            # were the diagonal entries alone
+        @test F ≈ F0 rtol = 1e-9             # the force counts the coherences
+    end
+end
+
 @testset "a trapping beam shifts the levels it traps" begin
     # A trap that holds an atom also shifts its levels: one physical effect, so
     # passing the beam to `System` is the whole user action. Ramsey is the
@@ -872,7 +909,11 @@ end
     # which no relative test would have found.
     gm = HyperfineManifold(0//1, 0; label = "¹S₀", term = l"1S0", g_F = 0.0)
     e  = HyperfineManifold(1//1, 1; label = "³P₁", term = l"3P1", g_F = 1.5)
-    θ  = 54.7356                      # tensor-free angle: all three mF degenerate
+    θ  = 54.7356                      # tensor-free angle: all three mF degenerate…
+    B  = 1e-2                         # …once a field quantises them along ẑ. At B = 0
+                                      # the tensor shift is quantised along ε at any θ
+                                      # (lines at β∥ and β⊥); 100 G (210 MHz) ≫ the
+                                      # ~10 MHz mixing, and m = 0 has no linear Zeeman.
     w0 = 1e-6
     tw = GaussianBeam(λ = 767e-9, w0 = w0, P = 50e-3,
                       pol = [sind(θ), 0.0, cosd(θ)])
@@ -893,7 +934,7 @@ end
         y = map(ds) do d
             sys = System(yb, tw)
             add_quantization_axis!(sys, [0.0, 0.0, 1.0])
-            add_zeeman_detunings!(sys, yb, e; B = 0.0, delta = 2π * d * 1e6)
+            add_zeeman_detunings!(sys, yb, e; B = B, delta = 2π * d * 1e6)
             cp = add_coupling!(sys, yb, gm => e, 2π * 20e3, 0.0, 0.0; active = false)
             add_decay!(sys, yb, e => gm, 2π * 182e3)
             add_detector!(sys, PopulationDetectorSpec(yb, e.levels[2]; name = "P"))

@@ -433,8 +433,9 @@ function _is_static(job::SimulationJob)
     isempty(job.beams) && return true
     T = isempty(job.times) ? 0.0 : job.times[end]
     for a in atoms
-        P = copy(a._P)
+        P = copy(a._P); C = copy(a._C)
         try
+            fill!(a._C, 0.0)                      # a pure level has no coherence
             for l in 1:length(P)
                 fill!(a._P, 0.0); a._P[l] = 1.0
                 F  = norm(Dynamiq.force(a, job.beams))
@@ -442,7 +443,7 @@ function _is_static(job::SimulationJob)
                 (δx > 1e-12 || F * δx * T / Units.hbar > 1e-6) && return false
             end
         finally
-            copyto!(a._P, P)
+            copyto!(a._P, P); copyto!(a._C, C)
         end
     end
     return true

@@ -343,7 +343,8 @@ interference is included; different wavelengths add incoherently. Per wavelength
 
 with `α[λ][i]` the level-`i` polarizability at `λ` (standard convention,
 U = −α|E|²/4 = −α I/(2c ε₀)), `P` the level populations and `E` the total complex
-field (`|E|² = 2I/(c ε₀)`): F = −∇U.
+field (`|E|² = 2I/(c ε₀)`): F = −∇U. Where the tensor light shift mixes sublevels
+the level sum is the full `Tr(α ρ)`, `+ Σ 2 Re(α_ij ρ_ji)` over the mixed pairs.
 """
 function force(atom::A, beams::Vector{<:AbstractBeam}) where {A}
     Fx, Fy, Fz = 0.0, 0.0, 0.0
@@ -394,6 +395,14 @@ function force(atom::A, beams::Vector{<:AbstractBeam}) where {A}
         c = 0.0
         for i in 1:atom.n
             c += αλ[i] * atom._P[i]
+        end
+        if !isempty(atom._cidx)
+            αo = get(atom.alpha_off, λ, nothing)
+            if αo !== nothing
+                for p in eachindex(αo)
+                    c += 2 * real(αo[p] * conj(atom._C[p]))
+                end
+            end
         end
         c *= 0.5                                   # F = −∇(−α|E|²/4) = ½α Re(E*∇E)
         c == 0.0 && continue
@@ -699,7 +708,8 @@ end
     updatepop!(atom, psi)
 
 Refresh the level populations `atom._P` from the many-body state vector `psi`,
-using the precomputed index lists `atom._pidx`.
+using the precomputed index lists `atom._pidx`, and the reduced coherences `atom._C`
+of the level pairs the tensor light shift mixes.
 """
 function updatepop!(atom::AbstractAtom, psi::Vector{ComplexF64})
     for lvl in 1:atom.n
@@ -708,6 +718,13 @@ function updatepop!(atom::AbstractAtom, psi::Vector{ComplexF64})
             a += abs2(psi[j])
         end
         atom._P[lvl] = a
+    end
+    @inbounds for p in eachindex(atom._cidx)
+        c = zero(ComplexF64)
+        for (x, y) in atom._cidx[p]
+            c = muladd(psi[x], conj(psi[y]), c)
+        end
+        atom._C[p] = c
     end
 end
 
@@ -724,6 +741,13 @@ function updatepop!(atom::AbstractAtom, rho::Matrix{ComplexF64})
             a += real(rho[j, j])
         end
         atom._P[lvl] = a
+    end
+    @inbounds for p in eachindex(atom._cidx)
+        c = zero(ComplexF64)
+        for (x, y) in atom._cidx[p]
+            c += rho[x, y]
+        end
+        atom._C[p] = c
     end
 end
 
