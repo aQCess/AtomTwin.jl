@@ -1001,7 +1001,12 @@ end
     zR = π * w0^2 / λ
     E(r) = Dynamiq.efield_scalar(b, r)
     @test abs(E([0.0, 0.0, zR])) / abs(E([0.0, 0.0, 0.0])) ≈ 1 / √2 rtol = 1e-12
-    @test abs(angle(E([0.0, 0.0, zR]) * cis(2π / λ * zR) / E([0.0, 0.0, 0.0]))) ≈ π / 4 rtol = 1e-9
+    # On axis E(z)/E(0) = e^{i(kz − ζ)}: the phase runs as exp(+ik·r) like PlanarBeam's, and the
+    # Gouy phase lags (ζ(z_R) = π/4). It ran as e^{−i(kz − ζ)}, a backward-running phase.
+    @test angle(E([0.0, 0.0, zR]) * cis(-2π / λ * zR) / E([0.0, 0.0, 0.0])) ≈ -π / 4 rtol = 1e-9
+    pb = Dynamiq.PlanarBeam(λ, 1.0, [0.0, 0.0, 1.0], ComplexF64[1, 0, 0])
+    @test sign(angle(E([0.0, 0.0, λ / 8]) / E([0.0, 0.0, 0.0]))) ==
+          sign(angle(Dynamiq.efield_scalar(pb, [0.0, 0.0, λ / 8]) / Dynamiq.efield_scalar(pb, [0.0, 0.0, 0.0])))
     @test Dynamiq.intensity(b, [0.0, 0.0, zR]) / Dynamiq.intensity(b, [0.0, 0.0, 0.0]) ≈ 0.5 rtol = 1e-12
     cε = AtomTwin.Units.c * AtomTwin.Units.ε0
     h = 1e-12

@@ -629,7 +629,9 @@ Returns zero if the point lies outside the 8-waist cutoff ellipse.
     G = exp(- (x′^2 / wx2 + y′^2 / wy2))
     φ = k * z′ + k * (x′^2 / (2 * Rx) + y′^2 / (2 * Ry)) - (ζx + ζy) / 2
 
-    scalar = amp * G * cis(-φ) * b._coeff[]
+    # exp(+i(k z′ + k r²/2R − ζ)): the same exp(+ik·r) convention as PlanarBeam and GaussianBeam
+    # (it was cis(−φ), a beam running backwards in phase, which reversed its radiation pressure).
+    scalar = amp * G * cis(φ) * b._coeff[]
 
     # NEW: vector field = scalar envelope × polarization vector
     return ComplexF64[scalar * b.pol[1],
@@ -671,7 +673,7 @@ polarization vector. Used by `force` to avoid a temporary allocation.
     G   = exp(-(x′^2 / wx2 + y′^2 / wy2))
     φ   = k * z′ + k * (x′^2 / (2 * Rx) + y′^2 / (2 * Ry)) - (ζx + ζy) / 2
 
-    return amp * G * cis(-φ) * b._coeff[]
+    return amp * G * cis(φ) * b._coeff[]
 end
 
 """
@@ -718,14 +720,14 @@ Returns a tuple of three complex numbers.
     amp = sqrt(2/(c*ε0)) * sqrt(b.I0) * sqrt((w0x / wx) * (w0y / wy))
     G   = exp(- (x′^2 / wx2 + y′^2 / wy2))
     φ   = k * z′ + k * (x′^2 / (2 * Rx) + y′^2 / (2 * Ry)) - (ζx + ζy) / 2
-    cphase = cis(-φ) * b._coeff[]
+    cphase = cis(φ) * b._coeff[]
     E      = amp * G * cphase
 
     # Derivatives with respect to x′ and y′
     dφ_dx′ = k * x′ / Rx
-    dE_dx′ = E * (-2 * x′ / wx2 - im * dφ_dx′)
+    dE_dx′ = E * (-2 * x′ / wx2 + im * dφ_dx′)
     dφ_dy′ = k * y′ / Ry
-    dE_dy′ = E * (-2 * y′ / wy2 - im * dφ_dy′)
+    dE_dy′ = E * (-2 * y′ / wy2 + im * dφ_dy′)
 
     # Derivative with respect to z′
     d_wx_dz′ = w0x * (z′ / zRx^2) / sqrt(1 + (z′ / zRx)^2)
@@ -741,7 +743,7 @@ Returns a tuple of three complex numbers.
     dφ_dz′  = k + k * (x′^2 / 2 * dinvRx_dz′ + y′^2 / 2 * dinvRy_dz′) -
               (dζx_dz′ + dζy_dz′) / 2
 
-    dE_dz′ = (d_amp_dz′ * G + amp * dG_dz′) * cphase - im * dφ_dz′ * E
+    dE_dz′ = (d_amp_dz′ * G + amp * dG_dz′) * cphase + im * dφ_dz′ * E
 
     # Chain rule to global coordinates
     dEdr_vec = (
