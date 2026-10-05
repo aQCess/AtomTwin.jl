@@ -373,15 +373,38 @@ end
     compute_coupling_strength(g::FineLevel, e::HyperfineLevel,
                               atom, Ω_π, Ω_σ⁺, Ω_σ⁻)
 
-Compute the effective coupling strength from a fine-structure level to
-a hyperfine level.
+Compute the effective coupling strength from a fine-structure level `g`
+(J, m_J, hyperfine unresolved) to a hyperfine level `e` (F, m_F).
 
-This is defined symmetrically via
-`compute_coupling_strength(e, g, atom, Ω_π, Ω_σ⁺, Ω_σ⁻)`.
+The mirror of the hyperfine → fine method: `e` is decomposed into
+`|J_e, m_J′; I, m_I⟩` components, and `g` couples to each with the dipole
+Clebsch–Gordan coefficient `⟨J_g, m_J; 1, Δm | J_e, m_J′⟩`, `Δm = m_J′ − m_J`.
+(It used to call the hyperfine → fine method with the levels swapped, which
+took Δm = m_J − m_J′ — σ⁺ and σ⁻ exchanged — and ran the dipole coefficient
+from the excited level.)
 """
 function compute_coupling_strength(g::FineLevel, e::HyperfineLevel, atom, Ω_π, Ω_σ⁺, Ω_σ⁻)
-    # Symmetric to above, swap roles.
-    return compute_coupling_strength(e, g, atom, Ω_π, Ω_σ⁺, Ω_σ⁻)
+    Jg, mJg = g.J, g.mJ
+    F, mF, Je = e.F, e.mF, e.J
+    I = atom.I
+    total = 0.0
+    for m_J in -Je:1:Je
+        m_I = mF - m_J
+        abs(m_I) > I && continue
+        Δm = m_J - mJg
+        abs(Δm) > 1 && continue
+        try
+            c_hyper  = clebschgordan(Je, m_J, I, m_I, F, mF)
+            c_dipole = clebschgordan(Jg, mJg, 1, Δm, Je, m_J)
+            Ω = Δm == 0  ? Ω_π * c_hyper * c_dipole :
+                Δm == +1 ? Ω_σ⁺ * c_hyper * c_dipole :
+                           Ω_σ⁻ * c_hyper * c_dipole
+            total += Ω
+        catch
+            continue
+        end
+    end
+    return total
 end
 
 

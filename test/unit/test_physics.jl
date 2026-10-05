@@ -135,6 +135,24 @@ end
     @test AtomTwin.compute_coupling_strength(g_level, e_level, nothing, 1.0, 0.0, 0.0) == 0.0
 end
 
+@testset "Fine → hyperfine: σ⁺ raises m, with the ground-to-excited dipole coefficient" begin
+    # J = 1/2, m_J = +1/2 → (J′ = 3/2, I = 3/2) F′ = 3, m_F′ = 3: stretched, only σ⁺ reaches it, with
+    # amplitude 1. The method used to swap the levels and take Δm = m_J − m_J′, so σ⁻ drove it.
+    atom = (I = 3//2,)
+    g = FineLevel(1//2, 1//2)
+    e = HyperfineLevel(3//1, 3//2, 3//1, 1.0, "e")
+    @test AtomTwin.compute_coupling_strength(g, e, atom, 0.0, 1.0, 0.0) ≈ 1.0
+    @test AtomTwin.compute_coupling_strength(g, e, atom, 0.0, 0.0, 1.0) == 0.0
+    @test AtomTwin.compute_coupling_strength(g, e, atom, 1.0, 0.0, 0.0) == 0.0
+    # m_J = −1/2 → F′ = 1, m_F′ = 1: the components m_J′ = −1/2 (π) and +1/2 (σ⁺) are reachable; σ⁺ alone
+    # gives the m_J′ = +1/2 term, and σ⁻ nothing
+    g2 = FineLevel(1//2, -1//2)
+    e2 = HyperfineLevel(1//1, 3//2, 1//1, 1.0, "e2")
+    expect = AtomTwin.clebschgordan(3//2, 1//2, 3//2, 1//2, 1//1, 1//1) * AtomTwin.clebschgordan(1//2, -1//2, 1, 1, 3//2, 1//2)
+    @test AtomTwin.compute_coupling_strength(g2, e2, atom, 0.0, 1.0, 0.0) ≈ expect
+    @test AtomTwin.compute_coupling_strength(g2, e2, atom, 0.0, 0.0, 1.0) == 0.0
+end
+
 # ── D. GaussianBeam analytical checks ────────────────────────────────────────
 
 @testset "GaussianBeam: peak intensity equals 2P/(π w0²)" begin
