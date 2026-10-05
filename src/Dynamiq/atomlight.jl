@@ -604,8 +604,9 @@ mutable struct NLevelAtom <: AbstractAtom
     _pidx::Vector{Vector{Int}}    # updated when a basis is constructed
     _F::Vector{Float64}           # force cached from the previous step (velocity Verlet)
     _Fvalid::Bool                 # false until _F holds a force for the current x
-    _Eb::Vector{Float64}          # MCWF radiation pressure: excited-branch momentum/ħ
-                                  # × population, m⁻¹ (see `RadiationPressure`)
+    _Eb::Vector{Float64}          # MCWF radiation pressure: per excited sub-branch its
+                                  # momentum/ħ × population (m⁻¹) and population, in
+                                  # blocks of four (see `RadiationPressure`)
 
     function NLevelAtom(n;
                         x       = [0.0, 0.0, 0.0],
@@ -614,7 +615,7 @@ mutable struct NLevelAtom <: AbstractAtom
                         alphas  = Dict(),
                         lambdas = Dict(),
                         dipoles = Dict())
-        new(n, x, v, m, alphas, lambdas, dipoles, zeros(n), [[0]], zeros(3), false, zeros(3))
+        new(n, x, v, m, alphas, lambdas, dipoles, zeros(n), [[0]], zeros(3), false, zeros(4))
     end
 end
 

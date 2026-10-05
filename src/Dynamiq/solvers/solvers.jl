@@ -813,7 +813,7 @@ function wfmc_semiclassical(psi::Vector{ComplexF64},
             radiation_step!(rp, psi, 1 / (n * n), h)
             fired, early = quantum_jump!(psi, n, jumps, photo_detectors, i, steps,
                                          downsample, _prob, _q1, _q2, rng)
-            fired === nothing || radiation_jump!(rp, fired, psi, 1.0)
+            fired === nothing || radiation_jump!(rp, fired, psi, 1.0, rng)
             if early                   # the jump opened the sub-step: see `quantum_jump!`
                 propagate!(integrator, psi, Heff_terms, plan)
                 n = norm(psi)

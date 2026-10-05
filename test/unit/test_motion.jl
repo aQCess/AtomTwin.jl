@@ -421,6 +421,28 @@ end
     ## 1σ of the variance ratio at 1500 shots ≈ 4 %; the old force gave 0.35
     @test 1.10 < var(p) / Nm < 1.42
 
+    # Both beams at once: each photon was absorbed from one of them, ±ħk at random,
+    # so var(p) = N + N/3 about a zero mean. One momentum for the whole excited
+    # branch (the mean of the two beams) left only the emission recoil, N/3.
+    let yb = Ytterbium174Atom(; levels = [g, e], x_init = zeros(3), v_init = zeros(3))
+        sys = System(yb)
+        cs  = [add_coupling!(sys, yb, g => e, Γ * sqrt(s / 2); active = false,
+                             beam = PlanarBeam(398.9e-9, 1.0, [sgn, 0.0, 0.0], [0.0, 0.0, 1.0]))
+               for sgn in (1.0, -1.0)]
+        pd  = PhotoDetectorSpec(name = "clicks"); add_detector!(sys, pd)
+        add_decay!(sys, yb, e => g, Γ; clicks = pd, λ = 398.9e-9)
+        add_detector!(sys, MotionDetectorSpec(yb; dims = [1, 2, 3], name = "x"))
+        seq = Sequence(1e-9)
+        push!(seq, Pulse(cs, T; dt = T / 100, downsample = 100))
+        push!(seq, Wait(2e-9; dt = 1e-9, downsample = 1))
+        o = play(sys, seq; initial_state = g, shots = 1000, rng = MersenneTwister(11))
+        x, t = o.detectors["x"], o.times
+        p  = [(x[end, 1, k] - x[end-1, 1, k]) / (t[end] - t[end-1]) / vrec(398.9e-9) for k in 1:1000]
+        Nm = mean(sum(o.detectors["clicks"], dims = 1))
+        @test abs(mean(p)) < 0.15 * sqrt(Nm)
+        @test 1.15 < var(p) / Nm < 1.52          # 4/3; was 1/3
+    end
+
     # MCWF conditioning: a π/2 pulse leaves the atom half excited. A trajectory that
     # then emits nothing was never excited and must end at rest, not with the ħk/2
     # the mean force gave it; one that emits once absorbed exactly one photon, so
