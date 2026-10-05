@@ -399,6 +399,8 @@ Node for a spontaneous decay or dephasing jump operator. `Gamma` is the
 decay rate in rad/s. `clicks` optionally holds the name of a `PhotoDetector`
 (from a `PhotoDetectorSpec`) to which this jump's events are reported, so its
 firings are counted as photon clicks; `nothing` means no photon detector.
+`branches` lists every `(e => g) => amplitude` of a jump that decays several
+levels coherently (see [`Jump`](@ref)); `transition` is the first.
 """
 mutable struct DecayNode <: AbstractNode
     Gamma::Any
@@ -407,32 +409,31 @@ mutable struct DecayNode <: AbstractNode
     active::Bool
     clicks::Union{Nothing, String}
     _field::Union{Nothing, Jump}
+    branches::Vector{<:Pair{<:Pair, Float64}}
 end
 
-DecayNode(Gamma, atom, transition; active=true, clicks=nothing) =
-    DecayNode(Gamma, atom, transition, active, clicks, nothing)
+DecayNode(Gamma, atom, transition; active=true, clicks=nothing, branches=[transition => 1.0]) =
+    DecayNode(Gamma, atom, first(branches).first, active, clicks, nothing, branches)
 
 node_output(n::DecayNode) = n._field
 
+function _jump(node::DecayNode, basis::Basis, Gamma_val)
+    idx = node.atom.level_indices
+    j = Jump(basis, node.atom.inner, [(idx[e] => idx[g]) => c for ((e, g), c) in node.branches], Gamma_val)
+    j._coeff[] = ComplexF64(node.active ? 1.0 : 0.0)
+    return j
+end
+
 function build_node!(node::DecayNode, basis::Basis)
     node._field === nothing || return node._field
-    Gamma_val = _resolve_node_default(node.Gamma)
-    idx1 = node.atom.level_indices[node.transition[1]]
-    idx2 = node.atom.level_indices[node.transition[2]]
-    j = Jump(basis, node.atom.inner, idx1 => idx2, Gamma_val)
-    j._coeff[] = ComplexF64(node.active ? 1.0 : 0.0)
-    node._field = j
-    return j
+    node._field = _jump(node, basis, _resolve_node_default(node.Gamma))
+    return node._field
 end
 
 function compile_node!(node::DecayNode, basis::Basis, rng, param_values)
     Gamma_val = _resolve_node_value(node.Gamma, param_values, rng)
     if node._field === nothing || (node._field._rate == 0 && Gamma_val != 0)
-        idx1 = node.atom.level_indices[node.transition[1]]
-        idx2 = node.atom.level_indices[node.transition[2]]
-        j = Jump(basis, node.atom.inner, idx1 => idx2, Gamma_val)
-        j._coeff[] = ComplexF64(node.active ? 1.0 : 0.0)
-        node._field = j
+        node._field = _jump(node, basis, Gamma_val)
     else
         update!(node._field, Val(:_), Gamma_val)
     end

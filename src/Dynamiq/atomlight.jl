@@ -4,8 +4,12 @@
 
 """
     Jump(b, atom, transition, rate; blockade = 0)
+    Jump(b, atom, [(e => g) => c, …], rate; blockade = 0)
 
-Generic quantum jump process for a single atomic transition with decay rate `rate`.
+Generic quantum jump process with decay rate `rate`: a single atomic transition,
+or several branches `L = √rate Σ c |g⟩⟨e|` that decay coherently — one photon
+polarisation of a manifold decay. Each source level `e` may appear only once, so
+`L†L` stays diagonal.
 
 The constructor builds the collapse operator `L` as an `Op` in basis `b`,
 optionally with a Rydberg blockade constraint on a given level. The same
@@ -18,7 +22,8 @@ so the jump itself carries no detector list.
 """
 mutable struct Jump
     atom::AbstractAtom
-    transition::Pair{Int,Int}
+    transition::Pair{Int,Int}     # first branch; keys the recoil wavelength and dipole
+    sources::Vector{Int}          # every branch's source level
     J::Op                         # collapse operator L
     _rate::Float64                # physical decay rate (stored for parameter updates)
 
@@ -28,16 +33,25 @@ mutable struct Jump
 
     _coeff::Base.RefValue{ComplexF64}
 
-    function Jump(b, atom, transition, rate; blockade = 0)
+    Jump(b, atom, transition::Pair{Int,Int}, rate; blockade = 0) =
+        Jump(b, atom, [transition => 1.0], rate; blockade = blockade)
+
+    function Jump(b, atom, branches::Vector{<:Pair{Pair{Int,Int},<:Real}}, rate; blockade = 0)
+        sources = [tr.first for (tr, _) in branches]
+        allunique(sources) || error("Jump: each source level may decay through only one branch.")
 
         # Always build the collapse operator L
-        J = Op(b, atom, transition, sqrt(rate); jump = true, blockade = blockade)
+        forward = Tuple{Int,Int,ComplexF64}[]
+        for (tr, c) in branches
+            append!(forward, first(operator1(b, [atom], tr, c * sqrt(rate); jump = true, blockade = blockade)))
+        end
+        J = Op(forward, Tuple{Int,Int,ComplexF64}[], b.dim)
 
         # Helpers are left uninitialized here; evolve! will fill them
         Hnh        = nothing
         LdagL_diag = nothing
 
-        return new{}(atom, transition, J, Float64(rate),
+        return new{}(atom, first(branches).first, sources, J, Float64(rate),
                      Hnh, LdagL_diag,
                      Ref(ComplexF64(1.0)))
     end

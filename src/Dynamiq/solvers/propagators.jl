@@ -328,9 +328,9 @@ end
 Apply one step of the Lindblad dissipator `Σⱼ 𝒟ⱼ[ρ]` as an exact quantum channel
 per source level.
 
-AtomTwin's jump operators are single transitions, so each `Lⱼ†Lⱼ` is diagonal and
-supported on the transition's *source* level. Grouping channels by source, each
-group is one exact Kraus set needing two distinct rates per level `s`:
+An AtomTwin jump operator takes each of its source levels to a single target, so
+each `Lⱼ†Lⱼ` is diagonal and supported on the *source* levels. Grouping channels by
+source, each group is one exact Kraus set needing two distinct rates per level `s`:
 
     Γ[s]    = Σⱼ γⱼ (Lⱼ†Lⱼ)[s]         every channel touching `s`
     Γout[s] = Σⱼ γⱼ |Lⱼ[p,s]|², p ≠ s   only those moving population off `s`
@@ -348,7 +348,10 @@ rescaling and no step-size restriction.
 
 Exact to machine precision unless a channel leaving a level feeds another
 decaying level: only a *cascade* is approximate, and there it is second order.
-Physicality holds at any step size regardless.
+Physicality holds at any step size regardless. A jump with several sources (a
+manifold decay, or any decay with several atoms) carries a coherence between two
+sources across at the left-hand source's rate: exact when they decay equally fast,
+as one atom's manifold sublevels do, otherwise Hermitian only to O(dt²).
 
 Allocation-free -- the per-level rate totals live in a cached workspace.
 """

@@ -377,7 +377,7 @@ function radiation_jump!(rp::RadiationPressure, jump, state, inv_n2::Float64)
         P0 = rp.Pprev[a]; Eb = rp.atoms[a]._Eb
         if P0 > _PMIN
             D = (Eb[1] / P0, Eb[2] / P0, Eb[3] / P0)
-            hit = rp.atoms[a] === jump.atom && jump.transition.first in rp.uplev[a]
+            hit = rp.atoms[a] === jump.atom && any(in(rp.uplev[a]), jump.sources)
             _kick!(rp.atoms[a], ((hit ? 1.0 : rp.P[a]) - P0) * rp.hm[a], D)
             Eb[1] = D[1] * rp.P[a]; Eb[2] = D[2] * rp.P[a]; Eb[3] = D[3] * rp.P[a]
         else

@@ -962,6 +962,34 @@ end
     @test 0.3 < n_pi / n_sig < 3.0
 end
 
+@testset "a manifold decay transfers excited coherence to the ground state" begin
+    # One jump per sublevel pair made the π photons of |e₊⟩ and |e₋⟩ distinguishable,
+    # so (|e₊⟩ + |e₋⟩)/√2 decayed to a mixture. With one jump per polarisation the π
+    # branch, amplitudes ∓1/√3, carries the coherence: ρ₊₋ = −1/6 for J = ½ → ½.
+    g = FineManifold(1//2; label = "S")
+    e = FineManifold(1//2; label = "P")
+    function run(; dm, shots = 1)
+        atom = Atom(; levels = [g..., e...])
+        sys = System(atom)
+        add_decay!(sys, atom, e => g, 2π * 1e6)
+        add_detector!(sys, CoherenceDetectorSpec(atom, g[1//2] => g[-1//2]; name = "c"))
+        add_detector!(sys, PopulationDetectorSpec(atom, g[1//2]; name = "p"))
+        seq = Sequence(1e-8)
+        @sequence seq begin
+            Wait(2e-6)
+        end
+        out = play(sys, seq; initial_state = [(e[1//2] + e[-1//2]) / √2],
+                   density_matrix = dm, shots = shots)
+        mean(out.detectors["c"][end, :]), mean(out.detectors["p"][end, :])
+    end
+    c, p = run(dm = true)
+    @test c ≈ -1/6 atol = 1e-5
+    @test p ≈ 1/2 atol = 1e-5
+    c, p = run(dm = false, shots = 2000)
+    @test real(c) ≈ -1/6 atol = 0.03
+    @test p ≈ 1/2 atol = 0.05
+end
+
 @testset "measured polarizability for a level with no line model" begin
     # Yb ¹P₁ has no shipped model. `polarizabilities` attaches one to an atom, and
     # a tensor offset lets a measured (scalar, tensor) pair at one wavelength stand
