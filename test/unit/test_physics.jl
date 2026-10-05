@@ -135,6 +135,23 @@ end
     @test AtomTwin.compute_coupling_strength(g_level, e_level, nothing, 1.0, 0.0, 0.0) == 0.0
 end
 
+@testset "rabi_frequency: light polarised along ε excites the dipole along ε" begin
+    # J = 0 → J′ = 1: the excited superposition Σ_q Ω_q |1 q⟩ ↔ Σ_q Ω_q ê_q must be ∥ ε, for π, σ±
+    # and their mixtures alike. An extra (−1)^q in the dipole element flipped σ± against π:
+    # (x̂+ẑ)/√2 excited (−x̂+ẑ)/√2.
+    yb = Ytterbium174Atom()
+    g  = HyperfineLevel(0//1, 0//1, 0//1, 0.0, "g")
+    es = [HyperfineLevel(1//1, 1//1, q//1, 1.0, "e$q") for q in (-1, 0, 1)]
+    ê  = Dict(1 => -ComplexF64[1, im, 0] / √2, 0 => ComplexF64[0, 0, 1], -1 => ComplexF64[1, -im, 0] / √2)
+    for (pol, k) in (([1.0, 0, 1] / √2, [0.0, 1, 0]), ([1.0, im, 0] / √2, [0.0, 0, 1]),
+                     ([1.0, -im, 0] / √2, [0.0, 0, 1]), ([0.0, 1, 1] / √2, [1.0, 0, 0]))
+        b = Dynamiq.PlanarBeam(556e-9, 1.0, k, ComplexF64.(pol))
+        Ω = [AtomTwin.rabi_frequency(yb, g, e, b, zeros(3); d_red = 1e-29) for e in es]
+        v = sum(Ω[i] * ê[q] for (i, q) in enumerate((-1, 0, 1)))
+        @test abs(sum(conj.(pol) .* v)) / sqrt(sum(abs2, v)) ≈ 1 rtol = 1e-12
+    end
+end
+
 @testset "Fine → hyperfine: σ⁺ raises m, with the ground-to-excited dipole coefficient" begin
     # J = 1/2, m_J = +1/2 → (J′ = 3/2, I = 3/2) F′ = 3, m_F′ = 3: stretched, only σ⁺ reaches it, with
     # amplitude 1. The method used to swap the levels and take Δm = m_J − m_J′, so σ⁻ drove it.

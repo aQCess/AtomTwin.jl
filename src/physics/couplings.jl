@@ -186,16 +186,19 @@ in the Racah phase convention (Condon–Shortley phases).
 
 The implementation includes:
 
-  • Zeeman (3j) angular factor  
-  • Hyperfine recoupling (6j) factor  
-  • The spherical tensor phase factor (-1)^q  
+  • Zeeman (3j) angular factor
+  • Hyperfine recoupling (6j) factor
   • A global phase choice such that a stretched σ⁺ transition
     (if it exists) is positive
+
+`d_q = ê_q·d` are the spherical components that pair with the field coefficients
+`E_q = ê_q*·E` of `Efield_spherical` (E = Σ_q E_q ê_q), so d·E = Σ_q E_q d_q: there is
+no (−1)^q. (There was one: σ± came out with the wrong sign against π, and light polarised
+along (x̂+ẑ)/√2 excited the dipole (−x̂+ẑ)/√2.)
 
 The formula used is
 
     ⟨F′ m′ | d_q | F m⟩ =
-        (-1)^q
         (-1)^(F′ - m′)
         ( F′  1   F
          -m′  q   m )
@@ -248,7 +251,7 @@ function dipole_matrix_element(atom::AbstractAtom, g::HyperfineLevel, e::Hyperfi
     pref = (-1)^(Fp + J + 1 + I) *
            sqrt((2Fp + 1)*(2F + 1))
 
-    amp = (-1)^q * threej * pref * sixj
+    amp = threej * pref * sixj
 
     # ---- Fix global phase via stretched σ⁺ ----
     ms = F
@@ -263,7 +266,7 @@ function dipole_matrix_element(atom::AbstractAtom, g::HyperfineLevel, e::Hyperfi
         if threej_s != 0
             sixj_s = sixj
             pref_s = pref
-            stretched = (-1)^qs * threej_s * pref_s * sixj_s
+            stretched = threej_s * pref_s * sixj_s
 
             if stretched != 0
                 amp *= sign(stretched)
