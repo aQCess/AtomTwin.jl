@@ -495,6 +495,31 @@ end
     @test polarizability_au(m_g, 850.0) ≈ polarizability_au(m_d, 850.0)
 end
 
+@testset "standard α: U = −α I/(2c ε₀), dipole lines at their true strength" begin
+    # Two factor-2 errors used to cancel in every α anchor in this file:
+    # `polarizability_si` took U/I = −α/(c ε₀), halving every α, and
+    # `_dipole_to_gamma_MHz` had 2/9π, doubling every dipole-specified line. So Rb
+    # and Sr α matched the literature while their traps were 2× too deep per
+    # intensity, and Yb's (gamma_MHz) α printed at half its value.
+    U = AtomTwin.Units
+    for (m, λ) in ((AtomTwin.RB87_POLARIZABILITY_5S12, 1064.0),
+                   (AtomTwin.SR88_POLARIZABILITY_1S0, 813.4),
+                   (AtomTwin.YB174_POLARIZABILITY_1S0, 759.35))
+        @test polarizability_si(m, λ) ≈ -2U.c * U.ε0 * AtomTwin._U_over_I(m, λ) rtol = 1e-12
+    end
+    # Absolute, independent of AtomTwin's line data: Grimm, Weidemüller &
+    # Ovchinnikov (2000) eq. 20 for Rb 5S₁/₂ at 1064 nm, linear polarisation, D2 and
+    # D1 with weights 2 : 1, the natural width (Steck), counter-rotating terms kept.
+    # The remaining ~1 % is the core and the 6P/7P lines.
+    Γ, ωL = 2π * 6.0666e6, 2π * U.c / 1064e-9
+    grimm = sum(w * -(π * U.c^2 * Γ / (2ω0^3)) * (1 / (ω0 - ωL) + 1 / (ω0 + ωL))
+                for (ω0, w) in ((2π * 384.2304844685e12, 2), (2π * 377.107463380e12, 1)))
+    @test isapprox(AtomTwin._U_over_I(AtomTwin.RB87_POLARIZABILITY_5S12, 1064.0), grimm; rtol = 0.02)
+    # …and the Yb ground state, built from measured widths, keeps its light shift but
+    # now reports its standard α: ≈ 141 a.u. static (it printed 70.8).
+    @test isapprox(polarizability_au(AtomTwin.YB174_POLARIZABILITY_1S0, 1e7), 141.5; rtol = 0.01)
+end
+
 @testset "Sr atom-facing polarizability methods resolve" begin
     sr = Strontium88Atom(; levels = [Level("1S0")])
     for st in ("1S0", "3P0")
@@ -726,9 +751,10 @@ end
         end
         job = compile(sys, seq)
         fs = [f for f in job.fields if f isa StarkShiftAC]
-        # The applied shift is - α I/(2 c ε₀ ħ) at the atom — an angular frequency.
-        # NOT α I/ħ: this assertion previously encoded that error, which is why
-        # it never caught it. Anchored to the trap depth as well, below.
+        # The applied shift is the trap potential −α I/(2c ε₀ ħ) at the atom — an
+        # angular frequency, NEGATIVE for a trapped level. NOT α I/ħ, and NOT
+        # +α I/(2c ε₀ ħ): this assertion previously encoded each error in turn, which
+        # is why it caught neither. Anchored to the trap depth, with its sign, below.
         #
         # Read the shift as `H` value × coefficient rather than from `_coeff`
         # alone: the magnitude lives in the operator and `_coeff` carries only
@@ -740,12 +766,15 @@ end
                        - fs[end].alpha * AtomTwin.Dynamiq.intensity(tw, sr.inner.x) /
                        (2 * AtomTwin.Units.c * AtomTwin.Units.ε0 * AtomTwin.Units.hbar);
                        rtol = 1e-12)
-        # Absolute anchor: the ground-state shift IS the trap depth in rad/s.
+        # Absolute anchor: the ground-state shift IS the trap potential in rad/s,
+        # −U0/ħ: the trapped ground state is lowered, as the force says. (An `abs`
+        # here once let the opposite sign through.)
         if !explicit
-            U0 = - AtomTwin.polarizability_si(AtomTwin.SR88_POLARIZABILITY_1S0, 520.0) *
-                 tw.I0 / (2 * AtomTwin.Units.c * AtomTwin.Units.ε0)
+            U0 = AtomTwin.polarizability_si(AtomTwin.SR88_POLARIZABILITY_1S0, 520.0) *
+                 tw.I0 / (2AtomTwin.Units.c * AtomTwin.Units.ε0)
             AtomTwin.Dynamiq.update!(fs[1], 1)
-            @test isapprox(shift(fs[1]), U0 / AtomTwin.Units.hbar; rtol = 1e-9)
+            @test U0 > 0
+            @test isapprox(shift(fs[1]), -U0 / AtomTwin.Units.hbar; rtol = 1e-9)
         end
         explicit && @test fs[1].alpha == 0.0      # reference = g sits at zero
         length(fs)
@@ -814,11 +843,13 @@ end
                       pol = [sind(θ), 0.0, cosd(θ)])
     I0 = 2 * 50e-3 / (π * w0^2)
 
-    # Analytic differential shift at the trap centre.
+    # Analytic differential shift at the trap centre: (U_e − U_g)/h. ³P₁ is the
+    # more deeply trapped here, so the line moves RED (Δ0 < 0). This test once
+    # expected the mirror image (U_g − U_e), the sign the engine then had.
     Δ0 = (light_shift_coeff_Hz_per_Wcm2(AtomTwin.YB174_POLARIZABILITY_3P1, 767.0;
-                F = 1//1, mF = 0//1, I = 0//1, ε_z = cosd(θ)) - 
+                F = 1//1, mF = 0//1, I = 0//1, ε_z = cosd(θ)) -
           light_shift_coeff_Hz_per_Wcm2(AtomTwin.YB174_POLARIZABILITY_1S0, 767.0)) * I0 * 1e-4
-          
+    @test Δ0 < 0
 
     "Detuning of the peak excitation for a static atom held at x₀."
     function resonance(x0)

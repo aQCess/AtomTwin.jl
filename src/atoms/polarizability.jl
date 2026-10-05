@@ -328,18 +328,10 @@ Compute total light shift per intensity U/I for a given model and wavelength.
 - `U/I` in J/(W/m²).
 """
 function _U_over_I(model::PolarizabilityModel, λ_nm::Real)
-    @warn "_U_over_I is deprecated; use light_shift_coeff_Hz_per_Wcm2 instead, which returns an equivalent result."
-    ωL = 2π * c / (λ_nm * 1e-9)
-
-    U_over_I = 0.0
-    for t in model.transitions
-        ω0 = 2π * abs(t.freq_THz) * 1e12     # |ω₀|; the sign is carried by f
-        Γ  = 2π * t.gamma_MHz     * 1e6
-        U_over_I += _calc_light_shift(ω0, Γ, ωL, t.f)
-    end
-
-    U_over_I += model.offset_Hz_per_Wm2 * h
-    return U_over_I
+    @warn "_U_over_I is deprecated; use light_shift_coeff_Hz_per_Wcm2 instead, which returns an equivalent result." maxlog = 1
+    # Scalar shift in Hz/(W/cm²) → J/(W/m²). (The line loop it replaces read `t.f`, the
+    # line-strength factor the transitions no longer carry.)
+    return h * light_shift_coeff_Hz_per_Wcm2(model, λ_nm) * 1e-4
 end
 
 # ======================================================================

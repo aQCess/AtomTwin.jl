@@ -81,7 +81,10 @@ end
     # resonance must switch the scattering off, whether the job is reused or rebuilt.
     g = HyperfineManifold(0//1, 0; label = "1S0", term = l"1S0")
     e = HyperfineManifold(1//1, 1; label = "3P1", term = l"3P1", g_F = 1.493)
-    δ = Parameter(:δ_img, -2.595)
+    # On resonance with m_F = −1: Zeeman −1.50 MHz plus the trap's −1.09 MHz (³P₁
+    # trapped ~2× deeper, so red) puts it at delta = −2.59 MHz, i.e. δ_img = +2.595.
+    # (This was −2.595, the mirror image, while the trap light shift had its sign wrong.)
+    δ = Parameter(:δ_img, 2.595)
 
     yb  = Ytterbium174Atom(; levels = [g..., e...],
                            v_init = maxwellboltzmann(T = 5e-6))
@@ -100,7 +103,7 @@ end
         Pulse(cp, 5e-4)
     end
     st  = AtomTwin._tovector(g[0])
-    job = compile(sys, seq; initial_state = st, shots = 32, δ_img = -2.595)
+    job = compile(sys, seq; initial_state = st, shots = 32, δ_img = 2.595)
 
     # The trap contributes light-shift fields that have no node behind them; that
     # offset is precisely what used to be missing.

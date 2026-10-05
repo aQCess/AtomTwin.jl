@@ -75,19 +75,21 @@ trap = GaussianBeam(λ = λ_trap, w0 = w0, P = P_trap,
 
 I0    = 2 * P_trap / (π * w0^2)
 α_g   = polarizability_si(yb, l"1S0", λ_trap * 1e9)
-U0    = α_g * I0 / (c * Units.ε0)                     # trap depth (J)
-ω_r   = sqrt(4 * α_g * I0 / (174amu * c * Units.ε0 * w0^2))
+U0    = α_g * I0 / (2c * Units.ε0)                    # trap depth (J), U = αI/(2cε₀)
+ω_r   = sqrt(4U0 / (174amu * w0^2))
 
 @printf("trap depth      = %.0f µK  (%.2f MHz)\n", U0 / kb * 1e6, U0 / (2π * hbar) / 1e6)
 @printf("radial freq     = %.1f kHz\n", ω_r / 2π / 1e3)
 @printf("T / U₀          = %.3f\n", T_atom * kb / U0)
 
-# The differential shift each sublevel sees at the trap centre. At the magic
-# angle these coincide, which is the point.
-Δ_centre = [ (light_shift_coeff_Hz_per_Wcm2(yb, l"1S0", λ_trap * 1e9) -
-              light_shift_coeff_Hz_per_Wcm2(yb, l"3P1", λ_trap * 1e9;
+# The differential shift each sublevel sees at the trap centre: the transition
+# moves by (U_e − U_g)/h, and `light_shift_coeff_Hz_per_Wcm2 × I` is each level's
+# U/h. ³P₁ is trapped more deeply than ¹S₀ here, so the line moves to the RED. At
+# the magic angle the three sublevels coincide, which is the point.
+Δ_centre = [ (light_shift_coeff_Hz_per_Wcm2(yb, l"3P1", λ_trap * 1e9;
                                             F = 1//1, mF = mF, I = 0//1,
-                                            ε_z = cosd(θ_pol))) * I0 * 1e-4
+                                            ε_z = cosd(θ_pol)) -
+              light_shift_coeff_Hz_per_Wcm2(yb, l"1S0", λ_trap * 1e9)) * I0 * 1e-4
              for mF in (-1//1, 0//1, 1//1) ]
 @printf("light shift     = %.2f MHz (m_F = 0, ±1 degenerate at the magic angle)\n",
         Δ_centre[2] / 1e6)
@@ -128,10 +130,12 @@ end
 # on it naturally:
 #
 #   * **0 MHz** — where the line would sit with no trap at all.
-#   * **Δ_peak** — the shift at the trap centre, the largest an atom can feel.
+#   * **Δ_peak** — the shift at the trap centre, the largest an atom can feel
+#     (negative: the line moves red).
 #
 # A thermal atom spends its time away from the centre, where the intensity is
-# lower, so its resonance sits *below* Δ_peak. The Zeeman triplet straddles it.
+# lower, so its resonance sits between Δ_peak and the bare line. The Zeeman
+# triplet straddles it.
 
 Δ_peak   = Δ_centre[2] / 1e6                     # MHz, at the trap centre
 δ_span   = 2π * 7MHz                             # ≈1.7 Zeeman splittings either side

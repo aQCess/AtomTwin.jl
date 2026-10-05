@@ -88,6 +88,10 @@ old tolerance. Re-run anything you intend to compare against 0.1.x.
   `PhotoDetectorSpec`, `getjumps`, `getheffective`, `getliouvillian`.
 - Typed term symbols: `TermSymbol`, `@term`, `l"3P1"`.
 - A precompile workload, and solver benchmarks under `bench/`.
+- `add_decay!(…; λ, dipole)`: the emission recoil follows the transition dipole's
+  pattern `∝ 1 − |n̂·d̂|²` instead of being isotropic. A dipole along x̂ puts 1/5 of
+  its recoil energy along x, not 1/3, which matters when one dipole dominates the
+  scattering. Without `dipole`, unchanged (same RNG stream).
 
 ### Fixed
 - `process_tomography` evolved every input state from the first input: an X
