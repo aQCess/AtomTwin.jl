@@ -188,7 +188,8 @@ computed at the wavelengths the system's beams use.
 
 # Reference level
 
-By default each level is shifted by its own `α I/ħ`. Pass `reference` to measure
+By default each level is shifted by its own trap potential `U/ħ = −α I/(2c ε₀ ħ)`
+— down, where it is trapped. Pass `reference` to measure
 against one level instead, which sets that level's shift to zero and leaves the
 others as differences — convenient when only a transition frequency matters.
 
@@ -252,7 +253,8 @@ Scope and omissions, all deliberate:
   explicit request wins over the automatic one and the shift is never applied
   twice.
 
-The shift is **absolute**: each level takes its own `α I/ħ`. The common-mode part
+The shift is **absolute**: each level takes its own trap potential `U/ħ` (negative
+where it is trapped, matching the dipole force). The common-mode part
 is a global phase, and the Chebyshev propagator sets its degree from the spectral
 half-width `(Emax−Emin)/2` after recentering on `Ē`, so an offset costs nothing.
 """

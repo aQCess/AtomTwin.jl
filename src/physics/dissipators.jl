@@ -24,9 +24,22 @@ matters whenever the recoil energy is not negligible against the trap depth:
 ```julia
 add_decay!(sys, yb, e => g, Γ; λ = 556e-9, clicks = pd)
 ```
+
+The kick is isotropic unless `dipole` gives the transition dipole (a 3-vector in the
+lab frame, complex for circular polarisation; normalised internally). Kicks then
+follow its emission pattern `∝ 1 − |n̂·d̂|²`. This matters when one dipole dominates
+the scattering: a dipole along x̂ puts 1/5 of its recoil energy along x, against
+1/3 for isotropic emission.
+
+```julia
+add_decay!(sys, yb, ex => g, Γ; λ = 556e-9, dipole = [1, 0, 0])   # linear, along x
+add_decay!(sys, yb, ep => g, Γ; λ = 556e-9, dipole = [1, im, 0])  # σ⁺ about z
+```
 """
 function add_decay!(system, atom::AbstractAtom, level::Pair{<:AbstractLevel, <:AbstractLevel}, Gamma;
-                    active=true, clicks=nothing, λ=nothing)
+                    active=true, clicks=nothing, λ=nothing, dipole=nothing)
+    dipole === nothing || λ !== nothing ||
+        error("add_decay!: `dipole` shapes the recoil kick, which needs the photon wavelength `λ`.")
     node = DecayNode(Gamma, atom, level; active=active, clicks=_clicks_name(clicks))
     build_node!(node, system.basis)
     push!(system, node)
@@ -36,6 +49,13 @@ function add_decay!(system, atom::AbstractAtom, level::Pair{<:AbstractLevel, <:A
         e_idx = atom.level_indices[level.first]
         g_idx = atom.level_indices[level.second]
         atom.inner.lambda[e_idx => g_idx] = Float64(λ)
+        if dipole === nothing
+            delete!(atom.inner.dipole, e_idx => g_idx)
+        else
+            d = ComplexF64.(collect(dipole))
+            (length(d) == 3 && norm(d) > 0) || error("add_decay!: `dipole` must be a nonzero 3-vector.")
+            atom.inner.dipole[e_idx => g_idx] = Tuple(d ./ norm(d))
+        end
     end
     return node._field
 end

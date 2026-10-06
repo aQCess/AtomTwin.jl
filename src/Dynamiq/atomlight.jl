@@ -331,14 +331,16 @@ The stored `alpha` is read from `atom.alpha` at the beam's wavelength — the sa
 array the dipole force uses, so the shift an atom feels and the force that moves it
 come from one number.
 
-`update!` evaluates the local intensity at the atom's position and sets the
-coefficient to `α I / ħ`, an angular frequency.
+`update!` evaluates the local intensity at the atom's position; the level's energy
+moves by its trap potential `U = −α I/(2c ε₀)`, i.e. `−α I/(2c ε₀ ħ)` in angular
+frequency. A trapped level (`α > 0`) is **lowered**, by the same potential whose
+gradient is the dipole force.
 
 # Reference level
 
-By default the shift is **absolute**: level `lvl` is shifted by its own `α I/ħ`.
-Pass `reference = i` to shift by `(α[lvl] − α[i]) I/ħ` instead, which puts level
-`i` at zero — convenient when only a transition frequency matters.
+By default the shift is **absolute**: level `lvl` is shifted by its own `U/ħ`.
+Pass `reference = i` to shift by `−(α[lvl] − α[i]) I/(2c ε₀ ħ)` instead, which puts
+level `i` at zero — convenient when only a transition frequency matters.
 
 !!! note "Changed behaviour"
     This previously subtracted `mean(alphas)`, the mean over *every* level in the
@@ -375,7 +377,12 @@ mutable struct StarkShiftAC{A} <: AbstractField
     end
 end
 
-_peak_shift(α, beam) = α * peak_intensity(beam) / (c * ε0 * hbar)
+# The level's potential U = −α I/(2c ε₀) at peak intensity, in rad/s: NEGATIVE for a
+# trapped level. The sign was once +, which raised trapped levels while the force
+# (`force`, attractive) lowered them: every differential light shift came out
+# mirrored about the bare line, and an absorption–emission cycle did not conserve
+# energy.
+_peak_shift(α, beam) = -α * peak_intensity(beam) / (2c * ε0 * hbar)
 
 """
     set_alpha!(f::StarkShiftAC, α) -> f
@@ -404,13 +411,13 @@ end
     update!(f::StarkShiftAC, step)
 
 Update the AC Stark shift coefficient from the instantaneous beam
-intensity at the atomic position. The stored coefficient is
-\\(\alpha I / \\hbar\\) in angular-frequency units.
+intensity at the atomic position: the term is `_peak_shift × I(x)/I₀`, the level's
+trap potential `U(x)/ħ = −α I(x)/(2c ε₀ ħ)` in angular-frequency units.
 """
 function update!(f::StarkShiftAC{A}, ::Real) where A
-    # U = -α I/(c ε₀) is the convention `polarizability_si` sets, so the angular
-    # frequency is α I/(c ε₀ ħ) -- NOT α I/ħ. The missing 1/(c ε₀) is the vacuum
-    # impedance, 376.73, and it made every trap light shift ~380x too small.
+    # U = -α I/(2c ε₀) is the (standard) convention `polarizability_si` sets, so the
+    # angular frequency is -α I/(2c ε₀ ħ) -- NOT α I/ħ. A missing 1/(c ε₀), the vacuum
+    # impedance 376.73, once made every trap light shift ~380x too small.
     # This was unexercised until `add_light_shift!` existed: StarkShiftAC shipped
     # in v0.1.0 but was never constructed anywhere.
     #
@@ -554,7 +561,7 @@ end
 
 """
     NLevelAtom(n; x = [0, 0, 0], v = [0, 0, 0],
-                  m = 1amu, alphas = Dict(), lambdas = Dict())
+                  m = 1amu, alphas = Dict(), lambdas = Dict(), dipoles = Dict())
 
 Minimal `n`-level atomic model with classical center-of-mass motion.
 
@@ -562,6 +569,8 @@ Minimal `n`-level atomic model with classical center-of-mass motion.
 - `m`: atomic mass.
 - `alphas`: dictionary of scalar or tensor polarizabilities keyed by wavelength.
 - `lambdas`: dictionary of transition wavelengths keyed by level pairs.
+- `dipoles`: dictionary of unit transition dipoles (complex 3-vectors, lab frame)
+  keyed by level pairs; sets the angular pattern of the emission recoil.
 
 Internal fields: `_P` and `_pidx` cache populations and basis-dependent index
 mappings; `_F`/`_Fvalid` the velocity-Verlet force of the previous step; `_Eb` the
@@ -575,6 +584,7 @@ mutable struct NLevelAtom <: AbstractAtom
     m::Float64
     alpha::Dict{Float64,Vector{Float64}}
     lambda::Dict{Pair{Int,Int},Float64}
+    dipole::Dict{Pair{Int,Int},NTuple{3,ComplexF64}}
 
     _P::Vector{Float64}           # populations, used for intermediate computations
     _pidx::Vector{Vector{Int}}    # updated when a basis is constructed
@@ -588,8 +598,9 @@ mutable struct NLevelAtom <: AbstractAtom
                         v       = [0.0, 0.0, 0.0],
                         m       = 1amu,
                         alphas  = Dict(),
-                        lambdas = Dict())
-        new(n, x, v, m, alphas, lambdas, zeros(n), [[0]], zeros(3), false, zeros(3))
+                        lambdas = Dict(),
+                        dipoles = Dict())
+        new(n, x, v, m, alphas, lambdas, dipoles, zeros(n), [[0]], zeros(3), false, zeros(3))
     end
 end
 
@@ -597,7 +608,7 @@ end
     copy(a::NLevelAtom)
 
 Create a deep copy of an `NLevelAtom`, including position, velocity,
-polarizabilities, transition wavelengths, and internal cache fields.
+polarizabilities, transition wavelengths and dipoles, and internal cache fields.
 """
 function copy(a::NLevelAtom)
     # Recreate via public API
@@ -608,6 +619,7 @@ function copy(a::NLevelAtom)
         m       = a.m,
         alphas  = Dict(k => copy(v) for (k, v) in a.alpha),
         lambdas = copy(a.lambda),
+        dipoles = copy(a.dipole),
     )
     # Copy internal/derived state
     b._P      = copy(a._P)

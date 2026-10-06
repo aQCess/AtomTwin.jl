@@ -71,6 +71,25 @@ old tolerance. Re-run anything you intend to compare against 0.1.x.
 - `RampRow`/`RampCol`: a vector `final_amplitude` gives one target per row
   (column), as documented, and the ramp respects the row × column amplitude
   factorisation that `AmplRow`/`AmplCol` apply.
+- Polarizabilities use the standard relation U = −α I/(2cε₀), and `dipole_ea0` is
+  read in the Wigner-3j (Safronova) convention, with the Clebsch–Gordan (Steck)
+  convention also accepted. Two compensating factors of 2 are gone: every α
+  printed at half its standard value, while dipole-specified lines (Rb, Sr) were
+  twice too strong, so those traps were 2× too deep per intensity. Rb-87 5S₁/₂ now
+  gives 318 a.u. static and 687 a.u. at 1064 nm. (H. Schmit-Veiler)
+- The tensor polarizability α⁽²⁾ carries the 3π ε₀c³ prefactor and the same
+  line-strength factors as the scalar part. For Yb-174 ³P₁ the m = 0 magic angle at
+  759.3 nm is now 39.0° (measured 38.5(9)°); at 767 nm, β∥ = 0.38 and β⊥ = 1.82
+  relative to ¹S₀. (H. Schmit-Veiler)
+- `polarizability_si` and `polarizability_au` take the same `F`, `mF`, `I`, `ε_z`
+  keywords as `light_shift_coeff_Hz_per_Wcm2` (tensor part included); for I = 0
+  isotopes the fine-structure quantum numbers are used automatically. `dipole_ea0`
+  lines may go to a lower-lying level. The transition fields `Jg` (a duplicate of
+  `J`) and `f` (the line-strength factor) are gone. (H. Schmit-Veiler)
+- The semiclassical solvers are second order in `dt` for moving atoms (split
+  velocity Verlet), and the fully classical (Newton) solver is second order with
+  moving beams; they were first order. `test/unit/test_solver_order.jl` checks the
+  convergence order. (H. Schmit-Veiler)
 
 ### Added
 - `polarizabilities = Dict(term => model)` on any atom constructor (documented,
@@ -88,6 +107,10 @@ old tolerance. Re-run anything you intend to compare against 0.1.x.
   `PhotoDetectorSpec`, `getjumps`, `getheffective`, `getliouvillian`.
 - Typed term symbols: `TermSymbol`, `@term`, `l"3P1"`.
 - A precompile workload, and solver benchmarks under `bench/`.
+- `add_decay!(…; λ, dipole)`: the emission recoil follows the transition dipole's
+  pattern `∝ 1 − |n̂·d̂|²` instead of being isotropic. A dipole along x̂ puts 1/5 of
+  its recoil energy along x, not 1/3, which matters when one dipole dominates the
+  scattering. Without `dipole`, unchanged (same RNG stream).
 
 ### Fixed
 - `process_tomography` evolved every input state from the first input: an X
@@ -116,6 +139,10 @@ old tolerance. Re-run anything you intend to compare against 0.1.x.
   `shots ≥ 4` inside a `Threads.@threads` loop.
 - `isequal` on two atoms threw; the API docs showed a non-existent
   `noise_model` keyword and argument order for `laser_freq_psd`.
+- The trap light shift raised a trapped level instead of lowering it, while the
+  force still attracted: every differential light shift came out mirrored about the
+  bare line. (H. Schmit-Veiler, S. Whitlock)
+- The Rb-87 polarizability offset was off by a factor of 2. (H. Schmit-Veiler)
 
 ---
 
