@@ -285,9 +285,10 @@ function compile(sys::System, seq::Sequence;
 
     # === PHASE 2: INITIALIZE ATOMS (uses resolved beams, may sample positions/velocities) ===
     q_axis = getquantizationaxis(sys)
+    tensor_pairs = _tensor_may_vary(sys) ? :all : :fit
     atoms = [initialize!(sys.atoms[i], sys.atoms[i].inner;
                          beams=resolved_beams, rng=rng, param_values=param_values,
-                         q_axis=q_axis)
+                         q_axis=q_axis, tensor_pairs=tensor_pairs)
              for i in 1:length(sys.atoms)]
 
     # === PHASE 3: COMPILE REMAINING NODES (CouplingNode, DetuningNode, etc.) ===
@@ -582,9 +583,7 @@ function recompile!(job::SimulationJob, sys::System;
     # so the walk below does not reach them). Keep them in step with the α just
     # recomputed; a no-op unless α changed.
     for k in 1:job.n_auto_fields
-        f = job.fields[k]
-        α = f.atom.alpha[getwavelength(f.beam)][f.level]
-        α == f.alpha || Dynamiq.set_alpha!(f, α)
+        _refresh_auto_shift!(job.fields[k])
     end
 
     # Phase 3: recompile remaining nodes, each in its declared switch state.
@@ -615,6 +614,16 @@ function _restore_atoms!(job::SimulationJob)
         fill!(a._Eb, 0.0)
     end
     return job
+end
+
+# An automatic light shift's α, from its atom's as `initialize!` just left it.
+function _refresh_auto_shift!(f::StarkShiftAC)
+    α = f.atom.alpha[getwavelength(f.beam)][f.level]
+    α == f.alpha || Dynamiq.set_alpha!(f, α)
+end
+function _refresh_auto_shift!(f::Dynamiq.StarkShiftACTensor)
+    α = f.atom.alpha_off[getwavelength(f.beam)]
+    α == f.alpha || Dynamiq.set_alpha!(f, α)
 end
 
 # Reset what a shot starts from: the quantum state (from `job.initial_state`)

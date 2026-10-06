@@ -4,8 +4,12 @@
 
 """
     Jump(b, atom, transition, rate; blockade = 0)
+    Jump(b, atom, [(e => g) => c, …], rate; blockade = 0)
 
-Generic quantum jump process for a single atomic transition with decay rate `rate`.
+Generic quantum jump process with decay rate `rate`: a single atomic transition,
+or several branches `L = √rate Σ c |g⟩⟨e|` that decay coherently — one photon
+polarisation of a manifold decay. Each source level `e` may appear only once, so
+`L†L` stays diagonal.
 
 The constructor builds the collapse operator `L` as an `Op` in basis `b`,
 optionally with a Rydberg blockade constraint on a given level. The same
@@ -18,7 +22,8 @@ so the jump itself carries no detector list.
 """
 mutable struct Jump
     atom::AbstractAtom
-    transition::Pair{Int,Int}
+    transition::Pair{Int,Int}     # first branch; keys the recoil wavelength and dipole
+    sources::Vector{Int}          # every branch's source level
     J::Op                         # collapse operator L
     _rate::Float64                # physical decay rate (stored for parameter updates)
 
@@ -28,16 +33,25 @@ mutable struct Jump
 
     _coeff::Base.RefValue{ComplexF64}
 
-    function Jump(b, atom, transition, rate; blockade = 0)
+    Jump(b, atom, transition::Pair{Int,Int}, rate; blockade = 0) =
+        Jump(b, atom, [transition => 1.0], rate; blockade = blockade)
+
+    function Jump(b, atom, branches::Vector{<:Pair{Pair{Int,Int},<:Real}}, rate; blockade = 0)
+        sources = [tr.first for (tr, _) in branches]
+        allunique(sources) || error("Jump: each source level may decay through only one branch.")
 
         # Always build the collapse operator L
-        J = Op(b, atom, transition, sqrt(rate); jump = true, blockade = blockade)
+        forward = Tuple{Int,Int,ComplexF64}[]
+        for (tr, c) in branches
+            append!(forward, first(operator1(b, [atom], tr, c * sqrt(rate); jump = true, blockade = blockade)))
+        end
+        J = Op(forward, Tuple{Int,Int,ComplexF64}[], b.dim)
 
         # Helpers are left uninitialized here; evolve! will fill them
         Hnh        = nothing
         LdagL_diag = nothing
 
-        return new{}(atom, transition, J, Float64(rate),
+        return new{}(atom, first(branches).first, sources, J, Float64(rate),
                      Hnh, LdagL_diag,
                      Ref(ComplexF64(1.0)))
     end
@@ -408,13 +422,67 @@ function set_alpha!(f::StarkShiftAC, α::Float64)
 end
 
 """
+    StarkShiftACTensor(b, atom, beam)
+
+The sublevel-mixing part of the tensor light shift of `atom` in a trapping `beam`:
+`Σ U_ij/ħ |i⟩⟨j| + h.c.` over the level pairs `atom._cpairs`, with
+`U_ij = −α_ij I/(2c ε₀)` and `α_ij` from `atom.alpha_off`. With the per-level
+[`StarkShiftAC`](@ref), the diagonal, it is the full tensor shift, whose eigenstates
+are quantised along the trap polarisation rather than the quantization axis. The
+intensity envelope is updated as for `StarkShiftAC`.
+"""
+mutable struct StarkShiftACTensor{A} <: AbstractField
+    const atom::A
+    const H::Op
+    const beam::AbstractBeam
+    const _n::Vector{Int}           # entries of `H.forward` per pair, in `_cpairs` order
+    const alpha::Vector{ComplexF64} # refreshed per shot by `set_alpha!`
+    const _coeff::Base.RefValue{ComplexF64}
+    const _amplitude::Base.RefValue{ComplexF64}
+    const _geom::Base.RefValue{ComplexF64}
+
+    function StarkShiftACTensor(b, atom, beam)
+        α  = atom.alpha_off[getwavelength(beam)]
+        fw = Tuple{Int,Int,ComplexF64}[]
+        rv = Tuple{Int,Int,ComplexF64}[]
+        n  = Int[]
+        for (p, (i, j)) in enumerate(atom._cpairs)
+            f, r = operator1(b, [atom], j => i, _peak_shift(α[p], beam))   # |i⟩⟨j| + h.c.
+            append!(fw, f); append!(rv, r); push!(n, length(f))
+        end
+        new{typeof(atom)}(atom, Op(fw, rv, b.dim), beam, n, copy(α), Ref(Complex(0.0)),
+                          Ref(Complex(1.0)), Ref(Complex(0.0)))
+    end
+end
+
+"""
+    set_alpha!(f::StarkShiftACTensor, α) -> f
+
+Refresh the off-diagonal polarizabilities in place, as for `StarkShiftAC`.
+"""
+function set_alpha!(f::StarkShiftACTensor, α::Vector{ComplexF64})
+    copyto!(f.alpha, α)
+    fw, rv = f.H.forward, f.H.reverse
+    k = 0
+    @inbounds for (p, n) in enumerate(f._n)
+        peak = ComplexF64(_peak_shift(α[p], f.beam))
+        for _ in 1:n
+            k += 1
+            i, j, _ = fw[k]; fw[k] = (i, j, peak)
+            i, j, _ = rv[k]; rv[k] = (i, j, conj(peak))
+        end
+    end
+    return f
+end
+
+"""
     update!(f::StarkShiftAC, step)
 
 Update the AC Stark shift coefficient from the instantaneous beam
 intensity at the atomic position: the term is `_peak_shift × I(x)/I₀`, the level's
 trap potential `U(x)/ħ = −α I(x)/(2c ε₀ ħ)` in angular-frequency units.
 """
-function update!(f::StarkShiftAC{A}, ::Real) where A
+function update!(f::Union{StarkShiftAC, StarkShiftACTensor}, ::Real)
     # U = -α I/(2c ε₀) is the (standard) convention `polarizability_si` sets, so the
     # angular frequency is -α I/(2c ε₀ ħ) -- NOT α I/ħ. A missing 1/(c ε₀), the vacuum
     # impedance 376.73, once made every trap light shift ~380x too small.
@@ -530,7 +598,8 @@ written there, leaving it permanently on. Those keep the commanded amplitude in
 product current when the amplitude is written between updates.
 """
 envelope(f) = f._coeff
-envelope(f::Union{PlanarCoupling, GaussianCoupling, StarkShiftAC, VdWInteraction}) =
+envelope(f::Union{PlanarCoupling, GaussianCoupling, StarkShiftAC, StarkShiftACTensor,
+                  VdWInteraction}) =
     Envelope(f._amplitude, f._coeff, f._geom)
 
 """
@@ -576,6 +645,10 @@ Internal fields: `_P` and `_pidx` cache populations and basis-dependent index
 mappings; `_F`/`_Fvalid` the velocity-Verlet force of the previous step; `_Eb` the
 MCWF radiation-pressure excited-branch momentum (see `RadiationPressure`), which
 carries across instructions and is reset per shot.
+
+Sublevel mixing by the tensor light shift: `alpha_off[λ][p]` is `⟨i|α|j⟩` for the
+level pair `_cpairs[p] = (i, j)`, `i < j`; `_cidx[p]` the basis-state pairs that
+pair connects and `_C[p]` its reduced coherence `ρ_ij`, refreshed with `_P`.
 """
 mutable struct NLevelAtom <: AbstractAtom
     n::Int
@@ -590,8 +663,13 @@ mutable struct NLevelAtom <: AbstractAtom
     _pidx::Vector{Vector{Int}}    # updated when a basis is constructed
     _F::Vector{Float64}           # force cached from the previous step (velocity Verlet)
     _Fvalid::Bool                 # false until _F holds a force for the current x
-    _Eb::Vector{Float64}          # MCWF radiation pressure: excited-branch momentum/ħ
-                                  # × population, m⁻¹ (see `RadiationPressure`)
+    _Eb::Vector{Float64}          # MCWF radiation pressure: per excited sub-branch its
+                                  # momentum/ħ × population (m⁻¹) and population, in
+                                  # blocks of four (see `RadiationPressure`)
+    alpha_off::Dict{Float64,Vector{ComplexF64}}   # ⟨i|α|j⟩ per `_cpairs` entry
+    _cpairs::Vector{Tuple{Int,Int}}               # level pairs the tensor shift mixes
+    _cidx::Vector{Vector{Tuple{Int,Int}}}         # their basis-state pairs
+    _C::Vector{ComplexF64}                        # their reduced coherences ρ_ij
 
     function NLevelAtom(n;
                         x       = [0.0, 0.0, 0.0],
@@ -600,7 +678,9 @@ mutable struct NLevelAtom <: AbstractAtom
                         alphas  = Dict(),
                         lambdas = Dict(),
                         dipoles = Dict())
-        new(n, x, v, m, alphas, lambdas, dipoles, zeros(n), [[0]], zeros(3), false, zeros(3))
+        new(n, x, v, m, alphas, lambdas, dipoles, zeros(n), [[0]], zeros(3), false, zeros(4),
+            Dict{Float64,Vector{ComplexF64}}(), Tuple{Int,Int}[], Vector{Tuple{Int,Int}}[],
+            ComplexF64[])
     end
 end
 
@@ -627,6 +707,10 @@ function copy(a::NLevelAtom)
     b._F      = copy(a._F)
     b._Fvalid = a._Fvalid
     b._Eb     = copy(a._Eb)
+    b.alpha_off = Dict(k => copy(v) for (k, v) in a.alpha_off)
+    b._cpairs = copy(a._cpairs)
+    b._cidx   = [copy(idx) for idx in a._cidx]
+    b._C      = copy(a._C)
     return b
 end
 

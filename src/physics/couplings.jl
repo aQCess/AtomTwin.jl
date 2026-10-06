@@ -99,11 +99,8 @@ function Efield_spherical(beam, r::AbstractVector{<:Real};
     Ex, Ey, Ez = AtomTwin.Dynamiq.Efield(beam, r)
     E = ComplexF64[Ex, Ey, Ez]
 
-    # --- orthonormal basis aligned with q_axis (same as rabi_frequency) ---
-    ezp = normalize(collect(q_axis))
-    ref  = abs(ezp[1]) < 0.9 ? [1.0, 0.0, 0.0] : [0.0, 1.0, 0.0]
-    exp  = normalize(ref - dot(ref, ezp)*ezp)   # Gram-Schmidt
-    eyp  = cross(ezp, exp)
+    # --- orthonormal basis aligned with q_axis (shared with the tensor light shift) ---
+    exp, eyp, ezp = _quantization_frame(q_axis)
 
     # project E into primed basis
     Exp = sum(E .* exp)
@@ -186,16 +183,19 @@ in the Racah phase convention (Condon–Shortley phases).
 
 The implementation includes:
 
-  • Zeeman (3j) angular factor  
-  • Hyperfine recoupling (6j) factor  
-  • The spherical tensor phase factor (-1)^q  
+  • Zeeman (3j) angular factor
+  • Hyperfine recoupling (6j) factor
   • A global phase choice such that a stretched σ⁺ transition
     (if it exists) is positive
+
+`d_q = ê_q·d` are the spherical components that pair with the field coefficients
+`E_q = ê_q*·E` of `Efield_spherical` (E = Σ_q E_q ê_q), so d·E = Σ_q E_q d_q: there is
+no (−1)^q. (There was one: σ± came out with the wrong sign against π, and light polarised
+along (x̂+ẑ)/√2 excited the dipole (−x̂+ẑ)/√2.)
 
 The formula used is
 
     ⟨F′ m′ | d_q | F m⟩ =
-        (-1)^q
         (-1)^(F′ - m′)
         ( F′  1   F
          -m′  q   m )
@@ -248,7 +248,7 @@ function dipole_matrix_element(atom::AbstractAtom, g::HyperfineLevel, e::Hyperfi
     pref = (-1)^(Fp + J + 1 + I) *
            sqrt((2Fp + 1)*(2F + 1))
 
-    amp = (-1)^q * threej * pref * sixj
+    amp = threej * pref * sixj
 
     # ---- Fix global phase via stretched σ⁺ ----
     ms = F
@@ -263,7 +263,7 @@ function dipole_matrix_element(atom::AbstractAtom, g::HyperfineLevel, e::Hyperfi
         if threej_s != 0
             sixj_s = sixj
             pref_s = pref
-            stretched = (-1)^qs * threej_s * pref_s * sixj_s
+            stretched = threej_s * pref_s * sixj_s
 
             if stretched != 0
                 amp *= sign(stretched)
@@ -373,15 +373,38 @@ end
     compute_coupling_strength(g::FineLevel, e::HyperfineLevel,
                               atom, Ω_π, Ω_σ⁺, Ω_σ⁻)
 
-Compute the effective coupling strength from a fine-structure level to
-a hyperfine level.
+Compute the effective coupling strength from a fine-structure level `g`
+(J, m_J, hyperfine unresolved) to a hyperfine level `e` (F, m_F).
 
-This is defined symmetrically via
-`compute_coupling_strength(e, g, atom, Ω_π, Ω_σ⁺, Ω_σ⁻)`.
+The mirror of the hyperfine → fine method: `e` is decomposed into
+`|J_e, m_J′; I, m_I⟩` components, and `g` couples to each with the dipole
+Clebsch–Gordan coefficient `⟨J_g, m_J; 1, Δm | J_e, m_J′⟩`, `Δm = m_J′ − m_J`.
+(It used to call the hyperfine → fine method with the levels swapped, which
+took Δm = m_J − m_J′ — σ⁺ and σ⁻ exchanged — and ran the dipole coefficient
+from the excited level.)
 """
 function compute_coupling_strength(g::FineLevel, e::HyperfineLevel, atom, Ω_π, Ω_σ⁺, Ω_σ⁻)
-    # Symmetric to above, swap roles.
-    return compute_coupling_strength(e, g, atom, Ω_π, Ω_σ⁺, Ω_σ⁻)
+    Jg, mJg = g.J, g.mJ
+    F, mF, Je = e.F, e.mF, e.J
+    I = atom.I
+    total = 0.0
+    for m_J in -Je:1:Je
+        m_I = mF - m_J
+        abs(m_I) > I && continue
+        Δm = m_J - mJg
+        abs(Δm) > 1 && continue
+        try
+            c_hyper  = clebschgordan(Je, m_J, I, m_I, F, mF)
+            c_dipole = clebschgordan(Jg, mJg, 1, Δm, Je, m_J)
+            Ω = Δm == 0  ? Ω_π * c_hyper * c_dipole :
+                Δm == +1 ? Ω_σ⁺ * c_hyper * c_dipole :
+                           Ω_σ⁻ * c_hyper * c_dipole
+            total += Ω
+        catch
+            continue
+        end
+    end
+    return total
 end
 
 

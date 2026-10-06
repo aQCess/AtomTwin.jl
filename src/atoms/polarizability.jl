@@ -525,6 +525,42 @@ along the axis, `−1/2` for polarisation perpendicular to it, and vanishes at t
 """
 _polarization_factor(ε_z::Real) = (3 * abs2(ε_z) - 1) / 2
 
+"""
+    _tensor_operator(F, ε) -> Matrix{ComplexF64}
+
+The full sublevel operator of the tensor light shift, on `m = −F, …, F`, for the
+unit polarisation `ε` given in the quantisation frame:
+
+    T = [3/2 ((ε*·F)(ε·F) + (ε·F)(ε*·F)) − F(F+1)] / (F(2F−1))
+
+so that the shift is `α₀ + α⁽²⁾ T`. Its diagonal is
+`_polarization_factor(|ε_z|) · _tensor_geometry(F, m)`; the rest mixes `Δm = ±1`
+(∝ ε_z ε_⊥) and `Δm = ±2` (∝ ε_⊥²) unless `ε` is along the axis or circular about
+it. Zero for `F = 0, 1/2`.
+"""
+function _tensor_operator(F::Rational{Int}, ε::AbstractVector)
+    n   = Int(2F + 1)
+    den = F * (2F - 1)
+    T   = zeros(ComplexF64, n, n)
+    den == 0 && return T
+    m  = [-F + k for k in 0:n-1]
+    Fz = zeros(ComplexF64, n, n)
+    Fp = zeros(ComplexF64, n, n)            # F₊|m⟩ = √(F(F+1) − m(m+1)) |m+1⟩
+    for k in 1:n
+        Fz[k, k] = m[k]
+        k < n && (Fp[k+1, k] = sqrt(Float64(F * (F + 1) - m[k] * (m[k] + 1))))
+    end
+    Fx = (Fp + Fp') / 2
+    Fy = (Fp - Fp') / 2im
+    A  = ε[1] * Fx + ε[2] * Fy + ε[3] * Fz                       # ε·F
+    B  = conj(ε[1]) * Fx + conj(ε[2]) * Fy + conj(ε[3]) * Fz     # ε*·F
+    T .= 1.5 .* (B * A + A * B)
+    for k in 1:n
+        T[k, k] -= F * (F + 1)
+    end
+    return T ./ Float64(den)
+end
+
 # ======================================================================
 # Public API
 # ======================================================================

@@ -38,14 +38,21 @@ add_decay!(sys, yb, ep => g, Γ; λ = 556e-9, dipole = [1, im, 0])  # σ⁺ abou
 """
 function add_decay!(system, atom::AbstractAtom, level::Pair{<:AbstractLevel, <:AbstractLevel}, Gamma;
                     active=true, clicks=nothing, λ=nothing, dipole=nothing)
+    return _add_decay!(system, atom, [level => 1.0], Gamma; active, clicks, λ, dipole)
+end
+
+# One jump `L = √Gamma Σ c |g⟩⟨e|` over `branches = [(e => g) => c, …]`.
+function _add_decay!(system, atom::AbstractAtom, branches, Gamma;
+                     active=true, clicks=nothing, λ=nothing, dipole=nothing)
     dipole === nothing || λ !== nothing ||
         error("add_decay!: `dipole` shapes the recoil kick, which needs the photon wavelength `λ`.")
-    node = DecayNode(Gamma, atom, level; active=active, clicks=_clicks_name(clicks))
+    level = first(branches).first
+    node = DecayNode(Gamma, atom, level; active=active, clicks=_clicks_name(clicks), branches=branches)
     build_node!(node, system.basis)
     push!(system, node)
     if λ !== nothing
         # `recoil!` reads the photon wavelength from the atom, keyed by the
-        # transition's level-index pair, the same key `Jump` carries.
+        # first branch's level-index pair, the same key `Jump` carries.
         e_idx = atom.level_indices[level.first]
         g_idx = atom.level_indices[level.second]
         atom.inner.lambda[e_idx => g_idx] = Float64(λ)
@@ -111,20 +118,35 @@ end
 
 Add spontaneous decay from an excited hyperfine manifold to a ground manifold,
 with branching ratios set by Clebsch-Gordan coefficients.
+
+There is one jump per photon polarisation q, `L_q = √rate Σₘ c_q(m) |g_{m+q}⟩⟨e_m|`,
+so a superposition of excited sublevels decays into the matching superposition of
+ground sublevels (coherence transfer).
 """
 function add_decay!(system, atom::AbstractAtom, levels::Pair{HyperfineManifold,HyperfineManifold},
                     rate; active=true, tol=1e-10, clicks=nothing, λ=nothing)
     excited, ground = levels
-    for e in excited
-        transitions = [(g, abs2(clebschgordan(e.F, e.mF, 1, g.mF - e.mF, g.F, g.mF)))
-                       for g in ground
-                       if abs(e.F - g.F) <= 1 && abs(e.mF - g.mF) <= 1]
-        total_strength = sum(strength for (_, strength) in transitions)
-        for (g, strength) in transitions
-            jump_rate = rate * strength / total_strength
-            jump_rate > tol && add_decay!(system, atom, e => g, jump_rate;
-                                          active=active, clicks=clicks, λ=λ)
+    branches = [e => [(g, clebschgordan(e.F, e.mF, 1, g.mF - e.mF, g.F, g.mF), g.mF - e.mF)
+                      for g in ground
+                      if abs(e.F - g.F) <= 1 && abs(e.mF - g.mF) <= 1]
+                for e in excited]
+    _add_polarized_decays!(system, atom, branches, rate; tol, active, clicks, λ)
+end
+
+# `branches = [e => [(g, CG, q), …], …]`. The emission amplitudes are normalised over
+# each excited sublevel, and grouped by q into one coherent jump each: the three
+# polarisations are orthogonal photon modes, so they decay incoherently.
+function _add_polarized_decays!(system, atom, branches, rate; tol, kwargs...)
+    byq = Dict(q => Pair{<:Pair,Float64}[] for q in -1:1)
+    for (e, gs) in branches
+        total_strength = sum(abs2(c) for (_, c, _) in gs)
+        for (g, c, q) in gs
+            rate * abs2(c) / total_strength > tol &&
+                push!(byq[Int(q)], (e => g) => Float64(c / sqrt(total_strength)))
         end
+    end
+    for q in -1:1
+        isempty(byq[q]) || _add_decay!(system, atom, identity.(byq[q]), rate; kwargs...)
     end
 end
 
@@ -144,23 +166,18 @@ end
 """
     add_decay!(system, atom, levels::Pair{FineManifold,FineManifold}, rate; ...)
 
-Add spontaneous decay with Clebsch-Gordan branching ratios between fine-structure manifolds.
+Add spontaneous decay with Clebsch-Gordan branching ratios between fine-structure
+manifolds, one coherent jump per photon polarisation as for hyperfine manifolds.
 """
 function add_decay!(system, atom::AbstractAtom,
                     levels::Pair{FineManifold,FineManifold},
                     rate; active=true, tol=1e-10, clicks=nothing, λ=nothing)
     excited, ground = levels
-    for e in excited
-        transitions = [(g, abs2(clebschgordan(e.J, e.mJ, 1, g.mJ - e.mJ, g.J, g.mJ)))
-                       for g in ground
-                       if abs(e.J - g.J) <= 1 && abs(e.mJ - g.mJ) <= 1]
-        total_strength = sum(strength for (_, strength) in transitions)
-        for (g, strength) in transitions
-            jump_rate = rate * strength / total_strength
-            jump_rate > tol && add_decay!(system, atom, e => g, jump_rate;
-                                          active=active, clicks=clicks, λ=λ)
-        end
-    end
+    branches = [e => [(g, clebschgordan(e.J, e.mJ, 1, g.mJ - e.mJ, g.J, g.mJ), g.mJ - e.mJ)
+                      for g in ground
+                      if abs(e.J - g.J) <= 1 && abs(e.mJ - g.mJ) <= 1]
+                for e in excited]
+    _add_polarized_decays!(system, atom, branches, rate; tol, active, clicks, λ)
 end
 
 """

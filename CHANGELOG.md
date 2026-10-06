@@ -143,6 +143,24 @@ old tolerance. Re-run anything you intend to compare against 0.1.x.
   force still attracted: every differential light shift came out mirrored about the
   bare line. (H. Schmit-Veiler, S. Whitlock)
 - The Rb-87 polarizability offset was off by a factor of 2. (H. Schmit-Veiler)
+- The tensor light shift was applied on the m-diagonal only, right only for trap
+  polarisation along (or circular about) the quantization axis. It is now the full
+  operator, which mixes Δm = ±1, ±2 and with no field is quantised along ε; the
+  dipole force takes its coherences. The 54.7° magic angle makes a manifold
+  degenerate only once a field quantises it along the axis.
+- MCWF radiation pressure gave one momentum to the whole excited branch, the mean
+  over the beams that excited it: a balanced counter-propagating pair moved no
+  momentum on absorption (var(p)/N = 0.41 (ħk)² for a σ⁺/σ⁻ pair, emission only).
+  Each jump now draws the beam that supplied the photon (1.4 (ħk)²).
+- Manifold decays (`add_decay!(e_manifold => g_manifold, …)`) took one jump per
+  sublevel pair, so an excited superposition decayed into a mixture. There is now
+  one coherent jump per photon polarisation, with the same branching ratios.
+- The hyperfine dipole matrix element carried an extra (−1)^q: light along
+  (x̂ + ẑ)/√2 excited the dipole (−x̂ + ẑ)/√2. Harmless while every operator was
+  diagonal in m; not with the full tensor light shift.
+- Fine → hyperfine couplings took Δm = m_g − m_e: σ⁺ and σ⁻ were swapped.
+- `GeneralGaussianBeam` carried its phase as exp(−ik·r), opposite to `GaussianBeam`
+  and `PlanarBeam`.
 
 ---
 

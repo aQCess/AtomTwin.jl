@@ -161,16 +161,25 @@ collapses the atom onto it, `p → p − E + D`. Over one emission cycle a singl
 then transfers exactly `ħk`, as quantised absorption does; a pulse that leaves the
 atom partly excited, followed by no emission, transfers nothing. A drive between
 two levels of the branch (a ladder g → e → r) moves momentum within it, not
-population into it. Not captured: the branch structure of a superposition hit by a
-*different* beam (a classical momentum per branch cannot follow the momentum
-superposition it creates).
+population into it.
+
+With several beams the excited branch is split by the beam direction it absorbed
+from: sub-branch `l` holds population `w_l` and momentum `E_l = D_l w_l`, and a jump
+collapses the atom onto one, drawn with probability `w_l/P`. Each photon then
+arrives with the momentum of the beam that supplied it: a balanced counter-propagating
+pair gives ±ħk per cycle, a variance of (ħk)², not the zero kick of its mean.
+Stimulated emission and the drain empty the sub-branches in proportion. Not
+captured: the branch structure of a superposition hit by a *different* beam (a
+classical momentum per branch cannot follow the momentum superposition it creates),
+such as the ground state reached by absorbing from one beam and emitting into another.
 
 Fields: the planar drives (concretely typed), the atom each acts on, the atoms and
 their ħ/m; at the last evaluation (`…prev`: the one before) the force per atom
 `(Fx, Fy, Fz)` in units of ħ (m⁻¹s⁻¹) and `R_b` per drive; for MCWF
 (`conditional`) per atom the basis states and levels of the excited branch (`up`,
-`uplev`) and `P`, and per drive whether it acts within the branch (`internal`) — `E`
-lives on the atom, `atom._Eb`, so it carries across instructions; for the density
+`uplev`) and `P`, and per drive whether it acts within the branch (`internal`) and
+the sub-branch it feeds (`lab`) — the sub-branches' `(E_l, w_l)` live on the atom,
+`atom._Eb`, so they carry across instructions; for the density
 matrix the force at the start of the user
 step (`F0`) and the step's integral (`step`), committed only once the adaptive step
 is accepted.
@@ -188,6 +197,7 @@ struct RadiationPressure{P, A}
     up::Vector{Vector{Int}}
     uplev::Vector{Vector{Int}}
     internal::Vector{Bool}
+    lab::Vector{Int}
     P::Vector{Float64}
     Pprev::Vector{Float64}
     F0::Vector{NTuple{3,Float64}}
@@ -242,10 +252,27 @@ function radiation_pressure(fields, atoms::Vector{A}; conditional::Bool = false)
     end
     internal = Bool[conditional && drives[b].transition.first in uplev[atomidx[b]]
                     for b in eachindex(drives)]
+    ## One excited sub-branch per beam direction an atom absorbs from, stored as
+    ## blocks `(E_l, w_l)` of four in `atom._Eb`; at least one block per atom.
+    lab = zeros(Int, length(drives))
+    if conditional
+        nlab = zeros(Int, n)
+        for b in eachindex(drives)
+            internal[b] && continue
+            a = atomidx[b]
+            c = findfirst(c -> lab[c] > 0 && atomidx[c] == a &&
+                               drives[c].beam.k == drives[b].beam.k, 1:b-1)
+            lab[b] = c === nothing ? (nlab[a] += 1) : lab[c]
+        end
+        for a in 1:n
+            Eb = atoms[a]._Eb
+            length(Eb) == 4max(nlab[a], 1) || fill!(resize!(Eb, 4max(nlab[a], 1)), 0.0)
+        end
+    end
     RadiationPressure(drives, atomidx, atoms, [hbar / a.m for a in atoms],
                       fill(_ZERO3, n), fill(_ZERO3, n), zeros(length(drives)),
-                      zeros(length(drives)), conditional, up, uplev, internal, zeros(n),
-                      zeros(n), fill(_ZERO3, n), fill(_ZERO3, n))
+                      zeros(length(drives)), conditional, up, uplev, internal, lab,
+                      zeros(n), zeros(n), fill(_ZERO3, n), fill(_ZERO3, n))
 end
 
 # ⟨H_b⟩ without the coefficient: statevector ⟨ψ|H_b|ψ⟩, density matrix Tr(H_b ρ).
@@ -329,24 +356,51 @@ renormalisation that follows). Conditional (MCWF): also the excited branches, se
 end
 radiation_step!(::Nothing, state, inv_n2, h) = nothing
 
+# Excited sub-branch `l` of `Eb`: its momentum × population `E_l`, and `w_l`.
+@inline _bE(Eb, l) = @inbounds (Eb[4l-3], Eb[4l-2], Eb[4l-1])
+@inline _setbE!(Eb, l, E) = @inbounds (Eb[4l-3] = E[1]; Eb[4l-2] = E[2]; Eb[4l-1] = E[3]; Eb)
+@inline function _bEsum(Eb)
+    E = _bE(Eb, 1)
+    for l in 2:length(Eb) ÷ 4
+        E = _add3(E, _bE(Eb, l))
+    end
+    return E
+end
+@inline function _bwsum(Eb)
+    W = 0.0
+    @inbounds for l in 1:length(Eb) ÷ 4
+        W += Eb[4l]
+    end
+    return W
+end
+
 # Atom `a`'s excited branch over one MCWF sub-step, returning the impulse `I` plus
-# the drain's back-action. Absorption (R_b > 0) feeds `E` with ħk_b; stimulated
-# emission (R_b < 0) and the no-jump drain remove population, with momentum
-# D = E/P, in proportion; a drive within the branch moves ħk_b per unit of
-# population inside it. The population balance P₀ + A = P₁ + S + ρ gives the drain
-# ρ, which moves the mean momentum by −D ρ.
+# the drain's back-action. Absorption (R_b > 0) feeds its beam's sub-branch with
+# ħk_b; stimulated emission (R_b < 0) and the no-jump drain remove population, with
+# momentum D_l = E_l/w_l, in proportion; a drive within the branch moves ħk_b per
+# unit of population inside it, shared between the sub-branches by population. The
+# population balance P₀ + A = P₁ + S + ρ gives the drain ρ, which moves the mean
+# momentum by −D ρ.
 @inline function _branch_step!(rp::RadiationPressure, a::Int, h::Float64,
                                I::NTuple{3,Float64})
     Eb = rp.atoms[a]._Eb
-    A = 0.0; S = 0.0; E = (Eb[1], Eb[2], Eb[3])
+    K  = length(Eb) ÷ 4
+    A = 0.0; S = 0.0
     @inbounds for b in eachindex(rp.drives)
         rp.atomidx[b] == a || continue
         r = 0.5h * (rp.Rprev[b] + rp.R[b])
+        k = rp.drives[b].beam.k
         if rp.internal[b]
-            E = _axpy3(r, rp.drives[b].beam.k, E)
+            W = _bwsum(Eb)
+            for l in 1:K
+                f = W > 0 ? Eb[4l] / W : Float64(l == 1)
+                _setbE!(Eb, l, _axpy3(f * r, k, _bE(Eb, l)))
+            end
         elseif r > 0
             A += r
-            E = _axpy3(r, rp.drives[b].beam.k, E)
+            l = rp.lab[b]
+            _setbE!(Eb, l, _axpy3(r, k, _bE(Eb, l)))
+            Eb[4l] += r
         else
             S -= r
         end
@@ -355,38 +409,79 @@ radiation_step!(::Nothing, state, inv_n2, h) = nothing
     if tot > _PMIN
         P1 = rp.P[a]
         u  = 1 / tot
-        I  = _axpy3(-(tot - S - P1) * u, E, I)
-        E  = (E[1] * P1 * u, E[2] * P1 * u, E[3] * P1 * u)
+        I  = _axpy3(-(tot - S - P1) * u, _bEsum(Eb), I)
+        @inbounds for l in 1:K
+            E = _bE(Eb, l)
+            _setbE!(Eb, l, (E[1] * P1 * u, E[2] * P1 * u, E[3] * P1 * u))
+            Eb[4l] = Eb[4l] * P1 * u
+        end
     end
-    Eb[1] = E[1]; Eb[2] = E[2]; Eb[3] = E[3]
     return I
 end
 
+# The sub-branch a jump collapses onto, drawn by population. No draw unless two
+# hold population, so a single beam keeps its RNG stream.
+function _pick_branch(Eb, rng::AbstractRNG)
+    K = length(Eb) ÷ 4
+    lz = 0; n = 0
+    @inbounds for l in 1:K
+        Eb[4l] > 0 && (lz = l; n += 1)
+    end
+    n <= 1 && return max(lz, 1)
+    x = rand(rng) * _bwsum(Eb)
+    @inbounds for l in 1:K
+        Eb[4l] > 0 || continue
+        x -= Eb[4l]
+        x < 0 && return l
+    end
+    return lz
+end
+
 """
-    radiation_jump!(rp, jump, state, inv_n2)
+    radiation_jump!(rp, jump, state, inv_n2, rng)
 
 Re-evaluate the forces and branch populations for the post-jump `state` (the
 pre-jump ones move to `…prev`). A jump of an atom out of one of its branch levels
-collapses it onto the branch (`p → p − E + D`); otherwise — another atom's jump, or
-one from outside the branch — the branch is reweighted to its post-jump population
-(`p → p + D ΔP`).
+collapses it onto the branch, onto sub-branch `l` with probability `w_l/P`
+(`p → p − E + D_l`); otherwise — another atom's jump, or one from outside the
+branch — the branch is reweighted to its post-jump population (`p → p + D ΔP`).
 """
-function radiation_jump!(rp::RadiationPressure, jump, state, inv_n2::Float64)
+function radiation_jump!(rp::RadiationPressure, jump, state, inv_n2::Float64,
+                         rng::AbstractRNG)
     radiation_eval!(rp, state, inv_n2)          # `Pprev`: pre-jump
     @inbounds for a in eachindex(rp.atoms)
-        P0 = rp.Pprev[a]; Eb = rp.atoms[a]._Eb
+        P0 = rp.Pprev[a]; P = rp.P[a]; Eb = rp.atoms[a]._Eb
         if P0 > _PMIN
-            D = (Eb[1] / P0, Eb[2] / P0, Eb[3] / P0)
-            hit = rp.atoms[a] === jump.atom && jump.transition.first in rp.uplev[a]
-            _kick!(rp.atoms[a], ((hit ? 1.0 : rp.P[a]) - P0) * rp.hm[a], D)
-            Eb[1] = D[1] * rp.P[a]; Eb[2] = D[2] * rp.P[a]; Eb[3] = D[3] * rp.P[a]
+            E = _bEsum(Eb)
+            D = (E[1] / P0, E[2] / P0, E[3] / P0)
+            if rp.atoms[a] === jump.atom && any(in(rp.uplev[a]), jump.sources)
+                l = 1; Dl = D
+                W = _bwsum(Eb)
+                if length(Eb) > 4 && W > 0
+                    l  = _pick_branch(Eb, rng)
+                    El = _bE(Eb, l); Pl = P0 * (Eb[4l] / W)
+                    Dl = (El[1] / Pl, El[2] / Pl, El[3] / Pl)
+                    _kick!(rp.atoms[a], rp.hm[a], (Dl[1] - D[1], Dl[2] - D[2], Dl[3] - D[3]))
+                    fill!(Eb, 0.0)
+                end
+                _kick!(rp.atoms[a], (1.0 - P0) * rp.hm[a], D)
+                _setbE!(Eb, l, (Dl[1] * P, Dl[2] * P, Dl[3] * P))
+                Eb[4l] = P
+            else
+                _kick!(rp.atoms[a], (P - P0) * rp.hm[a], D)
+                for l in 1:length(Eb) ÷ 4
+                    El = _bE(Eb, l)
+                    _setbE!(Eb, l, (El[1] / P0 * P, El[2] / P0 * P, El[3] / P0 * P))
+                    Eb[4l] = Eb[4l] / P0 * P
+                end
+            end
         else
             fill!(Eb, 0.0)
         end
     end
     return rp
 end
-radiation_jump!(::Nothing, jump, state, inv_n2) = nothing
+radiation_jump!(::Nothing, jump, state, inv_n2, rng) = nothing
 
 """
     radiation_resume!(rp, psi)

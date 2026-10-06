@@ -205,7 +205,7 @@ function add_light_shift!(system, atom::AbstractAtom, levels, beam;
     b = beam isa BeamNode ? beam._compiled[] : beam
     if b !== nothing && !haskey(atom.inner.alpha, getwavelength(b))
         initialize!(atom, atom.inner; beams = [b],
-                    q_axis = getquantizationaxis(system))
+                    q_axis = getquantizationaxis(system), tensor_pairs = :fit)
     end
 
     nodes = LightShiftNode[]
@@ -257,6 +257,10 @@ The shift is **absolute**: each level takes its own trap potential `U/ħ` (negat
 where it is trapped, matching the dipole force). The common-mode part
 is a global phase, and the Chebyshev propagator sets its degree from the spectral
 half-width `(Emax−Emin)/2` after recentering on `Ē`, so an offset costs nothing.
+
+Where the tensor shift mixes sublevels (`inner._cpairs`, fixed by `initialize!`),
+each trapping beam also gets a [`StarkShiftACTensor`](@ref) with the off-diagonal
+elements, explicit `add_light_shift!` levels included: those set the diagonal only.
 """
 function _auto_light_shifts(sys, atoms, trapping_beams)
     fields = Dynamiq.AbstractField[]
@@ -282,7 +286,18 @@ function _auto_light_shifts(sys, atoms, trapping_beams)
                 f._coeff[] = ComplexF64(1.0)
                 push!(fields, f)
             end
+            if !isempty(inner._cpairs) && haskey(inner.alpha_off, λ)
+                isempty(inner._cidx) && _tensor_mixing_index!(inner, sys.basis)
+                f = Dynamiq.StarkShiftACTensor(sys.basis, inner, beam)
+                f._coeff[] = ComplexF64(1.0)
+                push!(fields, f)
+            end
         end
     end
     return fields
 end
+
+# Whether the geometry the tensor light shift depends on can change from shot to
+# shot: a parametric quantization axis. (Trapping beams are concrete.)
+_tensor_may_vary(sys) =
+    any(n -> n isa QuantizationAxisNode && !(n.axis isa AbstractVector{<:Real}), sys.nodes)
