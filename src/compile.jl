@@ -232,7 +232,7 @@ end
 
 # One ramp target per row (or column), as `RampRow`/`RampCol` document it. The
 # beam at (row, col) then ramps to `row target × column amplitude`: the same
-# factorisation `AmplRow`/`AmplCol` apply, which the ramps previously ignored.
+# factorisation `AmplRow`/`AmplCol` apply.
 function _line_targets(final, lines)
     final isa Number && return fill(Float64(final), length(lines))
     length(final) == length(lines) || throw(ArgumentError(

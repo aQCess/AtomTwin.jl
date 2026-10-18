@@ -8,13 +8,13 @@
 # isolates the cost of the force itself.
 #
 # Accuracy figures are physics references, not solver-vs-solver:
-#   - WFMC pulses: y kinetic energy per photon vs 1 + Q + 1/3 ≈ 1.26 E_r
-#     (quantised absorption + isotropic emission; Monte Carlo, ±~5 %).
+#   - WFMC pulses: y kinetic energy per photon vs 1 + Q + 1/3 ≈ 1.28 E_r
+#     (quantised absorption + isotropic emission; Monte Carlo, ±~10 %).
 #   - TDSE π pulses +k,−k,…: momentum transferred vs exactly N ħk.
 #   - QME CW: momentum after 1 µs vs ħk·R·t from the steady-state rate
 #     (mean force; transient ≲ 1 %).
 #
-#   atwin run bench/bench4_motion.jl
+#   julia --project=. -t auto bench/bench4_motion.jl
 
 using AtomTwin
 using Random: MersenneTwister
@@ -98,7 +98,7 @@ r0 = bench(pulses(false))
 r2 = bench(pipulses())
 r3 = bench(cwdm())
 report("4 — motion (semiclassical, plane-wave drives)", [
-    ("WFMC  imaging pulses, planar, 200 shots", r1.best, r1.bytes, r1.value, "E_r/photon (ref ≈1.26)"),
+    ("WFMC  imaging pulses, planar, 200 shots", r1.best, r1.bytes, r1.value, "E_r/photon (ref ≈1.28)"),
     ("WFMC  same, GlobalCoupling (control)",    r0.best, r0.bytes, r0.value, "E_r/photon (emission only ≈0.33)"),
     ("TDSE  20 π pulses +k/−k",                 r2.best, r2.bytes, r2.value, "p/ħk (ref 20)"),
     ("QME   CW 1 µs, s = 40",                   r3.best, r3.bytes, r3.value, "p/(ħk R t) (ref ≈1)"),

@@ -1,8 +1,6 @@
-# Convergence-order regression tests.
-#
-# These pin the OBSERVED order of the solver, which no other test covers. An
-# order regression is silent — results stay plausible, just needlessly
-# inaccurate — so it is exactly the failure mode worth asserting on.
+# Solver accuracy, convergence order and step control. An order or accuracy
+# regression is silent -- results stay plausible -- so these pin the observed
+# behaviour.
 using Test, AtomTwin, Printf, Random, LinearAlgebra, SparseArrays
 
 "Final P_e after a pulse on a driven two-level atom, at solver step `dt`."
@@ -46,127 +44,59 @@ end
 AtomTwin.Dynamiq.probe!(p::CountProbe, info) =
     (p.n += 1; p.kmax = max(p.kmax, info.k); nothing)
 
-@testset "Solver convergence order" begin
+@testset "Propagators" begin
     dts = [2e-9, 1e-9, 5e-10, 2.5e-10]
 
-    @testset "constant pulse is exact (no measurable order)" begin
-        # With the Chebyshev propagator a constant-H step is exact to machine
-        # precision, so the error does NOT fall with dt -- it sits at the
-        # reference's own floor (~1e-12). Asserting an order here would be
-        # asserting the propagator is inaccurate.
-        # The propagator is exact for constant H, so the reference only has to sit
-        # below the sweep -- it does not have to be converged. Measured flat at
-        # 1e-12 all the way from dt=2e-9 to 1e-10, so 1e-10 is ample, at ~200x
-        # less work than the 2e-11 this used to use.
+    @testset "constant pulse is exact" begin
+        # Chebyshev is exact for constant H: the error sits at the reference's floor
+        # at every step size, so there is no order to fit.
         ref = _final_Pe(1e-10; shaped = false)
         errs = [abs(_final_Pe(dt; shaped = false) - ref) for dt in dts]
-        @test all(<(1e-10), errs)              # exact at every step size
-        # Bound the error rather than the spread between errors: at 1e-26 to
-        # 1e-30 against the analytic solution, a ratio is round-off noise and
-        # swings with any change to the Chebyshev degree.
-        @test errs[end] < 1e-10 && errs[1] < 1e-10
+        @test all(<(1e-10), errs)
     end
 
     @testset "shaped pulse is 2nd order (midpoint sampling)" begin
-        # Left-endpoint sampling would give order 1 here. See compile.jl.
-        # 1e-10 differs from a 2e-11 reference by 2.2e-9, orders below the errors
-        # asserted here, at ~200x less work.
+        # Left-endpoint sampling would give order 1 here.
         ref = _final_Pe(1e-10; shaped = true)
         p = _observed_order(dt -> _final_Pe(dt; shaped = true), dts, ref)
         @test 1.7 < p < 2.4
     end
 
-    @testset "piecewise-constant envelope stays 1st order by design" begin
-        # The staircase is physical (an AWG holds each bin), so this must NOT be
-        # "fixed" to midpoint sampling.
-        # A coarse staircase (51 bins) converges cleanly, so the fitted order is
-        # stable in the reference step: 1.08 at refdt=5e-11 vs 1.04 at 2e-11. The
-        # 401-bin version needed a 2e-11 reference and still swung 0.91 -> 3.33
-        # when that was loosened, i.e. it was fitting the reference's own error.
+    @testset "piecewise-constant envelope is 1st order by design" begin
+        # The staircase is physical (an AWG holds each bin), so it stays first order.
         ref = _final_Pe(5e-11; shaped = true, interp = :piecewise_constant, npts = 51)
         p = _observed_order(dt -> _final_Pe(dt; shaped = true,
                                             interp = :piecewise_constant, npts = 51),
                             dts, ref)
         @test 0.7 < p < 1.5
     end
-end
 
-@testset "order keyword rejects unstable truncations" begin
-    # Truncated Taylor is norm-contractive on the imaginary axis only for
-    # p ≡ 0, 3 (mod 4). Orders 1, 2, 5, 6 amplify at EVERY step size, so they
-    # must not be silently accepted.
-    using LinearAlgebra, SparseArrays, Random
-    D = AtomTwin.Dynamiq
-    Random.seed!(51); d = 8
-    A = randn(ComplexF64, d, d); H = Matrix(Hermitian(A + A'))
-    psi = normalize(randn(ComplexF64, d)); q1 = similar(psi); q2 = similar(psi)
-    Hl = [(Ref(ComplexF64(1.0)), D.Op(sparse(H)))]
+    @testset "Chebyshev is exact and allocation-free" begin
+        # The Bessel coefficients are built once per instruction by `plan_step`.
+        d = 2
+        Ω = 2π * 5e5
+        op = AtomTwin.Dynamiq.Op(
+            Tuple{Int,Int,ComplexF64}[(1, 2, ComplexF64(Ω))],
+            Tuple{Int,Int,ComplexF64}[(2, 1, ComplexF64(Ω))], d)
+        H = Tuple{Base.RefValue{ComplexF64},AtomTwin.Dynamiq.Op}[
+                (Ref(ComplexF64(1.0)), op)]
+        spec = AtomTwin.Dynamiq.spectral_spec(H)
+        Hm = ComplexF64[0 Ω; Ω 0]
+        ψ0 = ComplexF64[1, 0]
 
-    for p in (1, 2, 5, 6, 9)
-        @test_throws ArgumentError D.fquantum!(1e-3, copy(psi), Hl, q1, q2; order = p)
-    end
-    for p in (3, 4, 7, 8)
-        @test (D.fquantum!(1e-3, copy(psi), Hl, q1, q2; order = p); true)
-    end
-end
+        for dt in (1e-9, 1e-7)
+            plan = AtomTwin.Dynamiq.plan_step(AtomTwin.Dynamiq.Chebyshev(), ψ0, dt,
+                                              spec; tol = 1e-12)
+            ψ = copy(ψ0)
+            AtomTwin.Dynamiq.chebyshev!(ψ, H, plan)          # warm up
+            @test norm(ψ - exp(-1im * Hm * dt) * ψ0) < 1e-12  # still exact
 
-@testset "classical integrator is 2nd order (velocity Verlet)" begin
-    D = AtomTwin.Dynamiq
-
-    # Atom falling through a Gaussian dipole trap; compare final x against a
-    # highly-resolved reference.
-    function _finalx(nsteps; T = 2e-3)
-        atom = D.NLevelAtom(2; x = [2e-6, 0.0, 0.0], v = [0.0, 0.0, 0.0],
-                            m = 87 * 1.66053906660e-27,
-                            alphas = Dict(1064e-9 => [1e-39, 1e-39]))
-        beam = D.GaussianBeam(1064e-9, 20e-6, 0.5; r0 = [0.0, 0.0, 0.0])
-        fill!(atom._P, 0.0); atom._P[1] = 1.0
-        D.newton([atom], collect(range(T / nsteps, T, nsteps)); beams = [beam])
-        atom.x[1]
-    end
-
-    ref = _finalx(400_000)
-    e1 = abs(_finalx(2_000)  - ref)
-    e2 = abs(_finalx(8_000)  - ref)
-    @test 1.7 < log2(e1 / e2) / 2 < 2.3       # two doublings between 2k and 8k
-
-    @testset "force cache is invalidated, not silently reused" begin
-        # A stale F_old corresponds to a different position and corrupts the
-        # trajectory; reset_force! must restore agreement with a fresh atom.
-        function _traj(; poison::Bool, reset::Bool)
-            atom = D.NLevelAtom(2; x = [3e-6, 0.0, 0.0], v = [0.0, 0.0, 0.0],
-                                m = 87 * 1.66053906660e-27,
-                                alphas = Dict(1064e-9 => [1e-39, 1e-39]))
-            beam = D.GaussianBeam(1064e-9, 20e-6, 0.5; r0 = [0.0, 0.0, 0.0])
-            if poison
-                atom._F[1] = 1e-20; atom._Fvalid = true
-            end
-            reset && D.reset_force!(atom)
-            fill!(atom._P, 0.0); atom._P[1] = 1.0
-            D.newton([atom], collect(range(1e-6, 1e-3, 1000)); beams = [beam])
-            atom.x[1]
-        end
-        fresh = _traj(poison = false, reset = false)
-        @test _traj(poison = true,  reset = false) != fresh   # stale cache DOES matter
-        @test _traj(poison = true,  reset = true)  == fresh   # and reset fixes it
-    end
-end
-
-@testset "step-size guard warns before divergence" begin
-    D = AtomTwin.Dynamiq
-    using LinearAlgebra, SparseArrays
-
-    @testset "gershgorin_bound is an upper bound on ‖H‖" begin
-        Random.seed!(91)
-        for d in (4, 16, 64)
-            A = sprand(ComplexF64, d, d, min(1.0, 8 / d)); H = A + A'
-            terms = [(Ref(ComplexF64(1.0)), D.Op(H))]
-            @test D.gershgorin_bound(terms) >= opnorm(Matrix(H)) - 1e-9
+            copyto!(ψ, ψ0)
+            @test (@allocated AtomTwin.Dynamiq.chebyshev!(ψ, H, plan)) == 0
         end
     end
 
-    @testset "fires on a step that diverges, silent on one that does not" begin
-        # Blockade-stiff two-atom system: dt=4e-9 genuinely produces NaN.
+    @testset "Chebyshev has no stability limit" begin
         function _run(dt)
             g, r = Level("g"), Level("r")
             a1, a2 = Atom(; levels = [g, r]), Atom(; levels = [g, r])
@@ -181,226 +111,303 @@ end
             end
             play(sys, seq; initial_state = [g, g], shots = 1).detectors["Pr"][end]
         end
-        # The Chebyshev propagator has NO stability limit, so the step that
-        # used to diverge now simply works. The warning machinery still guards
-        # `fquantum!` (used by the MCWF path), but `play` on a statevector no
-        # longer diverges at any step size -- which is the point of Phase 3.
-        # H is constant here, so the propagator is exact and a 1e-10 baseline is
-        # indistinguishable from 1e-11 at the 1e-3 tolerance asserted -- at 10x
-        # less work.
-        @test !isnan(_run(1e-10))
-        @test !isnan(_run(4e-9))                # was NaN with Taylor-4
+        # Blockade-stiff (‖H‖·dt ≈ 5 at 4 ns, past the Taylor-4 limit): Chebyshev has
+        # no stability limit.
+        @test !isnan(_run(4e-9))
         @test isapprox(_run(4e-9), _run(1e-10); atol = 1e-3)
     end
+
+    @testset "Taylor: unstable orders rejected, stable orders honoured" begin
+        # Truncated Taylor is norm-contractive on the imaginary axis only for p ≡ 0, 3
+        # (mod 4); other orders amplify at every step size and are rejected.
+        D = AtomTwin.Dynamiq
+        Random.seed!(51); d = 8
+        A = randn(ComplexF64, d, d); H = Matrix(Hermitian(A + A'))
+        psi = normalize(randn(ComplexF64, d)); q1 = similar(psi); q2 = similar(psi)
+        Hl = [(Ref(ComplexF64(1.0)), D.Op(sparse(H)))]
+
+        for p in (1, 2, 5, 6, 9)
+            @test_throws ArgumentError D.fquantum!(1e-3, copy(psi), Hl, q1, q2; order = p)
+        end
+        for p in (3, 4, 7, 8)
+            @test (D.fquantum!(1e-3, copy(psi), Hl, q1, q2; order = p); true)
+        end
+
+        # Each stable order is more accurate than the last.
+        Ω = 2π * 5e5
+        op = AtomTwin.Dynamiq.Op(
+            Tuple{Int,Int,ComplexF64}[(1, 2, ComplexF64(Ω))],
+            Tuple{Int,Int,ComplexF64}[(2, 1, ComplexF64(Ω))], 2)
+        H = Tuple{Base.RefValue{ComplexF64},AtomTwin.Dynamiq.Op}[
+                (Ref(ComplexF64(1.0)), op)]
+        spec = AtomTwin.Dynamiq.spectral_spec(H)
+        Hm = ComplexF64[0 Ω; Ω 0]
+        ψ0 = ComplexF64[1, 0]
+        dt = 3e-7                       # coarse enough that the order matters
+
+        errs = map((3, 4, 7, 8)) do ord
+            plan = AtomTwin.Dynamiq.plan_step(AtomTwin.Dynamiq.Taylor(ord), ψ0, dt, spec)
+            ψ = copy(ψ0)
+            AtomTwin.Dynamiq.propagate!(AtomTwin.Dynamiq.Taylor(ord), ψ, H, plan)
+            norm(ψ - exp(-1im * Hm * dt) * ψ0)
+        end
+        @test issorted(errs; rev = true)
+        @test errs[4] < errs[2] / 100   # order 8 well clear of order 4
+    end
+
+    @testset "stability warning: Gershgorin bound, integrator-aware" begin
+        D = AtomTwin.Dynamiq
+        Random.seed!(91)
+        for d in (4, 16, 64)
+            A = sprand(ComplexF64, d, d, min(1.0, 8 / d)); H = A + A'
+            terms = [(Ref(ComplexF64(1.0)), D.Op(H))]
+            @test D.gershgorin_bound(terms) >= opnorm(Matrix(H)) - 1e-9
+        end
+
+        # Taylor's stability limit is warned about; Chebyshev has none.
+        Ω = 2π * 5e6
+        op = AtomTwin.Dynamiq.Op(
+            Tuple{Int,Int,ComplexF64}[(1, 2, ComplexF64(Ω))],
+            Tuple{Int,Int,ComplexF64}[(2, 1, ComplexF64(Ω))], 2)
+        H = Tuple{Base.RefValue{ComplexF64},AtomTwin.Dynamiq.Op}[
+                (Ref(ComplexF64(1.0)), op)]
+        dt = 1e-6                                   # theta ~ 31, far past 2.828
+
+        # Chebyshev: silent, and says so by returning 0.
+        @test_logs AtomTwin.Dynamiq.warn_if_step_too_large(
+            H, dt, AtomTwin.Dynamiq.Chebyshev())
+
+        # Taylor: warns, and reports the limit of the order actually requested.
+        @test_logs (:warn,) AtomTwin.Dynamiq.warn_if_step_too_large(
+            H, dt, AtomTwin.Dynamiq.Taylor(4))
+        @test_logs (:warn,) AtomTwin.Dynamiq.warn_if_step_too_large(
+            H, dt, AtomTwin.Dynamiq.Taylor(8))
+
+        # …and is accurate there.
+        spec = AtomTwin.Dynamiq.spectral_spec(H)
+        Hm = ComplexF64[0 Ω; Ω 0]
+        ψ0 = ComplexF64[1, 0]
+        plan = AtomTwin.Dynamiq.plan_step(AtomTwin.Dynamiq.Chebyshev(), ψ0, dt,
+                                          spec; tol = 1e-12)
+        ψ = copy(ψ0)
+        AtomTwin.Dynamiq.propagate!(AtomTwin.Dynamiq.Chebyshev(), ψ, H, plan)
+        @test norm(ψ - exp(-1im * Hm * dt) * ψ0) < 1e-10
+    end
 end
 
-@testset "automatic time step (Sequence without dt)" begin
-    function _rabi(seqf)
-        g, e = Level("g"), Level("e")
-        atom = Atom(; levels = [g, e]); sys = System(atom)
-        c = add_coupling!(sys, atom, g => e, 2π * 1e6; active = false)
-        add_detuning!(sys, atom, e, 2π * 0.3e6)
-        add_detector!(sys, PopulationDetectorSpec(atom, e; name = "Pe"))
-        seq = seqf()
+# The Chebyshev plan is built once per instruction. A trap ramped or moved under
+# a frozen atom, or a van der Waals term, moves the spectrum within it; the plan
+# must follow, or the expansion leaves its interval and stops being unitary.
+@testset "Chebyshev plan follows a spectrum that moves within an instruction" begin
+    gm = HyperfineManifold(0//1, 0; label = "¹S₀", term = l"1S0", g_F = 0.0)
+    em = HyperfineManifold(1//1, 1; label = "³P₁", term = l"3P1", g_F = 1.5)
+    g, e = gm[0], em[0]
+
+    function trap_run(dt, mode; decay = false, shots = 1)
+        tw  = TweezerArray(λ = 767e-9, w0 = 1e-6, P_total = 50e-3,
+                           row_freqs = [0.0], col_freqs = [0.0])
+        yb  = Ytterbium174Atom(; levels = [g, e])
+        sys = System([yb], [tw])
+        c   = add_coupling!(sys, yb, g => e, 2π * 1e6; active = false)
+        decay && add_decay!(sys, yb, e => g, 2π * 1e3)
+        add_detector!(sys, PopulationDetectorSpec(yb, e; name = "Pe"))
+        seq = dt === nothing ? Sequence(; tol = 1e-6) : Sequence(dt)
+        part = mode === :ramp ? RampRow(tw, 1, 0.1, 2e-6) : MoveCol(tw, 1, 1e6, 2e-6)
         @sequence seq begin
-            Pulse(c, 2e-6)
+            Parallel([Pulse([c], 2e-6), part])
         end
-        play(sys, seq; initial_state = g, shots = 1).detectors["Pe"][end]
+        # frozen: this tests the frozen solvers' tracking (a moving trap makes the
+        # run non-static, which would otherwise send it to the semiclassical ones).
+        Pe = play(sys, seq; initial_state = [g], shots = shots,
+                  frozen = true).detectors["Pe"]
+        return shots == 1 ? Pe[end] : sum(Pe[end, :]) / shots
     end
 
-    ref = _rabi(() -> Sequence(2e-9; downsample = 1))
-
-    @testset "derived step reaches the requested tolerance" begin
-        @test abs(_rabi(() -> Sequence(; tol = 1e-6)) - ref) < 1e-6
-        @test abs(_rabi(() -> Sequence(; tol = 1e-9)) - ref) < 1e-8
+    for mode in (:ramp, :move)
+        ref = trap_run(1e-9, mode)
+        @test 0 < ref < 1
+        # Coarse steps carry a discretisation error, but must stay physical.
+        @test isapprox(trap_run(50e-9, mode), ref; atol = 0.02)
+        @test 0 <= trap_run(nothing, mode) <= 1
+        @test 0 <= trap_run(50e-9, mode; decay = true, shots = 2) <= 1   # wfmc
     end
 
-    @testset "accuracy improves monotonically with tol" begin
-        # Regression: before dt was snapped to divide the pulse duration, a
-        # tighter tol could give a WORSE answer, because a non-dividing step made
-        # `tsteps = round(duration/dt)` run the pulse for the wrong total time
-        # (~0.05% off => ~1e-3 population error, swamping integration error).
-        # With the Chebyshev propagator both tolerances land on the reference's
-        # own floor (~1e-12), so their ORDER is floating-point noise -- the
-        # original 1e-3 discrepancy this guarded against would still be caught,
-        # but a strict inequality between two 1e-12 values is not meaningful.
-        e_loose = abs(_rabi(() -> Sequence(; tol = 1e-4)) - ref)
-        e_tight = abs(_rabi(() -> Sequence(; tol = 1e-9)) - ref)
-        @test e_tight <= max(e_loose, 1e-10)
-    end
-
-    @testset "derived step is the output resolution, not the step" begin
-        # `_derive_dt` returns how often results are RECORDED. With no `dt` or
-        # `steps` on the sequence the default is one sample per instruction: a
-        # user who wrote only `Sequence(; tol)` wants an accurate final state,
-        # and one who wants a trace asks for it. The integration step is chosen
-        # separately, by the solver's own error estimators.
-        #
-        # With no Hamiltonian there is no accuracy bound either, so the whole
-        # instruction is one sample.
-        for T in (2e-6, 1e-6, 3.7e-6), tol in (1e-5, 1e-8)
-            seq = Sequence(; tol = tol)
-            push!(seq, Wait(T))
-            dt = AtomTwin._derive_dt(seq, AtomTwin.Dynamiq.AbstractField[])
-            @test dt ≈ T
-            @test dt > 0
-        end
-    end
-
-    @testset "handles a stiff system that diverges at a naive step" begin
-        g, r = Level("g"), Level("r")
-        a1, a2 = Atom(; levels = [g, r]), Atom(; levels = [g, r])
+    # Two static atoms: vdW must match the same constant interaction exactly.
+    gg, rr = Level("g"), Level("r")
+    V, d = 2π * 50e6, 4e-6
+    function pair_run(kind, dt)
+        a1 = Atom(; levels = [gg, rr], x_init = [0.0, 0, 0])
+        a2 = Atom(; levels = [gg, rr], x_init = [d, 0, 0])
         sys = System([a1, a2])
-        c1 = add_coupling!(sys, a1, g => r, 2π * 1e6; active = false)
-        c2 = add_coupling!(sys, a2, g => r, 2π * 1e6; active = false)
-        add_interaction!(sys, (a1, a2), (r, r) => (r, r), 2π * 200e6)
-        add_detector!(sys, PopulationDetectorSpec(a1, r; name = "Pr"))
-        seq = Sequence(; tol = 1e-6)
+        cs = [add_coupling!(sys, a, gg => rr, 2π * 1e6; active = false) for a in (a1, a2)]
+        kind === :vdw ? add_vdwinteraction!(sys, (a1, a2), (rr, rr) => (rr, rr), V * d^6) :
+                        add_interaction!(sys, (a1, a2), (rr, rr) => (rr, rr), V)
+        add_detector!(sys, PopulationDetectorSpec(a1, rr; name = "P1"))
+        seq = Sequence(dt)
         @sequence seq begin
-            Pulse([c1, c2], 1e-6)
+            Pulse(cs, 0.35e-6)
         end
-        p = play(sys, seq; initial_state = [g, g], shots = 1).detectors["Pr"][end]
-        @test !isnan(p)
-        @test isapprox(p, 0.4645530578, atol = 1e-6)
+        play(sys, seq; initial_state = [gg, gg]).detectors["P1"][end]
     end
+    @test isapprox(pair_run(:vdw, 20e-9), pair_run(:const, 20e-9); atol = 1e-9)
 end
 
-@testset "duration is exact; dt gives way" begin
-    function _rabi(dt)
-        g, e = Level("g"), Level("e")
-        atom = Atom(; levels = [g, e]); sys = System(atom)
-        c = add_coupling!(sys, atom, g => e, 2π * 1e6; active = false)
-        add_detuning!(sys, atom, e, 2π * 0.3e6)
-        add_detector!(sys, PopulationDetectorSpec(atom, e; name = "Pe"))
-        seq = Sequence(dt; downsample = 1)
-        @sequence seq begin
-            Pulse(c, 2e-6)
-        end
-        play(sys, seq; initial_state = g, shots = 1).detectors["Pe"][end]
-    end
-
-    @testset "accuracy is monotone even for non-dividing dt" begin
-        # Regression: `tsteps = round(duration/dt)` let a non-dividing step run
-        # the pulse for the wrong total time. dt=8.4081e-9 measured 1.794e-3
-        # error — 30000x WORSE than the larger dt=1e-8 — until `stepgrid` began
-        # adjusting dt instead of the duration.
-        ref = _rabi(2e-9)
-        errs = [abs(_rabi(dt) - ref) for dt in (1.0e-8, 8.4081e-9, 3.1530e-9, 1.0e-9)]
-        # The original defect made a NON-DIVIDING dt far worse than a larger
-        # dividing one (8.4081e-9 measured 30000x worse than 1e-8). With an
-        # exact propagator the errors are now all at the reference floor, so
-        # they no longer decrease with dt -- assert the property that matters:
-        # no step size is anomalously bad.
-        @test all(<(1e-6), errs)
-        # As above: bound the error, not the spread. The property under test is
-        # that a non-dividing `dt` does not blow up.
-        @test maximum(errs) < 1e-9
-    end
-
-    @testset "stepgrid realises the duration exactly" begin
-        for (T, dt) in ((2e-6, 8.4081e-9), (1e-6, 7e-10), (3.7e-6, 3.3e-10))
-            n, dte = AtomTwin.stepgrid(T, dt)
-            @test abs(n * dte - T) < 1e-20        # duration preserved
-            @test abs(dte - dt) / dt < 1 / n      # dt perturbed by < one part in n
-        end
-    end
-
-    @testset "stepgrid never inflates an instruction shorter than downsample" begin
-        # It used to return `downsample` steps: a 25-step pulse under
-        # `downsample = 10_000` ran 10 000 steps (400x the cost), silently.
-        @test AtomTwin.stepgrid(250e-9, 10e-9, 10_000)[1] == 25
-        @test AtomTwin.stepgrid(250e-9, 10e-9, 25)[1] == 25
-        @test AtomTwin.stepgrid(250e-9, 10e-9, 10)[1] == 30   # whole groups, as before
-        g, e = Level("g"), Level("e")
-        atom = Atom(; levels = [g, e]); sys = System(atom)
-        c = add_coupling!(sys, atom, g => e, 2π * 1e6; active = false)
-        add_detector!(sys, PopulationDetectorSpec(atom, e; name = "Pe"))
-        seq = Sequence(10e-9; downsample = 10_000)
-        push!(seq, Pulse(c, 250e-9))
-        out = play(sys, seq; initial_state = g)
-        @test length(out.times) == 1 && out.times[end] ≈ 250e-9
-        @test out.detectors["Pe"][end] ≈ sin(2π * 1e6 * 250e-9 / 2)^2 atol = 1e-6
-    end
-
-    @testset "Sequence(duration, tsteps) matches the equivalent dt" begin
-        # Stating "2 µs in 2000 steps" must be identical to stating dt = 1 ns.
-        function _via_tsteps()
+@testset "Time grid" begin
+    @testset "automatic step (Sequence without dt)" begin
+        function _rabi(seqf)
             g, e = Level("g"), Level("e")
             atom = Atom(; levels = [g, e]); sys = System(atom)
             c = add_coupling!(sys, atom, g => e, 2π * 1e6; active = false)
             add_detuning!(sys, atom, e, 2π * 0.3e6)
             add_detector!(sys, PopulationDetectorSpec(atom, e; name = "Pe"))
-            seq = Sequence(2e-6, 2000)
+            seq = seqf()
             @sequence seq begin
                 Pulse(c, 2e-6)
             end
             play(sys, seq; initial_state = g, shots = 1).detectors["Pe"][end]
         end
-        @test _rabi(1e-9) == _via_tsteps()
-        @test_throws ArgumentError Sequence(2e-6, 0)
-        @test_throws ArgumentError Sequence(-1.0, 100)
-    end
 
-    @testset "Kraus dissipators: order and complete positivity" begin
-        # A two-level system with decay, as raw Dynamiq structures, so the
-        # dissipator is exercised against exp(dt·𝓛_D) without a surrounding
-        # Hamiltonian step.
-        d, γ = 2, 1.0
-        σ   = ComplexF64[0 1; 0 0]
-        Jop = AtomTwin.Dynamiq.Op(Tuple{Int,Int,ComplexF64}[(1, 2, 1.0 + 0im)],
-                                  Tuple{Int,Int,ComplexF64}[], d)
-        J = Tuple{Base.RefValue{ComplexF64},AtomTwin.Dynamiq.Op,Vector{Float64}}[
-                (Ref(ComplexF64(sqrt(γ))), Jop, [0.0, 1.0])]
-        Id = Matrix(I, d, d)
-        𝓛 = γ * (kron(conj(σ), σ) -
-                 0.5 * (kron(Id, σ'σ) + kron(transpose(σ'σ), Id)))
-        ρ0 = ComplexF64[0.6 0.3+0.1im; 0.3-0.1im 0.4]
+        ref = _rabi(() -> Sequence(2e-9; downsample = 1))
 
-        # The Kraus set is EXACT for a single channel -- the whole point of
-        # the per-source-level Kraus set -- so assert exactness, not an order.
-        # (An order fitted to machine-noise errors is meaningless.)
-        for dt in (0.4, 0.2, 0.1, 0.05)
-            ref = reshape(exp(𝓛 * dt) * vec(ρ0), d, d)
-            ρ = copy(ρ0); q1 = copy(ρ0); q2 = copy(ρ0)
-            AtomTwin.Dynamiq.fdissipator2!(dt, ρ, J, q1, q2)
-            @test norm(ρ - ref) < 1e-13        # exact at ANY step size
+        @testset "derived step reaches the requested tolerance" begin
+            @test abs(_rabi(() -> Sequence(; tol = 1e-6)) - ref) < 1e-6
+            @test abs(_rabi(() -> Sequence(; tol = 1e-9)) - ref) < 1e-8
         end
 
-        # Complete positivity is unconditional in dt for both: every term is a
-        # congruence with a non-negative coefficient. Checked far past any step
-        # size a run would use.
-        for f in (AtomTwin.Dynamiq.fdissipator2!,)
-            for dt in (1.0, 10.0, 100.0)
-                ρ = copy(ρ0); q1 = copy(ρ0); q2 = copy(ρ0)
-                f(dt, ρ, J, q1, q2)
-                @test minimum(eigvals(Hermitian((ρ + ρ') / 2))) > -1e-12
-                @test maximum(abs, ρ - ρ') < 1e-12
+        @testset "derived step is the output resolution" begin
+            # `_derive_dt` returns how often results are recorded: with no `dt`, one sample
+            # per instruction (with no Hamiltonian there is no accuracy bound either).
+            for T in (2e-6, 1e-6, 3.7e-6), tol in (1e-5, 1e-8)
+                seq = Sequence(; tol = tol)
+                push!(seq, Wait(T))
+                dt = AtomTwin._derive_dt(seq, AtomTwin.Dynamiq.AbstractField[])
+                @test dt ≈ T
+                @test dt > 0
             end
         end
 
-        # fdissipator2! is trace-preserving by construction (final rescaling).
-        for dt in (0.1, 1.0, 10.0)
-            ρ = copy(ρ0); q1 = copy(ρ0); q2 = copy(ρ0)
-            AtomTwin.Dynamiq.fdissipator2!(dt, ρ, J, q1, q2)
-            @test abs(real(tr(ρ)) - 1) < 1e-12
+        @testset "a stiff system at the derived step" begin
+            g, r = Level("g"), Level("r")
+            a1, a2 = Atom(; levels = [g, r]), Atom(; levels = [g, r])
+            sys = System([a1, a2])
+            c1 = add_coupling!(sys, a1, g => r, 2π * 1e6; active = false)
+            c2 = add_coupling!(sys, a2, g => r, 2π * 1e6; active = false)
+            add_interaction!(sys, (a1, a2), (r, r) => (r, r), 2π * 200e6)
+            add_detector!(sys, PopulationDetectorSpec(a1, r; name = "Pr"))
+            seq = Sequence(; tol = 1e-6)
+            @sequence seq begin
+                Pulse([c1, c2], 1e-6)
+            end
+            p = play(sys, seq; initial_state = [g, g], shots = 1).detectors["Pr"][end]
+            @test !isnan(p)
+            @test isapprox(p, 0.4645530578, atol = 1e-6)
         end
-
-        # Allocation-free hot loop.
-        ρ = copy(ρ0); q1 = copy(ρ0); q2 = copy(ρ0)
-        AtomTwin.Dynamiq.fdissipator2!(0.1, ρ, J, q1, q2)
-        copyto!(ρ, ρ0)
-        @test (@allocated AtomTwin.Dynamiq.fdissipator2!(0.1, ρ, J, q1, q2)) == 0
     end
 
+    @testset "duration is exact; dt gives way" begin
+        function _rabi(dt)
+            g, e = Level("g"), Level("e")
+            atom = Atom(; levels = [g, e]); sys = System(atom)
+            c = add_coupling!(sys, atom, g => e, 2π * 1e6; active = false)
+            add_detuning!(sys, atom, e, 2π * 0.3e6)
+            add_detector!(sys, PopulationDetectorSpec(atom, e; name = "Pe"))
+            seq = Sequence(dt; downsample = 1)
+            @sequence seq begin
+                Pulse(c, 2e-6)
+            end
+            play(sys, seq; initial_state = g, shots = 1).detectors["Pe"][end]
+        end
 
+        @testset "non-dividing dt" begin
+            # A step that does not divide the duration is adjusted, not the duration.
+            ref = _rabi(2e-9)
+            errs = [abs(_rabi(dt) - ref) for dt in (1.0e-8, 8.4081e-9, 3.1530e-9, 1.0e-9)]
+            @test maximum(errs) < 1e-9
+        end
+
+        @testset "stepgrid realises the duration exactly" begin
+            for (T, dt) in ((2e-6, 8.4081e-9), (1e-6, 7e-10), (3.7e-6, 3.3e-10))
+                n, dte = AtomTwin.stepgrid(T, dt)
+                @test abs(n * dte - T) < 1e-20        # duration preserved
+                @test abs(dte - dt) / dt < 1 / n      # dt perturbed by < one part in n
+            end
+        end
+
+        @testset "stepgrid never inflates an instruction shorter than downsample" begin
+            @test AtomTwin.stepgrid(250e-9, 10e-9, 10_000)[1] == 25
+            @test AtomTwin.stepgrid(250e-9, 10e-9, 25)[1] == 25
+            @test AtomTwin.stepgrid(250e-9, 10e-9, 10)[1] == 30   # whole groups
+            g, e = Level("g"), Level("e")
+            atom = Atom(; levels = [g, e]); sys = System(atom)
+            c = add_coupling!(sys, atom, g => e, 2π * 1e6; active = false)
+            add_detector!(sys, PopulationDetectorSpec(atom, e; name = "Pe"))
+            seq = Sequence(10e-9; downsample = 10_000)
+            push!(seq, Pulse(c, 250e-9))
+            out = play(sys, seq; initial_state = g)
+            @test length(out.times) == 1 && out.times[end] ≈ 250e-9
+            @test out.detectors["Pe"][end] ≈ sin(2π * 1e6 * 250e-9 / 2)^2 atol = 1e-6
+        end
+
+        @testset "Sequence(duration, tsteps) matches the equivalent dt" begin
+            # Stating "2 µs in 2000 steps" must be identical to stating dt = 1 ns.
+            function _via_tsteps()
+                g, e = Level("g"), Level("e")
+                atom = Atom(; levels = [g, e]); sys = System(atom)
+                c = add_coupling!(sys, atom, g => e, 2π * 1e6; active = false)
+                add_detuning!(sys, atom, e, 2π * 0.3e6)
+                add_detector!(sys, PopulationDetectorSpec(atom, e; name = "Pe"))
+                seq = Sequence(2e-6, 2000)
+                @sequence seq begin
+                    Pulse(c, 2e-6)
+                end
+                play(sys, seq; initial_state = g, shots = 1).detectors["Pe"][end]
+            end
+            @test _rabi(1e-9) == _via_tsteps()
+            @test_throws ArgumentError Sequence(2e-6, 0)
+            @test_throws ArgumentError Sequence(-1.0, 100)
+        end
+    end
+
+    @testset "downsample keeps the output grid uniform and endpoint exact" begin
+        # `dt` is refined so `downsample` divides the step count.
+        g = 2π * 1e6
+        T = 2π / g
+        function run(ds)
+            l0, l1 = Level("0"), Level("1")
+            q1 = Atom(; levels = [l0, l1]); q2 = Atom(; levels = [l0, l1])
+            sys = System([q1, q2])
+            add_interaction!(sys, (q1, q2), (l0, l1) => (l1, l0), g / 2)
+            add_detector!(sys, PopulationDetectorSpec(q1, l1; name = "P1"))
+            seq = Sequence(; tol = 1e-6, downsample = ds)
+            push!(seq, Wait(T))
+            play(sys, seq; initial_state = [l0, l1], density_matrix = true)
+        end
+
+        for ds in (1, 7, 20, 33)      # 7 and 33 do not divide the natural count
+            out = run(ds)
+            t = out.times
+            @test abs(t[end] / T - 1) < 1e-12          # endpoint exact
+            if length(t) > 2
+                d = diff(t)
+                @test (maximum(d) - minimum(d)) < 1e-15 * T   # uniform spacing
+            end
+        end
+
+        # A `downsample` larger than the step count must still yield one sample,
+        # not inflate the instruction to a full group.
+        for ds in (150, 5000)
+            out = run(ds)
+            @test length(out.times) == 1
+            @test abs(out.times[end] / T - 1) < 1e-12
+        end
+    end
+end
+
+@testset "Density matrix" begin
     @testset "dissipator is exact or CPTP across jump topologies" begin
-        # The per-source-level Kraus set is EXACT where the channels leaving a
-        # level are the only ones acting on it, and second order otherwise. In
-        # every topology it must stay trace-preserving and positive at any step
-        # size -- an unfavourable topology may lose exactness, never physicality.
-        #
-        # This covers the case an earlier construction got wrong: pure dephasing
-        # must leave populations exactly fixed.
+        # The per-source-level Kraus set is exact where the channels leaving a level are
+        # the only ones acting on it, second order otherwise, and trace-preserving and
+        # positive at any step size in every topology.
         mkJ(specs, d) = begin
             J = Tuple{Base.RefValue{ComplexF64},AtomTwin.Dynamiq.Op,Vector{Float64}}[]
             for (p, q, g) in specs
@@ -471,15 +478,17 @@ end
                 @test minimum(eigvals(Hermitian((ρ + ρ') / 2))) > -1e-12
             end
         end
+
+        # Allocation-free hot loop.
+        J = mkJ([(1, 3, 2.0)], d)
+        ρ = copy(ρ0); q1 = copy(ρ0); q2 = copy(ρ0)
+        AtomTwin.Dynamiq.fdissipator2!(0.1, ρ, J, q1, q2)
+        copyto!(ρ, ρ0)
+        @test (@allocated AtomTwin.Dynamiq.fdissipator2!(0.1, ρ, J, q1, q2)) == 0
     end
 
-
-
     @testset "automatic step honours tol on a dissipative system" begin
-        # With dissipation the Strang splitting error binds, not the propagator,
-        # so the solver sub-divides each step until it meets `tol`. Pins the
-        # property that matters: achieved error tracks the request, and a looser
-        # tol really does buy a bigger step.
+        # With dissipation the splitting error binds, and the solver sub-divides to meet `tol`.
         Ω, γ, Δ, T = 2π*1e6, 2π*0.5e6, 2π*2e6, 4e-6
         function run(seqf)
             g, e = Level("g"), Level("e")
@@ -496,12 +505,8 @@ end
             out.detectors["Pe"][end], length(out.times)
         end
 
-        # `tol` bounds ONE integration step. What this measures is the error
-        # accumulated over the whole instruction, so it is larger, and it falls
-        # more slowly than `tol` itself: the step error is O(h³) and the number
-        # of steps grows as tol^(-1/3), so the accumulated error goes as
-        # tol^(2/3) -- roughly 2.15x per decade, not 10x. Measured 8.7, 18.5,
-        # 40.6, 87.3 (err/tol) for tol = 1e-6 … 1e-9.
+        # `tol` bounds one step; the error accumulated over the instruction goes as
+        # tol^(2/3): the step error is O(h³) and the step count grows as tol^(-1/3).
         ref, _ = run(() -> Sequence(5e-12))
         errs = Float64[]
         for tol in (1e-4, 1e-5, 1e-6)
@@ -512,154 +517,32 @@ end
         # The controller responds to `tol`: tighter always means more accurate.
         @test issorted(errs; rev = true)
 
-        # And it responds at the rate the scheme dictates. A decade of `tol`
-        # buys 10^(2/3) = 4.64x; allow a factor of two either side, which still
-        # fails loudly if the controller stops tracking `tol` (ratio -> 1) or if
-        # something makes it track linearly (ratio -> 10).
+        # A decade of `tol` buys 10^(2/3) = 4.64×; a factor of two either side.
         for r in (errs[1] / errs[2], errs[2] / errs[3])
             @test 2.3 < r < 9.3
         end
     end
 
-
-    @testset "downsample keeps the output grid uniform and endpoint exact" begin
-        # `dt` is refined so `downsample` divides the step count. Without that the
-        # final group is partial: its sample sits closer to its predecessor than
-        # the rest, leaving `out.times` non-uniform in exactly one interval -- a
-        # grid that looks uniform and breaks `diff(t)` at the boundary. Worse,
-        # sizing the buffer with `÷` dropped that sample entirely, losing the
-        # endpoint whenever the two did not divide evenly.
-        g = 2π * 1e6
-        T = 2π / g
-        function run(ds)
-            l0, l1 = Level("0"), Level("1")
-            q1 = Atom(; levels = [l0, l1]); q2 = Atom(; levels = [l0, l1])
-            sys = System([q1, q2])
-            add_interaction!(sys, (q1, q2), (l0, l1) => (l1, l0), g / 2)
-            add_detector!(sys, PopulationDetectorSpec(q1, l1; name = "P1"))
-            seq = Sequence(; tol = 1e-6, downsample = ds)
-            push!(seq, Wait(T))
-            play(sys, seq; initial_state = [l0, l1], density_matrix = true)
-        end
-
-        for ds in (1, 7, 20, 33)      # 7 and 33 do not divide the natural count
-            out = run(ds)
-            t = out.times
-            @test abs(t[end] / T - 1) < 1e-12          # endpoint exact
-            if length(t) > 2
-                d = diff(t)
-                @test (maximum(d) - minimum(d)) < 1e-15 * T   # uniform spacing
+    @testset "error control without dissipation" begin
+        g, e = Level("g"), Level("e")
+        Ω = 2π * 10e6
+        for dt in (10e-9, 100e-9)
+            a = Atom(; levels = [g, e])
+            sys = System([a])
+            c = add_coupling!(sys, a, g => e, Ω; active = false)
+            add_detector!(sys, PopulationDetectorSpec(a, e; name = "Pe"))
+            seq = Sequence(dt)
+            @sequence seq begin
+                Pulse([c], 0.95e-6)
             end
-        end
-
-        # A `downsample` larger than the step count must still yield one sample,
-        # not inflate the instruction to a full group.
-        for ds in (150, 5000)
-            out = run(ds)
-            @test length(out.times) == 1
-            @test abs(out.times[end] / T - 1) < 1e-12
+            Pe = play(sys, seq; initial_state = [g], density_matrix = true).detectors["Pe"][end]
+            @test isapprox(Pe, sin(Ω * 0.95e-6 / 2)^2; atol = 1e-3)
         end
     end
-
-
-    @testset "Chebyshev hot loop is allocation-free" begin
-        # The Bessel coefficients depend only on (ΔE·dt, tol), both constant
-        # within an instruction, so they are built once by `plan_step` and the
-        # per-step call does no coefficient work and touches no global state.
-        # Computing them per step instead cost 29 us against 100 ns here.
-        d = 2
-        Ω = 2π * 5e5
-        op = AtomTwin.Dynamiq.Op(
-            Tuple{Int,Int,ComplexF64}[(1, 2, ComplexF64(Ω))],
-            Tuple{Int,Int,ComplexF64}[(2, 1, ComplexF64(Ω))], d)
-        H = Tuple{Base.RefValue{ComplexF64},AtomTwin.Dynamiq.Op}[
-                (Ref(ComplexF64(1.0)), op)]
-        spec = AtomTwin.Dynamiq.spectral_spec(H)
-        Hm = ComplexF64[0 Ω; Ω 0]
-        ψ0 = ComplexF64[1, 0]
-
-        for dt in (1e-9, 1e-7)
-            plan = AtomTwin.Dynamiq.plan_step(AtomTwin.Dynamiq.Chebyshev(), ψ0, dt,
-                                              spec; tol = 1e-12)
-            ψ = copy(ψ0)
-            AtomTwin.Dynamiq.chebyshev!(ψ, H, plan)          # warm up
-            @test norm(ψ - exp(-1im * Hm * dt) * ψ0) < 1e-12  # still exact
-
-            copyto!(ψ, ψ0)
-            @test (@allocated AtomTwin.Dynamiq.chebyshev!(ψ, H, plan)) == 0
-        end
-    end
-
-
-    @testset "Taylor(order) is honoured" begin
-        # `propagate!(::Taylor, ...)` hardcoded `order = 4`, so `Taylor(8)`
-        # silently ran at order 4. `TaylorPlan` now carries the order.
-        d = 2
-        Ω = 2π * 5e5
-        op = AtomTwin.Dynamiq.Op(
-            Tuple{Int,Int,ComplexF64}[(1, 2, ComplexF64(Ω))],
-            Tuple{Int,Int,ComplexF64}[(2, 1, ComplexF64(Ω))], d)
-        H = Tuple{Base.RefValue{ComplexF64},AtomTwin.Dynamiq.Op}[
-                (Ref(ComplexF64(1.0)), op)]
-        spec = AtomTwin.Dynamiq.spectral_spec(H)
-        Hm = ComplexF64[0 Ω; Ω 0]
-        ψ0 = ComplexF64[1, 0]
-        dt = 3e-7                       # coarse enough that the order matters
-
-        errs = map((3, 4, 7, 8)) do ord
-            plan = AtomTwin.Dynamiq.plan_step(AtomTwin.Dynamiq.Taylor(ord), ψ0, dt, spec)
-            ψ = copy(ψ0)
-            AtomTwin.Dynamiq.propagate!(AtomTwin.Dynamiq.Taylor(ord), ψ, H, plan)
-            norm(ψ - exp(-1im * Hm * dt) * ψ0)
-        end
-        # Strictly decreasing: each stable order is more accurate than the last.
-        @test issorted(errs; rev = true)
-        @test errs[4] < errs[2] / 100   # order 8 well clear of order 4
-    end
-
-
-    @testset "stability warning is integrator-aware" begin
-        # The warning describes Taylor's failure mode, and `evolve!` used to ask
-        # for it with `get(kwargs, :order, 4)` -- but `order` moved onto
-        # `Taylor(order)`, so that always returned 4 and every Chebyshev run was
-        # warned against a limit it does not have. Chebyshev at theta = 63 is
-        # accurate to 3.5e-13 where Taylor-4 is wrong by 6.5e+05.
-        Ω = 2π * 5e6
-        op = AtomTwin.Dynamiq.Op(
-            Tuple{Int,Int,ComplexF64}[(1, 2, ComplexF64(Ω))],
-            Tuple{Int,Int,ComplexF64}[(2, 1, ComplexF64(Ω))], 2)
-        H = Tuple{Base.RefValue{ComplexF64},AtomTwin.Dynamiq.Op}[
-                (Ref(ComplexF64(1.0)), op)]
-        dt = 1e-6                                   # theta ~ 31, far past 2.828
-
-        # Chebyshev: silent, and says so by returning 0.
-        @test_logs AtomTwin.Dynamiq.warn_if_step_too_large(
-            H, dt, AtomTwin.Dynamiq.Chebyshev())
-
-        # Taylor: warns, and reports the limit of the order actually requested.
-        @test_logs (:warn,) AtomTwin.Dynamiq.warn_if_step_too_large(
-            H, dt, AtomTwin.Dynamiq.Taylor(4))
-        @test_logs (:warn,) AtomTwin.Dynamiq.warn_if_step_too_large(
-            H, dt, AtomTwin.Dynamiq.Taylor(8))
-
-        # Chebyshev really is accurate where the old warning claimed divergence.
-        spec = AtomTwin.Dynamiq.spectral_spec(H)
-        Hm = ComplexF64[0 Ω; Ω 0]
-        ψ0 = ComplexF64[1, 0]
-        plan = AtomTwin.Dynamiq.plan_step(AtomTwin.Dynamiq.Chebyshev(), ψ0, dt,
-                                          spec; tol = 1e-12)
-        ψ = copy(ψ0)
-        AtomTwin.Dynamiq.propagate!(AtomTwin.Dynamiq.Chebyshev(), ψ, H, plan)
-        @test norm(ψ - exp(-1im * Hm * dt) * ψ0) < 1e-10
-    end
-
 
     @testset "solver probe" begin
-        # The controller's instrumentation hook. `NoProbe` must cost nothing --
-        # the field was previously `::Any`, and the point of typing it is that
-        # an uninstrumented run is unchanged -- and a custom probe must actually
-        # observe the controller, which is otherwise unreachable without
-        # patching the solver.
+        # The controller's instrumentation hook: `NoProbe` costs nothing, and a custom
+        # probe observes the controller without changing the answer.
         g, e = Level("g"), Level("e")
         atom = Atom(; levels = [g, e])
         sys  = System([atom])
@@ -691,283 +574,212 @@ end
         # the same system gives uninstrumented (see bench/bench1_small.jl).
         @test abs(out.detectors["P"][end] - 0.4220190) < 1e-6
     end
-
 end
 
-@testset "MCWF is independent of the sampling step" begin
-    # `dt` is a SAMPLING resolution on the MCWF path, so the trajectory mean must
-    # not depend on it.
-    #
-    # The configuration matters: a plain two-level atom does NOT show this. It
-    # needs a manifold with several jump channels and a detuning ≫ Γ. Fixed first
-    # by a sub-step bound on the spectral width, now by exact jump times
-    # (`mcwf_advance!`), which need no sub-steps at all.
-    gm = HyperfineManifold(0//1, 0; label = "g", term = l"1S0", g_F = 0.0)
-    ex = HyperfineManifold(1//1, 1; label = "e", term = l"3P1", g_F = 1.5)
-    Ω, Γ = 2π * 50e3, 2π * 182e3
-    θ  = 54.7356
-    # The trap's ~10 MHz light shift is what pushes ΔE far above Γ; without it
-    # the spectral bound never binds and this testset cannot see the bug.
-    tw = GaussianBeam(λ = 767e-9, w0 = 1e-6, P = 50e-3,
-                      pol = [sind(θ), 0.0, cosd(θ)])
-    δ0 = 2π * 9.537e6                         # the light shift itself
+@testset "Classical motion" begin
+    @testset "velocity Verlet is 2nd order" begin
+        D = AtomTwin.Dynamiq
 
-    function run(dt, δ; dm = false, shots = 600)
-        yb  = Ytterbium174Atom(; levels = [gm..., ex...], x_init = [0.0, 0.0, 0.0])
-        sys = System(yb, tw)
-        add_quantization_axis!(sys, [0.0, 0.0, 1.0])
-        add_zeeman_detunings!(sys, yb, ex; B = 2.0Units.G, delta = δ0 + δ)
-        c = add_coupling!(sys, yb, gm => ex, Ω, Ω, Ω; active = false)
-        add_decay!(sys, yb, ex => gm, Γ)
-        for (k, lv) in enumerate(ex.levels)
-            add_detector!(sys, PopulationDetectorSpec(yb, lv; name = "P$k"))
+        # Atom falling through a Gaussian dipole trap; compare final x against a
+        # highly-resolved reference.
+        function _finalx(nsteps; T = 2e-3)
+            atom = D.NLevelAtom(2; x = [2e-6, 0.0, 0.0], v = [0.0, 0.0, 0.0],
+                                m = 87 * 1.66053906660e-27,
+                                alphas = Dict(1064e-9 => [1e-39, 1e-39]))
+            beam = D.GaussianBeam(1064e-9, 20e-6, 0.5; r0 = [0.0, 0.0, 0.0])
+            fill!(atom._P, 0.0); atom._P[1] = 1.0
+            D.newton([atom], collect(range(T / nsteps, T, nsteps)); beams = [beam])
+            atom.x[1]
         end
-        seq = Sequence(dt)
-        @sequence seq begin
-            Pulse(c, 100e-6)
-        end
-        if dm
-            o = play(sys, seq; initial_state = gm[0], density_matrix = true)
-            sum(o.detectors["P$k"][end] for k in 1:3)
-        else
-            o = play(sys, seq; initial_state = gm[0], shots = shots,
-                     rng = MersenneTwister(5))
-            sum(mean(o.detectors["P$k"][end, :]) for k in 1:3)
-        end
-    end
 
-    # Far off resonance the population is small and most sensitive to jump timing.
-    for δ in (2π * 1e6, 2π * 2e6)
-        exact = run(1e-9, δ; dm = true)
-        @test exact > 0                      # a real, non-trivial population
-        # The master equation itself must not care about dt. Its adaptive Strang
-        # splitter controls error to `tol`, so compare at that level.
-        @test isapprox(run(200e-9, δ; dm = true), exact; rtol = 1e-3)
-        # …and neither may MCWF, across a 40× range of sampling step.
-        for dt in (5e-9, 50e-9, 200e-9)
-            @test isapprox(run(dt, δ), exact; rtol = 0.25)
-        end
-    end
-end
+        ref = _finalx(400_000)
+        e1 = abs(_finalx(2_000)  - ref)
+        e2 = abs(_finalx(8_000)  - ref)
+        @test 1.7 < log2(e1 / e2) / 2 < 2.3       # two doublings between 2k and 8k
 
-# The Chebyshev plan is built once per instruction. Anything that moves the
-# spectrum within the instruction -- a trap ramped or moved under a frozen atom,
-# a van der Waals term with no value until its first update -- used to leave the
-# expansion outside its interval, where it is not unitary: P_e came out as 1e86
-# (ramp), 1e158 (move), 1e50 (vdW), with no error raised.
-@testset "Chebyshev plan follows a spectrum that moves within an instruction" begin
-    gm = HyperfineManifold(0//1, 0; label = "¹S₀", term = l"1S0", g_F = 0.0)
-    em = HyperfineManifold(1//1, 1; label = "³P₁", term = l"3P1", g_F = 1.5)
-    g, e = gm[0], em[0]
-
-    function trap_run(dt, mode; decay = false, shots = 1)
-        tw  = TweezerArray(λ = 767e-9, w0 = 1e-6, P_total = 50e-3,
-                           row_freqs = [0.0], col_freqs = [0.0])
-        yb  = Ytterbium174Atom(; levels = [g, e])
-        sys = System([yb], [tw])
-        c   = add_coupling!(sys, yb, g => e, 2π * 1e6; active = false)
-        decay && add_decay!(sys, yb, e => g, 2π * 1e3)
-        add_detector!(sys, PopulationDetectorSpec(yb, e; name = "Pe"))
-        seq = dt === nothing ? Sequence(; tol = 1e-6) : Sequence(dt)
-        part = mode === :ramp ? RampRow(tw, 1, 0.1, 2e-6) : MoveCol(tw, 1, 1e6, 2e-6)
-        @sequence seq begin
-            Parallel([Pulse([c], 2e-6), part])
-        end
-        # frozen: this tests the frozen solvers' tracking (a moving trap makes the
-        # run non-static, which would otherwise send it to the semiclassical ones).
-        Pe = play(sys, seq; initial_state = [g], shots = shots,
-                  frozen = true).detectors["Pe"]
-        return shots == 1 ? Pe[end] : sum(Pe[end, :]) / shots
-    end
-
-    for mode in (:ramp, :move)
-        ref = trap_run(1e-9, mode)
-        @test 0 < ref < 1
-        # Coarse steps carry a discretisation error, but must stay physical.
-        @test isapprox(trap_run(50e-9, mode), ref; atol = 0.02)
-        @test 0 <= trap_run(nothing, mode) <= 1
-        @test 0 <= trap_run(50e-9, mode; decay = true, shots = 2) <= 1   # wfmc
-    end
-
-    # Two static atoms: vdW must match the same constant interaction exactly.
-    gg, rr = Level("g"), Level("r")
-    V, d = 2π * 50e6, 4e-6
-    function pair_run(kind, dt)
-        a1 = Atom(; levels = [gg, rr], x_init = [0.0, 0, 0])
-        a2 = Atom(; levels = [gg, rr], x_init = [d, 0, 0])
-        sys = System([a1, a2])
-        cs = [add_coupling!(sys, a, gg => rr, 2π * 1e6; active = false) for a in (a1, a2)]
-        kind === :vdw ? add_vdwinteraction!(sys, (a1, a2), (rr, rr) => (rr, rr), V * d^6) :
-                        add_interaction!(sys, (a1, a2), (rr, rr) => (rr, rr), V)
-        add_detector!(sys, PopulationDetectorSpec(a1, rr; name = "P1"))
-        seq = Sequence(dt)
-        @sequence seq begin
-            Pulse(cs, 0.35e-6)
-        end
-        play(sys, seq; initial_state = [gg, gg]).detectors["P1"][end]
-    end
-    @test isapprox(pair_run(:vdw, 20e-9), pair_run(:const, 20e-9); atol = 1e-9)
-end
-
-# With no jump operators the density-matrix path used to take one bare Taylor-4
-# step per `dt`: no error control, and past ‖H‖·dt ≈ 2.8 it diverged silently
-# (P_e = -2e17 for a 10 MHz Rabi drive at dt = 100 ns).
-@testset "density matrix without dissipation is error-controlled" begin
-    g, e = Level("g"), Level("e")
-    Ω = 2π * 10e6
-    for dt in (10e-9, 100e-9)
-        a = Atom(; levels = [g, e])
-        sys = System([a])
-        c = add_coupling!(sys, a, g => e, Ω; active = false)
-        add_detector!(sys, PopulationDetectorSpec(a, e; name = "Pe"))
-        seq = Sequence(dt)
-        @sequence seq begin
-            Pulse([c], 0.95e-6)
-        end
-        Pe = play(sys, seq; initial_state = [g], density_matrix = true).detectors["Pe"][end]
-        @test isapprox(Pe, sin(Ω * 0.95e-6 / 2)^2; atol = 1e-3)
-    end
-end
-
-
-# A move inside a `Parallel` converged at FIRST order: the move's modifier took
-# its span from a `0:dt:duration` grid that loses its endpoint to rounding, and a
-# `Parallel` (no `duration` of its own) ran on the requested step, so any
-# difference in the parts' step counts made it a step long.
-@testset "moves converge at second order" begin
-    gm = HyperfineManifold(0//1, 0; label = "¹S₀", term = l"1S0", g_F = 0.0)
-    em = HyperfineManifold(1//1, 1; label = "³P₁", term = l"3P1", g_F = 1.5)
-    g, e = gm[0], em[0]
-    function run(dt; density_matrix = false, Γ = 0.0)
-        tw  = TweezerArray(λ = 767e-9, w0 = 1e-6, P_total = 50e-3,
-                           row_freqs = [0.0], col_freqs = [0.0])
-        yb  = Ytterbium174Atom(; levels = [g, e])
-        sys = System([yb], [tw])
-        c   = add_coupling!(sys, yb, g => e, 2π * 1e6; active = false)
-        Γ > 0 && add_decay!(sys, yb, e => g, Γ)
-        add_detector!(sys, PopulationDetectorSpec(yb, e; name = "Pe"))
-        # A tight `tol` keeps the density-matrix solver's adaptive sub-steps from
-        # limiting the error: with the default, the controller's tolerance is
-        # comparable to the dt² error at coarse dt and hides its scaling.
-        seq = Sequence(dt; tol = 1e-10)
-        @sequence seq begin
-            Parallel([Pulse([c], 1e-6), MoveCol(tw, 1, 0.5e6, 1e-6; sweep = :min_jerk)])
-        end
-        real(play(sys, seq; initial_state = [g], density_matrix = density_matrix,
-                  rng = MersenneTwister(1)).detectors["Pe"][end])
-    end
-    # Sweep from coarse to fine steps: at coarse dt a large dt² error can mask
-    # first-order ones. This happened before: two O(dt) error terms in the
-    # semiclassical step (the end-of-step force used start-of-step populations,
-    # and the Hamiltonian used end-of-step atom positions with midpoint beam
-    # positions) partly cancelled. With steps of 4/2/1 ns the ratio was 4.27,
-    # which looked second order and passed. At smaller steps the dt² term became
-    # negligible: the ratio rose to 47.6, turned negative and then fell toward 2,
-    # revealing first-order convergence. Every ratio in the sweep must be ≈ 4.
-    #
-    # Each semiclassical solver has its own step loop, so each is checked:
-    # statevector (`tdse_semiclassical`), density matrix with decay
-    # (`qme_semiclassical`), and MCWF (`wfmc_semiclassical`). The MCWF decay is
-    # weak enough that no jump fires, which keeps the run deterministic: shot
-    # noise would swamp the ~1e-7 differences measured here.
-    dts = [8e-9 / 2^k for k in 0:8]          # 8 ns down to 0.03125 ns
-    for kw in ((;), (density_matrix = true, Γ = 2π * 10e3), (Γ = 2π * 10.0,))
-        P = [run(dt; kw...) for dt in dts]
-        for k in 1:length(P) - 2
-            ratio = (P[k] - P[k+1]) / (P[k+1] - P[k+2])
-            @test 3.8 < ratio < 4.2         # 2 for first order, 4 for second
-        end
-    end
-end
-
-# The classical solver (`newton`, used when no `initial_state` is given) must be
-# second order in dt for a moving trap as well as a static one. Velocity Verlet's
-# force at the end of a step needs the beams at the step's end time; a force
-# computed with the beams at any other time is first order once the trap moves.
-@testset "classical moves converge at second order" begin
-    g = Level("1S0")
-    function run(dt; moving)
-        tw  = TweezerArray(λ = 767e-9, w0 = 1e-6, P_total = 50e-3,
-                           row_freqs = [0.0], col_freqs = [0.0])
-        yb  = Ytterbium174Atom(; levels = [g], x_init = [moving ? 0.0 : 0.1e-6, 0.0, 0.0],
-                               v_init = [0.0, 0.0, 0.0])
-        sys = System([yb], [tw])
-        add_detector!(sys, MotionDetectorSpec(yb; dims = [1], name = "x"))
-        seq = Sequence(dt)
-        if moving
-            # The trap moves 1.5 µm in 1 µs, faster than the atom can follow, so
-            # the force on the atom changes in time as the trap sweeps past.
-            @sequence seq begin
-                MoveCol(tw, 1, 0.5e6, 1e-6; sweep = :min_jerk)
+        @testset "force cache is invalidated, not silently reused" begin
+            # A stale cached force corrupts the trajectory; reset_force! clears it.
+            function _traj(; poison::Bool, reset::Bool)
+                atom = D.NLevelAtom(2; x = [3e-6, 0.0, 0.0], v = [0.0, 0.0, 0.0],
+                                    m = 87 * 1.66053906660e-27,
+                                    alphas = Dict(1064e-9 => [1e-39, 1e-39]))
+                beam = D.GaussianBeam(1064e-9, 20e-6, 0.5; r0 = [0.0, 0.0, 0.0])
+                if poison
+                    atom._F[1] = 1e-20; atom._Fvalid = true
+                end
+                reset && D.reset_force!(atom)
+                fill!(atom._P, 0.0); atom._P[1] = 1.0
+                D.newton([atom], collect(range(1e-6, 1e-3, 1000)); beams = [beam])
+                atom.x[1]
             end
-        else
-            # Control: a static trap, with the atom displaced from its centre.
+            fresh = _traj(poison = false, reset = false)
+            @test _traj(poison = true,  reset = false) != fresh   # stale cache DOES matter
+            @test _traj(poison = true,  reset = true)  == fresh   # and reset fixes it
+        end
+    end
+
+    @testset "moves converge at second order (semiclassical solvers)" begin
+        gm = HyperfineManifold(0//1, 0; label = "¹S₀", term = l"1S0", g_F = 0.0)
+        em = HyperfineManifold(1//1, 1; label = "³P₁", term = l"3P1", g_F = 1.5)
+        g, e = gm[0], em[0]
+        function run(dt; density_matrix = false, Γ = 0.0)
+            tw  = TweezerArray(λ = 767e-9, w0 = 1e-6, P_total = 50e-3,
+                               row_freqs = [0.0], col_freqs = [0.0])
+            yb  = Ytterbium174Atom(; levels = [g, e])
+            sys = System([yb], [tw])
+            c   = add_coupling!(sys, yb, g => e, 2π * 1e6; active = false)
+            Γ > 0 && add_decay!(sys, yb, e => g, Γ)
+            add_detector!(sys, PopulationDetectorSpec(yb, e; name = "Pe"))
+            # A tight `tol` keeps the density-matrix solver's adaptive sub-steps from
+            # limiting the error: with the default, the controller's tolerance is
+            # comparable to the dt² error at coarse dt and hides its scaling.
+            seq = Sequence(dt; tol = 1e-10)
             @sequence seq begin
-                Wait(1e-6)
+                Parallel([Pulse([c], 1e-6), MoveCol(tw, 1, 0.5e6, 1e-6; sweep = :min_jerk)])
+            end
+            real(play(sys, seq; initial_state = [g], density_matrix = density_matrix,
+                      rng = MersenneTwister(1)).detectors["Pe"][end])
+        end
+        # Every ratio across a sweep from coarse to fine steps must be ≈ 4: at coarse
+        # dt a large dt² term can mask first-order ones. Each semiclassical solver has
+        # its own step loop, so each is checked:
+        # statevector (`tdse_semiclassical`), density matrix with decay
+        # (`qme_semiclassical`), and MCWF (`wfmc_semiclassical`). The MCWF decay is
+        # weak enough that no jump fires, which keeps the run deterministic: shot
+        # noise would swamp the ~1e-7 differences measured here.
+        dts = [8e-9 / 2^k for k in 0:8]          # 8 ns down to 0.03125 ns
+        for kw in ((;), (density_matrix = true, Γ = 2π * 10e3), (Γ = 2π * 10.0,))
+            P = [run(dt; kw...) for dt in dts]
+            for k in 1:length(P) - 2
+                ratio = (P[k] - P[k+1]) / (P[k+1] - P[k+2])
+                @test 3.8 < ratio < 4.2         # 2 for first order, 4 for second
             end
         end
-        o = @test_logs (:warn, r"Initial state not specified") play(sys, seq)
-        o.detectors["x"][end, 1]
     end
-    dts = [8e-9 / 2^k for k in 0:8]          # 8 ns down to 0.03125 ns
-    for moving in (false, true)
-        X = [run(dt; moving) for dt in dts]
-        for k in 1:length(X) - 2
-            ratio = (X[k] - X[k+1]) / (X[k+1] - X[k+2])
-            @test 3.8 < ratio < 4.2         # 2 for first order, 4 for second
+
+    # Velocity Verlet's end-of-step force needs the beams at the step's end time;
+    # any other time is first order once the trap moves.
+    @testset "moves converge at second order (classical solver)" begin
+        g = Level("1S0")
+        function run(dt; moving)
+            tw  = TweezerArray(λ = 767e-9, w0 = 1e-6, P_total = 50e-3,
+                               row_freqs = [0.0], col_freqs = [0.0])
+            yb  = Ytterbium174Atom(; levels = [g], x_init = [moving ? 0.0 : 0.1e-6, 0.0, 0.0],
+                                   v_init = [0.0, 0.0, 0.0])
+            sys = System([yb], [tw])
+            add_detector!(sys, MotionDetectorSpec(yb; dims = [1], name = "x"))
+            seq = Sequence(dt)
+            if moving
+                # The trap moves 1.5 µm in 1 µs, faster than the atom can follow, so
+                # the force on the atom changes in time as the trap sweeps past.
+                @sequence seq begin
+                    MoveCol(tw, 1, 0.5e6, 1e-6; sweep = :min_jerk)
+                end
+            else
+                # Control: a static trap, with the atom displaced from its centre.
+                @sequence seq begin
+                    Wait(1e-6)
+                end
+            end
+            o = @test_logs (:warn, r"Initial state not specified") play(sys, seq)
+            o.detectors["x"][end, 1]
+        end
+        dts = [8e-9 / 2^k for k in 0:8]          # 8 ns down to 0.03125 ns
+        for moving in (false, true)
+            X = [run(dt; moving) for dt in dts]
+            for k in 1:length(X) - 2
+                ratio = (X[k] - X[k+1]) / (X[k+1] - X[k+2])
+                @test 3.8 < ratio < 4.2         # 2 for first order, 4 for second
+            end
         end
     end
 end
 
-@testset "MCWF photon counts match the master equation" begin
-    # A jump used to be applied at the END of the sub-step it was detected in, which
-    # lengthened every emission cycle by ~h/2: on a saturated line the photon count
-    # was ~2.5 % low. Jumps are now placed at their exact time. The manifold decay
-    # (three channels, two of them dark) checks that the jump is drawn from the
-    # state at that time, which holds the decaying amplitude.
-    Γ = 2π * 29.1e6; s = 40.0; Ω = Γ * sqrt(s / 2); T = 400e-9; dt = 1e-9
-    function build(clicks, manifold)
-        if manifold
-            gm, em = HyperfineManifold(0//1, 0; label = "g"), HyperfineManifold(1//1, 1; label = "e")
-            a = Atom(; levels = [gm..., em...]); g, e, decay = gm[0], em[0], em => gm
-        else
-            g, e = Level("g"), Level("e")
-            a = Atom(; levels = [g, e]); decay = e => g
+@testset "MCWF" begin
+    @testset "photon counts match the master equation" begin
+        # Saturated line: photon counts equal Γ∫P_e dt from the master equation. The
+        # manifold decay (three channels, two dark) checks that each jump is drawn from
+        # the state at its time, which holds the decaying amplitude.
+        Γ = 2π * 29.1e6; s = 40.0; Ω = Γ * sqrt(s / 2); T = 400e-9; dt = 1e-9
+        function build(clicks, manifold)
+            if manifold
+                gm, em = HyperfineManifold(0//1, 0; label = "g"), HyperfineManifold(1//1, 1; label = "e")
+                a = Atom(; levels = [gm..., em...]); g, e, decay = gm[0], em[0], em => gm
+            else
+                g, e = Level("g"), Level("e")
+                a = Atom(; levels = [g, e]); decay = e => g
+            end
+            sys = System(a)
+            c = add_coupling!(sys, a, g => e, Ω; active = false)
+            if clicks
+                pd = PhotoDetectorSpec(name = "c"); add_detector!(sys, pd)
+                add_decay!(sys, a, decay, Γ; clicks = pd)
+            else
+                add_decay!(sys, a, decay, Γ)
+                add_detector!(sys, PopulationDetectorSpec(a, e; name = "Pe"))
+            end
+            seq = Sequence(dt)
+            push!(seq, Pulse(c, T; downsample = 1)); push!(seq, Wait(60e-9; downsample = 1))
+            sys, seq, g
         end
-        sys = System(a)
-        c = add_coupling!(sys, a, g => e, Ω; active = false)
-        if clicks
-            pd = PhotoDetectorSpec(name = "c"); add_detector!(sys, pd)
-            add_decay!(sys, a, decay, Γ; clicks = pd)
-        else
-            add_decay!(sys, a, decay, Γ)
-            add_detector!(sys, PopulationDetectorSpec(a, e; name = "Pe"))
+        for manifold in (false, true)
+            sys, seq, g = build(false, manifold)
+            o = play(sys, seq; initial_state = g, density_matrix = true)
+            t = [0.0; o.times]; P = [0.0; real.(o.detectors["Pe"])]
+            N_exact = Γ * sum(0.5 * (P[i] + P[i-1]) * (t[i] - t[i-1]) for i in 2:length(t))
+            sys, seq, g = build(true, manifold)
+            N = vec(sum(play(sys, seq; initial_state = g, shots = 6000,
+                             rng = MersenneTwister(11)).detectors["c"], dims = 1))
+            se = std(N) / sqrt(length(N))
+            @test abs(mean(N) - N_exact) < 4se  
+            @test abs(mean(N) / N_exact - 1) < 0.006
         end
-        seq = Sequence(dt)
-        push!(seq, Pulse(c, T; downsample = 1)); push!(seq, Wait(60e-9; downsample = 1))
-        sys, seq, g
     end
-    for manifold in (false, true)
-        sys, seq, g = build(false, manifold)
-        o = play(sys, seq; initial_state = g, density_matrix = true)
-        t = [0.0; o.times]; P = [0.0; real.(o.detectors["Pe"])]
-        N_exact = Γ * sum(0.5 * (P[i] + P[i-1]) * (t[i] - t[i-1]) for i in 2:length(t))
-        sys, seq, g = build(true, manifold)
-        N = vec(sum(play(sys, seq; initial_state = g, shots = 6000,
-                         rng = MersenneTwister(11)).detectors["c"], dims = 1))
-        se = std(N) / sqrt(length(N))
-        @test abs(mean(N) - N_exact) < 4se      # was 12σ low
-        @test abs(mean(N) / N_exact - 1) < 0.006
+
+    # Each jump is placed where the norm crosses its threshold, on the Chebyshev
+    # step's dense output: a step that is a whole number of Rabi periods, or that
+    # holds several jumps, gives the master-equation result.
+    @testset "jump times are exact, whatever the sampling step" begin
+        function twolevel(Ω, Γ, T, nsamp; dm = false, shots = 1000, Δ = 0.0, clicks = false)
+            g, e = Level("g"), Level("e"); a = Atom(; levels = [g, e]); s = System(a)
+            c = add_coupling!(s, a, g => e, Ω; active = false)
+            Δ != 0 && add_detuning!(s, a, e, -Δ)
+            if clicks
+                pd = PhotoDetectorSpec(name = "clicks"); add_detector!(s, pd)
+                add_decay!(s, a, e => g, Γ; clicks = pd)
+            else
+                add_decay!(s, a, e => g, Γ)
+            end
+            add_detector!(s, PopulationDetectorSpec(a, e; name = "P"))
+            q = Sequence(T, nsamp); @sequence q begin Pulse(c, T) end
+            play(s, q; initial_state = g, density_matrix = dm, shots = dm ? 1 : shots,
+                 rng = MersenneTwister(11))
+        end
+        # Sampling step = 10 Rabi periods (the preprint's Rabi benchmark).
+        Ω, Γ, T = 2π * 1e6, 2π * 0.5e3, 1e-3
+        ref = twolevel(Ω, Γ, T, 100; dm = true).detectors["P"]
+        P   = twolevel(Ω, Γ, T, 100; shots = 2000).detectors["P"]
+        @test mean(P[end, :]) ≈ ref[end] atol = 4 * 0.5 / sqrt(2000)
+        # Saturated line sampled at Γ·dt = 10: several jumps per step.
+        Ω, Γ = 2π * 2e6, 2π * 1e6
+        ref = twolevel(Ω, Γ, 20e-6, 20; dm = true).detectors["P"]
+        P   = twolevel(Ω, Γ, 20e-6, 20; shots = 2000).detectors["P"]
+        @test mean(P[end, :]) ≈ ref[end] atol = 4 * 0.5 / sqrt(2000)
+        # Photon counts on a far-detuned line equal Γ∫P_e dt at any sampling step.
+        Ω, Δ, Γ, T = 2π * 10e6, 2π * 50e6, 2π * 1e6, 5e-6
+        fine = twolevel(Ω, Γ, T, 5000; dm = true, Δ = Δ).detectors["P"]
+        expected = Γ * sum(fine) * (T / 5000)
+        for nsamp in (500, 12)                             # dt = 10 ns and 417 ns
+            n = vec(sum(twolevel(Ω, Γ, T, nsamp; shots = 20000, Δ = Δ, clicks = true).detectors["clicks"], dims = 1))
+            @test mean(n) ≈ expected atol = 4 * std(n) / sqrt(length(n))
+        end
     end
 end
 
 @testset "a shaped envelope on a position-dependent coupling is resampled within the step" begin
-    # A sub-step resampled the commanded amplitude of a PlanarCoupling (likewise
-    # GaussianCoupling, StarkShiftAC, VdWInteraction), but its coefficient --
-    # amplitude × geometric factor -- was rebuilt only by the per-`dt` `update!`:
-    # the envelope reached the Hamiltonian as a staircase at `dt`, however finely the
-    # MCWF or QME solver sub-stepped. At the origin a frozen PlanarCoupling is a
-    # GlobalCoupling, so the two must agree.
+    # The coefficient of a position-dependent field (amplitude × geometric factor)
+    # follows the envelope at every sub-step. At the origin a frozen PlanarCoupling
+    # is a GlobalCoupling, so the two must agree.
     g, e = Level("g"), Level("e")
     function run(planar; dm)
         a = Atom(; levels = [g, e], x_init = zeros(3), v_init = zeros(3))
@@ -986,46 +798,4 @@ end
     end
     @test run(true; dm = true) ≈ run(false; dm = true) rtol = 1e-10
     @test run(true; dm = false) == run(false; dm = false)
-end
-
-
-# Jumps used to be tested once per (sub-)step and placed at its ends. With a step
-# that is a whole number of Rabi periods every trajectory restarted in phase and
-# never dephased (P_e = 0.000 against 0.453); with γ·dt ≳ 1 the omitted second
-# jumps stranded population. Each jump is now placed at the time its norm
-# threshold is crossed, on the Chebyshev step's dense output.
-@testset "MCWF jump times are exact, whatever the sampling step" begin
-    function twolevel(Ω, Γ, T, nsamp; dm = false, shots = 1000, Δ = 0.0, clicks = false)
-        g, e = Level("g"), Level("e"); a = Atom(; levels = [g, e]); s = System(a)
-        c = add_coupling!(s, a, g => e, Ω; active = false)
-        Δ != 0 && add_detuning!(s, a, e, -Δ)
-        if clicks
-            pd = PhotoDetectorSpec(name = "clicks"); add_detector!(s, pd)
-            add_decay!(s, a, e => g, Γ; clicks = pd)
-        else
-            add_decay!(s, a, e => g, Γ)
-        end
-        add_detector!(s, PopulationDetectorSpec(a, e; name = "P"))
-        q = Sequence(T, nsamp); @sequence q begin Pulse(c, T) end
-        play(s, q; initial_state = g, density_matrix = dm, shots = dm ? 1 : shots,
-             rng = MersenneTwister(11))
-    end
-    # Sampling step = 10 Rabi periods (the preprint's Rabi benchmark).
-    Ω, Γ, T = 2π * 1e6, 2π * 0.5e3, 1e-3
-    ref = twolevel(Ω, Γ, T, 100; dm = true).detectors["P"]
-    P   = twolevel(Ω, Γ, T, 100; shots = 2000).detectors["P"]
-    @test mean(P[end, :]) ≈ ref[end] atol = 4 * 0.5 / sqrt(2000)
-    # Saturated line sampled at Γ·dt = 10: several jumps per step.
-    Ω, Γ = 2π * 2e6, 2π * 1e6
-    ref = twolevel(Ω, Γ, 20e-6, 20; dm = true).detectors["P"]
-    P   = twolevel(Ω, Γ, 20e-6, 20; shots = 2000).detectors["P"]
-    @test mean(P[end, :]) ≈ ref[end] atol = 4 * 0.5 / sqrt(2000)
-    # Photon counts on a far-detuned line equal Γ∫P_e dt at any sampling step.
-    Ω, Δ, Γ, T = 2π * 10e6, 2π * 50e6, 2π * 1e6, 5e-6
-    fine = twolevel(Ω, Γ, T, 5000; dm = true, Δ = Δ).detectors["P"]
-    expected = Γ * sum(fine) * (T / 5000)
-    for nsamp in (500, 12)                             # dt = 10 ns and 417 ns
-        n = vec(sum(twolevel(Ω, Γ, T, nsamp; shots = 20000, Δ = Δ, clicks = true).detectors["clicks"], dims = 1))
-        @test mean(n) ≈ expected atol = 4 * std(n) / sqrt(length(n))
-    end
 end

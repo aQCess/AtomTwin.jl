@@ -196,8 +196,7 @@ The implementation includes:
 
 `d_q = ê_q·d` are the spherical components that pair with the field coefficients
 `E_q = ê_q*·E` of `Efield_spherical` (E = Σ_q E_q ê_q), so d·E = Σ_q E_q d_q: there is
-no (−1)^q. (There was one: σ± came out with the wrong sign against π, and light polarised
-along (x̂+ẑ)/√2 excited the dipole (−x̂+ẑ)/√2.)
+no (−1)^q, and light polarised along ε̂ excites the dipole along ε̂.
 
 The formula used is
 
@@ -371,9 +370,6 @@ Compute the effective coupling strength from a fine-structure level `g`
 The mirror of the hyperfine → fine method: `e` is decomposed into
 `|J_e, m_J′; I, m_I⟩` components, and `g` couples to each with the dipole
 Clebsch–Gordan coefficient `⟨J_g, m_J; 1, Δm | J_e, m_J′⟩`, `Δm = m_J′ − m_J`.
-(It used to call the hyperfine → fine method with the levels swapped, which
-took Δm = m_J − m_J′ — σ⁺ and σ⁻ exchanged — and ran the dipole coefficient
-from the excited level.)
 """
 function compute_coupling_strength(g::FineLevel, e::HyperfineLevel, atom, Ω_π, Ω_σ⁺, Ω_σ⁻)
     Jg, mJg = g.J, g.mJ

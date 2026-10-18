@@ -33,7 +33,7 @@ References:
 """
     Ytterbium174
 
-Term symbols for Yb-174. Usually written `l"3P1"`; see [`Ytterbium171`](@ref).
+Term symbols for Yb-174. Usually written `l"3P1"`; see [`AtomTwin.Ytterbium171`](@ref).
 """
 module Ytterbium174
 import ..TermSymbol, ..TERM_REGISTRY, ..@term

@@ -19,7 +19,7 @@
 # vector and is the method one would actually use here. QME's large-d behaviour
 # is covered by benchmark 3 at a dimension it can reach.
 #
-#   atwin run bench/bench2_large.jl
+#   julia --project=. -t auto bench/bench2_large.jl
 
 using AtomTwin
 using Random: MersenneTwister

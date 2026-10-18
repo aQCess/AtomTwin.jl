@@ -259,7 +259,7 @@ is a global phase, and the Chebyshev propagator sets its degree from the spectra
 half-width `(Emax−Emin)/2` after recentering on `Ē`, so an offset costs nothing.
 
 Where the tensor shift mixes sublevels (`inner._cpairs`, fixed by `initialize!`),
-each trapping beam also gets a [`StarkShiftACTensor`](@ref) with the off-diagonal
+each trapping beam also gets a [`Dynamiq.StarkShiftACTensor`](@ref) with the off-diagonal
 elements, explicit `add_light_shift!` levels included: those set the diagonal only.
 """
 function _auto_light_shifts(sys, atoms, trapping_beams)

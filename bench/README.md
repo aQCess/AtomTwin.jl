@@ -1,15 +1,15 @@
 # Solver benchmarks
 
 Four small benchmarks covering the performance and accuracy envelope of the
-Dynamiq solvers. They exist to gate the `solvers.jl` refactor: the contract is
-that **time, allocations and accuracy all stay put**, so each benchmark prints
-all three as a flat, diffable table.
+Dynamiq solvers. They gate changes to the solvers: **time, allocations and
+accuracy must all stay put**, so each benchmark prints all three as a flat,
+diffable table (recorded values: `BASELINE.md`).
 
 ```
-atwin run bench/bench1_small.jl     # d = 4     per-step overhead
-atwin run bench/bench2_large.jl     # d = 4096  matvec throughput
-atwin run bench/bench3_stiff.jl     # d = 512 / 128, stiff
-atwin run bench/bench4_motion.jl    # semiclassical motion, plane-wave drives
+julia --project=. -t auto bench/bench1_small.jl     # d = 4     per-step overhead
+julia --project=. -t auto bench/bench2_large.jl     # d = 4096  matvec throughput
+julia --project=. -t auto bench/bench3_stiff.jl     # d = 512 / 128, stiff
+julia --project=. -t auto bench/bench4_motion.jl    # semiclassical motion, plane-wave drives
 ```
 
 Each runs in well under ten seconds. Run all four before and after a change and
@@ -34,10 +34,10 @@ AtomTwin. Those are true error figures.
 
 Benchmark 3 has no closed form (an interacting chain), so it self-consistency
 checks against a more finely resolved run. Benchmark 4 checks physics references:
-quantised absorption plus isotropic emission (≈1.26 E_r per photon, Monte Carlo
-±10 % at 200 shots), exactly N ħk after N π pulses, and the steady-state mean force. That catches a refactor that changes
-the answer, which is what it is for, but would not catch an error already
-present in the reference.
+quantised absorption plus isotropic emission (≈1.28 E_r per photon, Monte Carlo
+±10 %), exactly N ħk after N π pulses, and the steady-state mean force. That
+catches a change to the answer, but would not catch an error already present in
+the reference.
 
 ## Two traps worth knowing
 

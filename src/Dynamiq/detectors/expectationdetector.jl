@@ -57,7 +57,8 @@ end
     ExpectationDetectorSpec(op::Op; name = "", tspan = nothing) -> DetectorSpec
 
 Create a detector specification for an expectation-value detector monitoring the
-operator `op` (an `Op` in the system basis, e.g. built with [`levelop`](@ref)).
+operator `op` (an `Op` in the system basis). From AtomTwin, pass a symbolic
+`Operator` to `ExpectationDetectorSpec(sys, atom, O)` instead.
 
 Only the operator is required here; the quantum state is retrieved from the
 system at build time via `build_detectors`. Unlike the population/coherence

@@ -108,6 +108,13 @@ end
 
 base_atom(wrapper::AtomWrapper) = wrapper.inner
 
+"""
+    getpolarizabilitymodels(atom) -> Dict{String, PolarizabilityModel}
+
+The polarizability models a species ships, keyed by term (`"1S0"`, `"3P1"`, …).
+Empty for a generic `Atom`; a species defines its own method. Models given to an
+atom's constructor (`polarizabilities = Dict(term => model)`) override these.
+"""
 getpolarizabilitymodels(::AtomWrapper) = Dict{String, PolarizabilityModel}()
 
 """
@@ -348,7 +355,7 @@ constructor (`polarizabilities`).
 For a level that carries `F` and `mF`, the **tensor** contribution is folded in
 here, using each beam's polarization against `q_axis`. It vanishes identically for
 `J ≤ 1/2` or `F ≤ 1/2`, so every ¹S₀/³P₀ state is unaffected. Sublevels of one
-manifold therefore no longer share an `α`.
+manifold can therefore have different `α`.
 
 Where the beam's polarization is not along `q_axis` (nor circular about it) the
 tensor part also mixes sublevels, `Δm = ±1, ±2`: those elements go to

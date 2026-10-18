@@ -145,7 +145,7 @@ const SR88_POLARIZABILITY_3P1 = PolarizabilityModel(
     Strontium88
 
 Term symbols for Sr-88, for the `term =` argument of a level or manifold.
-See [`Ytterbium171`](@ref) for the syntax; `l"3P1"` reaches the same objects.
+See [`AtomTwin.Ytterbium171`](@ref) for the syntax; `l"3P1"` reaches the same objects.
 
 The names coincide with Yb's — `¹S₀` is `¹S₀` in either atom — and the registry
 is shared. What differs between species is the polarizability model behind the

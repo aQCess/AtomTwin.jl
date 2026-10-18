@@ -49,7 +49,7 @@
 # here: this step is ~2000x past its stability limit, so it diverges to Inf.
 # That is the documented behaviour, and it is the reason the case is stiff.
 #
-#   atwin run bench/bench3_stiff.jl
+#   julia --project=. -t auto bench/bench3_stiff.jl
 
 using AtomTwin
 include(joinpath(@__DIR__, "harness.jl"))

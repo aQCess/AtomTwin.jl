@@ -63,6 +63,11 @@ _tovector(state::Tuple) = collect(state)
 _tovector(state::AbstractVector) = state
 _tovector(state) = [state]
 
+# The field that actually carries `H`. Every `AbstractField` is a leaf except
+# `NoisyField`, which wraps one; unwrapping here keeps the step estimator from
+# silently losing a noisy system's Hamiltonian.
+_hamiltonian_source(f) = hasproperty(f, :coupling) ? f.coupling : f
+
 """
     _derive_dt(seq, fields) -> Float64
 
@@ -85,15 +90,9 @@ The accuracy-derived step from `Dynamiq.suggested_dt` still applies where it is
 The step need not divide any instruction's duration: `stepgrid` adjusts it per
 instruction so every duration is realised exactly.
 """
-# The field that actually carries `H`. Every `AbstractField` is a leaf except
-# `NoisyField`, which wraps one; unwrapping here keeps the step estimator from
-# silently losing a noisy system's Hamiltonian.
-_hamiltonian_source(f) = hasproperty(f, :coupling) ? f.coupling : f
 
-
-function _derive_dt(seq::Sequence, fields, jumps = (), qstate = nothing;
-                    integrator::Dynamiq.AbstractIntegrator = Dynamiq.Chebyshev(),
-                    shots::Integer = 1)
+function _derive_dt(seq::Sequence, fields;
+                    integrator::Dynamiq.AbstractIntegrator = Dynamiq.Chebyshev())
     # `NoisyField` WRAPS a coupling rather than carrying `H` itself, so a plain
     # `hasproperty` filter drops it and the Hamiltonian never reaches the
     # accuracy bound: `suggested_dt` then returns `Inf` and the step falls
@@ -299,7 +298,7 @@ function compile(sys::System, seq::Sequence;
     # Bound ‖H‖ from the fields as they stand at the atoms' initial positions --
     # a `VdWInteraction` has no strength until its first update.
     Dynamiq.refresh_fields!(resolved_fields)
-    derived_dt = seq.dt === nothing ? _derive_dt(seq, resolved_fields, resolved_jumps, qstate; integrator = integrator, shots = shots) : nothing
+    derived_dt = seq.dt === nothing ? _derive_dt(seq, resolved_fields; integrator = integrator) : nothing
 
     for (i, inst) in enumerate(seq)
         # Resolve instruction if it contains deferred objects (using same cache)

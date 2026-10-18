@@ -1,7 +1,7 @@
 # Shared plumbing for the solver benchmarks in this directory.
 #
 # Each benchmark reports, per case: wall time (best of `reps`), allocated bytes,
-# and an accuracy figure against a reference. The refactor's contract is that
+# and an accuracy figure against a reference. The contract for any solver change is that
 # none of the three moves — so the output is deliberately a flat, diffable table
 # rather than anything pretty.
 #

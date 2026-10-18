@@ -1,9 +1,6 @@
-@testset "Sequence rejects non-positive dt" begin
+@testset "Sequence rejects non-positive dt and downsample" begin
     @test_throws ArgumentError Sequence(0.0)
     @test_throws ArgumentError Sequence(-1e-9)
-end
-
-@testset "Sequence rejects non-positive downsample" begin
     @test_throws ArgumentError Sequence(1e-9; downsample=0)
     @test_throws ArgumentError Sequence(1e-9; downsample=-1)
 end

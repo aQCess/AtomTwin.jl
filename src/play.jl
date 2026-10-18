@@ -147,9 +147,7 @@ function play(job::SimulationJob, sys::System; initial_state = nothing, kwargs..
     job.state === nothing && return _play_shots(job, sys; kwargs...)
     # Every shot starts from `job.initial_state` -- shot 1 via `_reset_run_state!`,
     # the rest via `recompile!` -- so a requested state goes there, restored
-    # afterwards. It used to reach only `sys.state[]`, which the solvers never
-    # read: a reused job started from the previous run's FINAL state, and process
-    # tomography ran every input from the first.
+    # afterwards. (`sys.state[]` alone is never read by the solvers.)
     compiled = copy(job.initial_state)
     if initial_state !== nothing && !isempty(_tovector(initial_state))
         s0 = getqstate(sys, _tovector(initial_state);
@@ -333,15 +331,14 @@ end
 
 Map a sequence-level `tol` onto the propagator's local-error target.
 
-`Sequence(; tol)` bounds the error of one integration step; the default is 1e-4.
+`Sequence(; tol)` bounds the error of one integration step; the default is 1e-6.
 The exponential propagator's `tol` is a different quantity: it sets the
 Chebyshev degree within a step. That cost is essentially flat in tolerance, so
 there is no reason to propagate a loose value — doing so buys nothing and
 silently caps accuracy.
 
 So `tol` may only *tighten* the propagator beyond its machine-precision default:
-a user asking for `tol = 1e-14` gets it; the default still integrates each step
-as exactly as it would have.
+a user asking for `tol = 1e-14` gets it.
 """
 _propagator_tol(seq_tol::Float64) = min(seq_tol, 1e-12)
 

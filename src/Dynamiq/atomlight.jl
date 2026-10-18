@@ -355,12 +355,6 @@ gradient is the dipole force.
 By default the shift is **absolute**: level `lvl` is shifted by its own `U/ħ`.
 Pass `reference = i` to shift by `−(α[lvl] − α[i]) I/(2c ε₀ ħ)` instead, which puts
 level `i` at zero — convenient when only a transition frequency matters.
-
-!!! note "Changed behaviour"
-    This previously subtracted `mean(alphas)`, the mean over *every* level in the
-    basis. That made the shift on one level depend on which other levels happened
-    to be present, so adding a leakage level silently changed every shift in the
-    system. Use `reference` to name the level you actually mean.
 """
 mutable struct StarkShiftAC{A} <: AbstractField
     const atom::A
@@ -484,10 +478,7 @@ trap potential `U(x)/ħ = −α I(x)/(2c ε₀ ħ)` in angular-frequency units.
 """
 function update!(f::Union{StarkShiftAC, StarkShiftACTensor}, ::Real)
     # U = -α I/(2c ε₀) is the (standard) convention `polarizability_si` sets, so the
-    # angular frequency is -α I/(2c ε₀ ħ) -- NOT α I/ħ. A missing 1/(c ε₀), the vacuum
-    # impedance 376.73, once made every trap light shift ~380x too small.
-    # This was unexercised until `add_light_shift!` existed: StarkShiftAC shipped
-    # in v0.1.0 but was never constructed anywhere.
+    # angular frequency is -α I/(2c ε₀ ħ) -- NOT α I/ħ.
     #
     # The magnitude lives in `H` (see the constructor); what varies per step is
     # the intensity envelope at the atom's position, which is in [0,1]. Keeping

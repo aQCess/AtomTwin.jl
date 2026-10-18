@@ -22,9 +22,13 @@ Every node goes through three stages:
 | Compile | `compile_node!(node, basis, rng, param_values)` | Once per `compile` call (per `play`). Resolves overrides and samples noise. |
 | Recompile | `recompile_node!(node, obj, rng, param_values)` | Once per Monte Carlo shot on the thread-local job copy. |
 
-Nodes are compiled **in insertion order**. Dependencies (e.g. `BeamNode`) must
-be added before the nodes that depend on them (e.g. the `CouplingNode` that
-reads the resolved beam).
+Nodes are compiled in **dependency order**: a node that reads another (a coupling
+reading its resolved beam) is compiled after it, whatever order they were added
+in; independent nodes keep their insertion order.
+
+```@docs
+AbstractNode
+```
 
 ### Value resolution protocol
 
@@ -44,10 +48,10 @@ and extended by types such as `GaussianPosition`, `MaxwellBoltzmann`,
 
 ### BeamNode
 
-Resolves a `ParametricBeam` (or a concrete beam) to a concrete `AbstractBeam`
-at compile time. Must be added to `sys.nodes` before any `CouplingNode` that
-depends on it. Created automatically by `add_coupling!` when a beam argument is
-provided.
+Resolves a beam with parametric properties (or a concrete beam) to a concrete
+`AbstractBeam` at compile time. Created by the beam-derived form of
+`add_coupling!` (`add_coupling!(sys, atom, g => e, beam; d_red)`), shared by all the
+sublevel pairs it couples.
 
 ---
 
@@ -68,8 +72,17 @@ during the modifier loop in `recompile!`.
 
 ### PlanarCouplingNode
 
-Created by `add_coupling!` for position-dependent couplings driven by a
-`PlanarBeam`. Produces a `PlanarCoupling` Hamiltonian term.
+Created by `add_coupling!` for couplings driven by a `PlanarBeam`. Produces a
+`PlanarCoupling` Hamiltonian term, whose phase follows the atom (Doppler shift and
+radiation pressure).
+
+---
+
+### GaussianCouplingNode
+
+Created by `add_coupling!` for couplings driven by a `GaussianBeam` or
+`GeneralGaussianBeam`. Produces a `GaussianCoupling`, whose Rabi frequency follows
+the beam profile and phase at the atom.
 
 ---
 
@@ -91,6 +104,32 @@ and maps to a `Jump` Lindblad operator.
 
 Created by `add_interaction!`. Holds a parametric interaction strength `V` and
 maps to an `Interaction` two-atom Hamiltonian term.
+
+---
+
+### VdWInteractionNode
+
+Created by `add_vdwinteraction!`. Holds a parametric `C₆` and maps to a
+`VdWInteraction`, evaluated at the atoms' separation.
+
+---
+
+### HamiltonianNode
+
+Created by `add_hamiltonian!` for an arbitrary operator term.
+
+---
+
+### LightShiftNode
+
+Created by `add_light_shift!`; the automatic trap light shifts need no node.
+
+---
+
+### QuantizationAxisNode
+
+Created by `add_quantization_axis!`. Resolves the (possibly parametric) axis that
+sublevels and the tensor light shift are defined against.
 
 ---
 
@@ -120,4 +159,10 @@ maxwellboltzmann
 MixedPolarization
 estimate_PER
 estimate_PER_dB
+```
+
+## Resolution
+
+```@docs
+AtomTwin.resolve
 ```

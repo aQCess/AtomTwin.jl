@@ -1,8 +1,5 @@
-# Superposition algebra: scalar multiply/divide/negate must compose to a FLAT,
-# correctly-weighted coefficient dict for arbitrary state expressions — never nest
-# a Superposition as a dict key. Regression for `a*(ℓ1+ℓ2)` silently malforming
-# the state (Superposition <: AbstractLevel, so the scalar-times-level fallback
-# used to swallow the whole superposition).
+# Superposition algebra: scalar multiply/divide/negate compose to a flat,
+# correctly-weighted coefficient dict for arbitrary state expressions.
 
 @testset "Superposition algebra" begin
     g0, g1, g2 = Level("0"), Level("1"), Level("2")
@@ -10,7 +7,7 @@
     # keys are always bare levels, never a nested Superposition
     flat(s) = all(k -> !(k isa AtomTwin.Superposition), keys(s.coeffs))
 
-    # scalar × (sum): the case that used to nest
+    # scalar × (sum)
     s = (1/√2) * (g0 + g1)
     @test flat(s)
     @test Set(keys(s.coeffs)) == Set([g0, g1])
@@ -44,8 +41,7 @@
     @test flat(s5)
     @test all(abs(s5.coeffs[l]) ≈ 1/√3 for l in (g0, g1, g2))
 
-    # getqstate must place the coefficients on the right basis indices and
-    # normalise — i.e. the malformed-key path is gone end to end.
+    # getqstate places the coefficients on the right basis indices and normalises.
     atom = Atom(; levels = [g0, g1, g2])
     sys  = System(atom)
     ψ = getqstate(sys, (1/√2)*g0 + (1/√2)*g1)
@@ -61,9 +57,8 @@ end
 # ======================================================================
 
 @testset "term symbols bind levels to species data" begin
-    # `label` is display text — the shipped examples write "³P₀" — while model
-    # dictionaries are keyed ASCII "3P0". Matching one against the other silently
-    # missed and the level took α = 0. Terms are resolved at parse time instead.
+    # `label` is display text ("³P₀"); the model is found by `term` ("3P0"),
+    # resolved at parse time.
     @test (l"3P1").J == 1//1
     @test (l"1S0").J == 0//1
     @test AtomTwin.Ytterbium171._3P1 === l"3P1"   # species-qualified: same object

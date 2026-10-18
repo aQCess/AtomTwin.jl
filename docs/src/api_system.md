@@ -4,11 +4,18 @@ Construct full neutral-atom device models by combining atoms, levels, tweezers, 
 
 ```@docs
 System
+add_quantization_axis!
+getquantizationaxis
 getqstate
 gethamiltonian
 getmatrix
 getbasis
 AtomTwin.Dynamiq.Basis
+```
+
+### Operators
+```@docs
+Operator
 ```
 
 ***
@@ -33,6 +40,13 @@ spectroscopic term rather than by display label.
 TermSymbol
 @term
 @l_str
+```
+
+Each species defines its terms in a module of the same name:
+```@docs
+AtomTwin.Ytterbium171
+AtomTwin.Ytterbium174
+AtomTwin.Strontium88
 ```
 
 ### Manifold types
@@ -74,6 +88,7 @@ Define the internal structure of each atom by choosing species and setting prope
 ```@docs
 Atom
 Ytterbium171Atom
+Ytterbium174Atom
 Rubidium87Atom
 Strontium88Atom
 Potassium39Atom
@@ -87,6 +102,7 @@ These aliases all wrap the same low‑level constructor `AtomWrapper{S}` with di
 PolarizabilityModel
 PolarizabilityCurve
 light_shift_coeff_Hz_per_Wcm2
+scattering_rate_per_Wcm2
 polarizability_au
 polarizability_si
 ```
@@ -95,6 +111,7 @@ polarizability_si
 ```@docs
 AtomTwin.AtomWrapper
 AtomTwin.ATOM_DEFAULTS
+AtomTwin.getspecies
 initialize!
 ```
 
@@ -144,15 +161,19 @@ Attach population, coherence, motion, and field detectors to a `System` so simul
 ```@docs
 PopulationDetectorSpec
 CoherenceDetectorSpec
+ExpectationDetectorSpec
+PhotoDetectorSpec
 MotionDetectorSpec
 AtomTwin.Dynamiq.FieldDetectorSpec
 add_detector!
 ```
 
-Actual detector objects are constructed by `play' as Dynamiq objects.
+Actual detector objects are constructed by `play` as Dynamiq objects.
 ```@docs
 AtomTwin.Dynamiq.PopulationDetector
 AtomTwin.Dynamiq.CoherenceDetector
+AtomTwin.Dynamiq.ExpectationDetector
+AtomTwin.Dynamiq.PhotoDetector
 AtomTwin.Dynamiq.MotionDetector
 AtomTwin.Dynamiq.FieldDetector
 ```

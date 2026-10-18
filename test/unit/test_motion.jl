@@ -1,13 +1,7 @@
-# Classical motion regression test: trap frequency of atom in a Gaussian tweezer.
-#
-# Validates that a Ytterbium-171 atom displaced from the beam centre oscillates
-# at the analytically expected trap frequency.  Fails if the force calculation,
-# polarizability model, or classical integrator is broken.
-#
-# Pattern follows atom_sorting.jl: classical-only dynamics via play(sys, seq)
-# without an initial quantum state.
+# Semiclassical motion: trap dynamics, per-shot state, photon recoil, radiation
+# pressure, solver selection, Doppler cooling.
 
-@testset "Classical motion: trap oscillation at correct frequency" begin
+@testset "a displaced atom oscillates at the trap frequency" begin
     c_v  = 2.997_924_58e8        # m/s
     ε0_v = 8.854_187_812_8e-12   # F/m
     amu  = 1.660_539_066_60e-27  # kg
@@ -46,8 +40,7 @@
         Wait(T_sim)
     end
 
-    # No initial_state → classical dynamics only, matching atom_sorting pattern.
-    # Explicitly expect (and capture) the resulting warning so it doesn't appear as noise.
+    # No initial_state: classical dynamics only.
     out = @test_logs (:warn, r"Initial state not specified") play(sys, seq)
     x_traj = out.detectors["x"][:, 1]
     t_traj = out.times
@@ -69,222 +62,199 @@
     end
 end
 
-# Regression: a MoveCol must not accumulate the displacement across Monte Carlo
-# shots or across repeated `play` calls. Move modifiers mutate beam.r0 in place;
-# the compiled job must own private beam copies and restore them per shot so that
-# (a) every shot's tweezer ends at the same position and (b) the source System /
-# TweezerArray is never mutated.
-@testset "MoveCol resets beam position across shots and plays" begin
-    f0  = 8.3e6
-    dx  = 3e-6 / 1e6          # 3 µm/MHz
-    x0  = dx * f0
-    d   = 1e-6                # 1 µm move
-    Δf  = d / dx
+@testset "motion state resets between shots and plays" begin
+    ## Moved beams: every shot ends at the same target, the source array is untouched.
+    let
+        f0  = 8.3e6
+        dx  = 3e-6 / 1e6          # 3 µm/MHz
+        x0  = dx * f0
+        d   = 1e-6                # 1 µm move
+        Δf  = d / dx
 
-    tw = TweezerArray(λ = 759e-9, w0 = 0.7e-6, P_total = 1e-3,
-                      row_freqs = [0.0], col_freqs = [f0], dx = dx, dy = dx)
-    atom = Ytterbium171Atom(; levels = [Level("1S0")], x_init = [x0, 0.0, 0.0])
-    sys  = System([atom], [tw])
-    add_detector!(sys, MotionDetectorSpec(tw[1]; dims = [1], name = "twz"))
+        tw = TweezerArray(λ = 759e-9, w0 = 0.7e-6, P_total = 1e-3,
+                          row_freqs = [0.0], col_freqs = [f0], dx = dx, dy = dx)
+        atom = Ytterbium171Atom(; levels = [Level("1S0")], x_init = [x0, 0.0, 0.0])
+        sys  = System([atom], [tw])
+        add_detector!(sys, MotionDetectorSpec(tw[1]; dims = [1], name = "twz"))
 
-    seq = Sequence(0.5e-6)
-    @sequence seq begin
-        MoveCol(tw, 1, Δf, 100e-6; sweep = :min_jerk)
-    end
-
-    x_target = x0 + d
-
-    # Multi-shot: every shot must end at the same (single-move) target, not x0 + s·d.
-    # 1D detector with shots>1 → Matrix indexed [time, shot].
-    out = play(sys, seq; initial_state = Level("1S0"), shots = 4)
-    twz_ends = [out.detectors["twz"][end, s] for s in 1:4]
-    @test all(isapprox.(twz_ends, x_target; atol = 1e-9))
-
-    # Source array must be pristine after the run (not left at the moved position)
-    @test isapprox(tw[1].r0[1], x0; atol = 1e-12)
-
-    # A second play on the same system must reproduce the first, not drift further
-    out2 = play(sys, seq; initial_state = Level("1S0"), shots = 1)
-    @test isapprox(out2.detectors["twz"][end], x_target; atol = 1e-9)
-    @test isapprox(tw[1].r0[1], x0; atol = 1e-12)
-end
-
-@testset "spontaneous emission carries a recoil kick" begin
-    # `recoil!` shipped in v0.1.0 but was never called, and `atom.lambda` — which
-    # it reads — was never populated. So decay was radiatively correct but
-    # momentum-free: an atom could scatter thousands of photons without heating.
-    # `add_decay!(...; λ)` now records the photon wavelength and enables the kick.
-    g = Level("g"; term = l"1S0")
-    e = Level("e"; term = l"3P1")
-    m    = 174 * AtomTwin.Units.amu
-    vrec = AtomTwin.Units.hbar * (2π / 556e-9) / m
-
-    function run(; λ = nothing, shots = 60, seed = 20260917)
-        yb = Ytterbium174Atom(; levels = [g, e], x_init = [0.0, 0.0, 0.0],
-                              v_init = [0.0, 0.0, 0.0])
-        # Wide and weak, so the dipole force is negligible and the velocity is
-        # set by the kicks alone.
-        tw  = GaussianBeam(λ = 767e-9, w0 = 50e-6, P = 1e-3, pol = [0, 0, 1])
-        sys = System(yb, tw)
-        add_quantization_axis!(sys, [0.0, 0.0, 1.0])
-        cp = add_coupling!(sys, yb, g => e, 2π * 200e3; active = false)
-        pd = PhotoDetectorSpec(name = "clicks")
-        add_detector!(sys, pd)
-        if λ === nothing
-            add_decay!(sys, yb, e => g, 2π * 182e3; clicks = pd)
-        else
-            add_decay!(sys, yb, e => g, 2π * 182e3; clicks = pd, λ = λ)
-        end
-        add_detector!(sys, MotionDetectorSpec(yb; dims = [1, 2, 3], name = "x"))
-        seq = Sequence(20e-9; downsample = 1000)
+        seq = Sequence(0.5e-6)
         @sequence seq begin
-            Pulse(cp, 400e-6)
+            MoveCol(tw, 1, Δf, 100e-6; sweep = :min_jerk)
         end
-        o = play(sys, seq; initial_state = g, shots = shots,
-                 rng = MersenneTwister(seed))
-        x  = o.detectors["x"]
-        dt = o.times[end] - o.times[end-1]
-        v  = [sqrt(sum(((x[end, :, s] .- x[end-1, :, s]) ./ dt).^2))
-              for s in 1:size(x, 3)]
-        ## RMS, not mean: <|v|^2> = N*v_rec^2 exactly for an isotropic walk, while
-        ## <|v|> carries a Maxwell-distribution factor sqrt(8/3pi) = 0.921.
-        (mean(sum(o.detectors["clicks"], dims = 1)), sqrt(mean(v .^ 2)))
+
+        x_target = x0 + d
+
+        # Multi-shot: every shot must end at the same (single-move) target, not x0 + s·d.
+        # 1D detector with shots>1 → Matrix indexed [time, shot].
+        out = play(sys, seq; initial_state = Level("1S0"), shots = 4)
+        twz_ends = [out.detectors["twz"][end, s] for s in 1:4]
+        @test all(isapprox.(twz_ends, x_target; atol = 1e-9))
+
+        # Source array must be pristine after the run (not left at the moved position)
+        @test isapprox(tw[1].r0[1], x0; atol = 1e-12)
+
+        # A second play on the same system must reproduce the first, not drift further
+        out2 = play(sys, seq; initial_state = Level("1S0"), shots = 1)
+        @test isapprox(out2.detectors["twz"][end], x_target; atol = 1e-9)
+        @test isapprox(tw[1].r0[1], x0; atol = 1e-12)
     end
 
-    # Without λ the atom scatters but never moves.
-    N0, v0 = run()
-    @test N0 > 50                  # it really is scattering
-    @test v0 < 1e-4                # …and going nowhere
+    ## Atom positions: every shot starts where its atom was declared.
+    let
+        g  = HyperfineManifold(0//1, 0; label = "1S0", term = l"1S0")
+        yb = Ytterbium174Atom(; levels = [g...], v_init = maxwellboltzmann(T = 5e-6))
+        tw  = GaussianBeam(λ = 767e-9, w0 = 1e-6, P = 1e-3, pol = [1.0, 0.0, 0.0])
+        sys = System(yb, tw)
+        add_quantization_axis!(sys, [1.0, 0.0, 0.0])
+        add_detector!(sys, MotionDetectorSpec(yb; dims = [1, 2, 3], name = "x"))
 
-    # With λ the speed follows the isotropic random walk, |v| = √N·v_rec.
-    N, v = run(λ = 556e-9)
-    @test N > 50
-    ## Seeded, because the ratio's shot-to-shot spread is 5.4% (1 sigma, measured
-    ## over 12 seeds at 60 shots): an unseeded 5% tolerance fails about half the
-    ## time. 20% covers the full observed 0.885-1.039 range with margin, and is
-    ## still far tighter than the 0/1 distinction this test exists to make.
-    @test isapprox(v, sqrt(N) * vrec; rtol = 0.20)
-end
-
-@testset "emission recoil follows the transition dipole pattern" begin
-    # Recoil was always isotropic. With one dipole dominating the scattering that
-    # misplaces the heating: a dipole along x̂ puts 1/5 of its recoil energy along x,
-    # not 1/3. For the pattern 1 − |n̂·d̂|², ⟨n_i n_j⟩ = (2δ_ij − Re d_i d_j*)/5.
-    g = Level("g"; term = l"1S0")
-    e = Level("e"; term = l"3P1")
-    vrec = AtomTwin.Units.hbar * (2π / 556e-9) / (174 * AtomTwin.Units.amu)
-
-    function kicks(dipole; n = 20_000, seed = 20261003)
-        yb  = Ytterbium174Atom(; levels = [g, e])
-        sys = System(yb, GaussianBeam(λ = 767e-9, w0 = 50e-6, P = 1e-3, pol = [0, 0, 1]))
-        J = dipole === nothing ? add_decay!(sys, yb, e => g, 2π * 182e3; λ = 556e-9) :
-                                 add_decay!(sys, yb, e => g, 2π * 182e3; λ = 556e-9, dipole = dipole)
-        rng = MersenneTwister(seed)
-        v = zeros(3, n)
-        for i in 1:n
-            fill!(J.atom.v, 0.0)
-            AtomTwin.Dynamiq.recoil!(J, rng)
-            v[:, i] .= J.atom.v ./ vrec
+        seq = Sequence(5e-8; downsample = 20)
+        @sequence seq begin
+            Wait(2e-4)
         end
-        v
-    end
-    second(v) = [mean(v[i, :] .* v[j, :]) for i in 1:3, j in 1:3]
+        x = play(sys, seq; initial_state = g[0], shots = 6).detectors["x"]
 
-    # Every kick is exactly ħk; the pattern sets only the direction.
-    for d in (nothing, [1, 0, 0], [1, im, 0])
-        @test all(isapprox.(sqrt.(sum(abs2, kicks(d; n = 200); dims = 1)), 1; atol = 1e-12))
-    end
-    # Isotropic by default: 1/3 per axis.
-    @test isapprox(second(kicks(nothing)), [1 0 0; 0 1 0; 0 0 1] / 3; atol = 0.01)
-    # Linear dipole along x̂: 1/5 along it, 2/5 across it.
-    @test isapprox(second(kicks([1, 0, 0])), [1 0 0; 0 2 0; 0 0 2] / 5; atol = 0.01)
-    # σ⁺ about ẑ (unnormalised input): (1 + cos²θ)/2, i.e. 3/10, 3/10, 2/5.
-    @test isapprox(second(kicks([1, im, 0])), [3 0 0; 0 3 0; 0 0 4] / 10; atol = 0.01)
-    # Off-axis linear dipole (x̂ + ŷ)/√2: ⟨n_x n_y⟩ = −1/10.
-    @test isapprox(second(kicks([1, 1, 0])), [3 -1 0; -1 3 0; 0 0 4] / 10; atol = 0.01)
-    # A dipole without λ has no kick to shape.
-    yb = Ytterbium174Atom(; levels = [g, e])
-    @test_throws ErrorException add_decay!(System(yb), yb, e => g, 1.0; dipole = [1, 0, 0])
-end
+        # Every shot starts at the origin (1 µs of thermal drift is ~0.02 µm).
+        r0 = [sqrt(x[1, 1, s]^2 + x[1, 2, s]^2) for s in 1:size(x, 3)]
+        @test maximum(r0) < 0.1e-6
 
-@testset "shots start from a fresh atom, not where the last one stopped" begin
-    # `initialize!` reset the atom's position only when `x_init` was given (and its
-    # velocity only when `v_init` was), but `inner` is reused across shots. An atom
-    # with a thermal velocity and no explicit position therefore began shot n where
-    # shot n-1 ended: an ensemble was silently one continuous trajectory, and a
-    # bound atom appeared to escape once a few shots of drift had accumulated.
-    #
-    # The same function already carried a `reset_force!` for exactly this hazard,
-    # so the omission was an oversight.
-    g  = HyperfineManifold(0//1, 0; label = "1S0", term = l"1S0")
-    yb = Ytterbium174Atom(; levels = [g...], v_init = maxwellboltzmann(T = 5e-6))
-    tw  = GaussianBeam(λ = 767e-9, w0 = 1e-6, P = 1e-3, pol = [1.0, 0.0, 0.0])
-    sys = System(yb, tw)
-    add_quantization_axis!(sys, [1.0, 0.0, 0.0])
-    add_detector!(sys, MotionDetectorSpec(yb; dims = [1, 2, 3], name = "x"))
-
-    seq = Sequence(5e-8; downsample = 20)
-    @sequence seq begin
-        Wait(2e-4)
-    end
-    x = play(sys, seq; initial_state = g[0], shots = 6).detectors["x"]
-
-    # Every shot starts at the origin; 1 µs of thermal drift is ~0.02 µm, so 0.1 µm
-    # is loose enough not to be a noise test and tight enough to catch the leak
-    # (which put later shots at 0.2–0.8 µm).
-    r0 = [sqrt(x[1, 1, s]^2 + x[1, 2, s]^2) for s in 1:size(x, 3)]
-    @test maximum(r0) < 0.1e-6
-
-    # …and the atom really is bound, so the test is not passing on a frozen atom.
-    @test maximum(abs, x[:, 1, :]) > 1e-8
-end
-
-@testset "a replayed job starts where it was compiled" begin
-    # Later shots re-`initialize!` their atoms, but shot 1 of a replay took them as
-    # the previous run left them: a free atom at 1 m/s ended 1 µm out, then 2 µm on
-    # the next `play` of the same job.
-    g   = Level("g")
-    yb  = Ytterbium174Atom(; levels = [g], x_init = zeros(3), v_init = [1.0, 0.0, 0.0])
-    sys = System(yb)
-    add_detector!(sys, MotionDetectorSpec(yb; dims = [1], name = "x"))
-    seq = Sequence(1e-8); push!(seq, Wait(1e-6; downsample = 100))
-    job = compile(sys, seq; initial_state = [g])
-    x1  = play(job, sys).detectors["x"][end]
-    @test x1 ≈ 1e-6 rtol = 1e-9
-    @test play(job, sys).detectors["x"][end] == x1
-    @test play(job, sys; shots = 2).detectors["x"][end, :] ≈ [x1, x1] rtol = 1e-12
-end
-
-# `recompile!` called `initialize!` without the quantization axis, so from the
-# second shot on the tensor polarizability was computed against ẑ: identical,
-# deterministic shots then ended in different places.
-@testset "quantization axis survives recompile" begin
-    gm = HyperfineManifold(0//1, 0; label = "¹S₀", term = l"1S0", g_F = 0.0)
-    em = HyperfineManifold(1//1, 1; label = "³P₁", term = l"3P1", g_F = 1.5)
-    λ  = 767e-9
-    yb = Ytterbium174Atom(; levels = [gm..., em...],
-                          x_init = [0.3e-6, 0.0, 0.0], v_init = [0.05, 0.0, 0.0])
-    tw = GaussianBeam(λ = λ, w0 = 1e-6, P = 50e-3, pol = [1.0, 0.0, 0.0])
-    sys = System(yb, tw)
-    add_quantization_axis!(sys, [1.0, 0.0, 0.0])
-    add_detector!(sys, MotionDetectorSpec(yb; dims = [1], name = "x"))
-    seq = Sequence(0.05e-6)
-    @sequence seq begin
-        Wait(5e-6)
+        # …and the atom really is bound, so the test is not passing on a frozen atom.
+        @test maximum(abs, x[:, 1, :]) > 1e-8
     end
 
-    job = compile(sys, seq; initial_state = [em[1]])
-    α1  = copy(job.atoms[1].alpha[λ])
-    AtomTwin.recompile!(job, sys)
-    @test job.atoms[1].alpha[λ] == α1
+    ## A replayed job starts where it was compiled.
+    let
+        g   = Level("g")
+        yb  = Ytterbium174Atom(; levels = [g], x_init = zeros(3), v_init = [1.0, 0.0, 0.0])
+        sys = System(yb)
+        add_detector!(sys, MotionDetectorSpec(yb; dims = [1], name = "x"))
+        seq = Sequence(1e-8); push!(seq, Wait(1e-6; downsample = 100))
+        job = compile(sys, seq; initial_state = [g])
+        x1  = play(job, sys).detectors["x"][end]
+        @test x1 ≈ 1e-6 rtol = 1e-9
+        @test play(job, sys).detectors["x"][end] == x1
+        @test play(job, sys; shots = 2).detectors["x"][end, :] ≈ [x1, x1] rtol = 1e-12
+    end
 
-    X = play(sys, seq; initial_state = [em[1]], shots = 3).detectors["x"]
-    @test X[:, 2] == X[:, 1] && X[:, 3] == X[:, 1]
+    ## The quantization axis (tensor α) is kept by `recompile!`: deterministic shots agree.
+    let
+        gm = HyperfineManifold(0//1, 0; label = "¹S₀", term = l"1S0", g_F = 0.0)
+        em = HyperfineManifold(1//1, 1; label = "³P₁", term = l"3P1", g_F = 1.5)
+        λ  = 767e-9
+        yb = Ytterbium174Atom(; levels = [gm..., em...],
+                              x_init = [0.3e-6, 0.0, 0.0], v_init = [0.05, 0.0, 0.0])
+        tw = GaussianBeam(λ = λ, w0 = 1e-6, P = 50e-3, pol = [1.0, 0.0, 0.0])
+        sys = System(yb, tw)
+        add_quantization_axis!(sys, [1.0, 0.0, 0.0])
+        add_detector!(sys, MotionDetectorSpec(yb; dims = [1], name = "x"))
+        seq = Sequence(0.05e-6)
+        @sequence seq begin
+            Wait(5e-6)
+        end
+
+        job = compile(sys, seq; initial_state = [em[1]])
+        α1  = copy(job.atoms[1].alpha[λ])
+        AtomTwin.recompile!(job, sys)
+        @test job.atoms[1].alpha[λ] == α1
+
+        X = play(sys, seq; initial_state = [em[1]], shots = 3).detectors["x"]
+        @test X[:, 2] == X[:, 1] && X[:, 3] == X[:, 1]
+    end
 end
 
-# `qme_semiclassical` never refreshed the level populations from ρ, so the
-# dipole force weighted α by whatever a PopulationDetector had last written --
-# nothing at all without one, and the atom moved ballistically.
+@testset "emission recoil: ħk per photon, along the dipole pattern" begin
+    ## Without λ the atom scatters but never moves; with it, |v| = √N·v_rec.
+    let
+        g = Level("g"; term = l"1S0")
+        e = Level("e"; term = l"3P1")
+        m    = 174 * AtomTwin.Units.amu
+        vrec = AtomTwin.Units.hbar * (2π / 556e-9) / m
+
+        function run(; λ = nothing, shots = 60, seed = 20260917)
+            yb = Ytterbium174Atom(; levels = [g, e], x_init = [0.0, 0.0, 0.0],
+                                  v_init = [0.0, 0.0, 0.0])
+            # Wide and weak, so the dipole force is negligible and the velocity is
+            # set by the kicks alone.
+            tw  = GaussianBeam(λ = 767e-9, w0 = 50e-6, P = 1e-3, pol = [0, 0, 1])
+            sys = System(yb, tw)
+            add_quantization_axis!(sys, [0.0, 0.0, 1.0])
+            cp = add_coupling!(sys, yb, g => e, 2π * 200e3; active = false)
+            pd = PhotoDetectorSpec(name = "clicks")
+            add_detector!(sys, pd)
+            if λ === nothing
+                add_decay!(sys, yb, e => g, 2π * 182e3; clicks = pd)
+            else
+                add_decay!(sys, yb, e => g, 2π * 182e3; clicks = pd, λ = λ)
+            end
+            add_detector!(sys, MotionDetectorSpec(yb; dims = [1, 2, 3], name = "x"))
+            seq = Sequence(20e-9; downsample = 1000)
+            @sequence seq begin
+                Pulse(cp, 400e-6)
+            end
+            o = play(sys, seq; initial_state = g, shots = shots,
+                     rng = MersenneTwister(seed))
+            x  = o.detectors["x"]
+            dt = o.times[end] - o.times[end-1]
+            v  = [sqrt(sum(((x[end, :, s] .- x[end-1, :, s]) ./ dt).^2))
+                  for s in 1:size(x, 3)]
+            ## RMS, not mean: <|v|^2> = N*v_rec^2 exactly for an isotropic walk, while
+            ## <|v|> carries a Maxwell-distribution factor sqrt(8/3pi) = 0.921.
+            (mean(sum(o.detectors["clicks"], dims = 1)), sqrt(mean(v .^ 2)))
+        end
+
+        # Without λ the atom scatters but never moves.
+        N0, v0 = run()
+        @test N0 > 50                  # it really is scattering
+        @test v0 < 1e-4                # …and going nowhere
+
+        # With λ the speed follows the isotropic random walk, |v| = √N·v_rec.
+        N, v = run(λ = 556e-9)
+        @test N > 50
+        ## Seeded: the ratio's shot-to-shot spread is 5.4 % (1σ at 60 shots).
+        @test isapprox(v, sqrt(N) * vrec; rtol = 0.20)
+    end
+
+    ## The direction follows the transition dipole's emission pattern.
+    let
+        # For the pattern 1 − |n̂·d̂|², ⟨n_i n_j⟩ = (2δ_ij − Re d_i d_j*)/5.
+        g = Level("g"; term = l"1S0")
+        e = Level("e"; term = l"3P1")
+        vrec = AtomTwin.Units.hbar * (2π / 556e-9) / (174 * AtomTwin.Units.amu)
+
+        function kicks(dipole; n = 20_000, seed = 20261003)
+            yb  = Ytterbium174Atom(; levels = [g, e])
+            sys = System(yb, GaussianBeam(λ = 767e-9, w0 = 50e-6, P = 1e-3, pol = [0, 0, 1]))
+            J = dipole === nothing ? add_decay!(sys, yb, e => g, 2π * 182e3; λ = 556e-9) :
+                                     add_decay!(sys, yb, e => g, 2π * 182e3; λ = 556e-9, dipole = dipole)
+            rng = MersenneTwister(seed)
+            v = zeros(3, n)
+            for i in 1:n
+                fill!(J.atom.v, 0.0)
+                AtomTwin.Dynamiq.recoil!(J, rng)
+                v[:, i] .= J.atom.v ./ vrec
+            end
+            v
+        end
+        second(v) = [mean(v[i, :] .* v[j, :]) for i in 1:3, j in 1:3]
+
+        # Every kick is exactly ħk; the pattern sets only the direction.
+        for d in (nothing, [1, 0, 0], [1, im, 0])
+            @test all(isapprox.(sqrt.(sum(abs2, kicks(d; n = 200); dims = 1)), 1; atol = 1e-12))
+        end
+        # Isotropic by default: 1/3 per axis.
+        @test isapprox(second(kicks(nothing)), [1 0 0; 0 1 0; 0 0 1] / 3; atol = 0.01)
+        # Linear dipole along x̂: 1/5 along it, 2/5 across it.
+        @test isapprox(second(kicks([1, 0, 0])), [1 0 0; 0 2 0; 0 0 2] / 5; atol = 0.01)
+        # σ⁺ about ẑ (unnormalised input): (1 + cos²θ)/2, i.e. 3/10, 3/10, 2/5.
+        @test isapprox(second(kicks([1, im, 0])), [3 0 0; 0 3 0; 0 0 4] / 10; atol = 0.01)
+        # Off-axis linear dipole (x̂ + ŷ)/√2: ⟨n_x n_y⟩ = −1/10.
+        @test isapprox(second(kicks([1, 1, 0])), [3 -1 0; -1 3 0; 0 0 4] / 10; atol = 0.01)
+        # A dipole without λ has no kick to shape.
+        yb = Ytterbium174Atom(; levels = [g, e])
+        @test_throws ErrorException add_decay!(System(yb), yb, e => g, 1.0; dipole = [1, 0, 0])
+    end
+end
+
 @testset "density-matrix motion feels the state-dependent force" begin
     gm = HyperfineManifold(0//1, 0; label = "¹S₀", term = l"1S0", g_F = 0.0)
     em = HyperfineManifold(1//1, 1; label = "³P₁", term = l"3P1", g_F = 1.5)
@@ -308,8 +278,6 @@ end
     @test run(dm = true, popdet = true) == x_dm
 end
 
-# A ramp read its starting amplitude from the beam at COMPILE time, before any
-# earlier `AmplRow` had run, so `AmplRow(0.1)` then a ramp to 1 ramped 1 → 1.
 @testset "a ramp starts from the amplitude the beam has at run time" begin
     beam = GaussianBeam(λ = 767e-9, w0 = 1e-6, P = 1e-3)
     ramps, n = AtomTwin.ramp([beam], [1.0], 1e-6, 1e-7)
@@ -324,13 +292,8 @@ end
 end
 
 @testset "plane-wave drives: quantised absorption, stimulated emission pushes back" begin
-    # Radiation pressure used to be a mean force ħ R_tot Σ ŵ_b k_b sampled once per
-    # step, and only in the MCWF solver: a π pulse moved ~0 instead of ħk,
-    # stimulated emission into an opposing beam nothing, the TDSE and density-matrix
-    # solvers no radiation pressure at all, and the spread of the absorbed momentum
-    # was set by `dt` (0.35 E_r per photon at Γ·dt = 0.18, 1.33 at 4.6; quantised
-    # 1.26 at s = 40). Now: the Ehrenfest force of the plane-wave phase, integrated
-    # over sub-steps, with one photon's momentum per MCWF emission cycle.
+    # The Ehrenfest force of the plane-wave phase, integrated over the solver steps,
+    # with one photon's momentum per MCWF emission cycle.
     g = Level("g"; term = l"1S0")
     e = Level("e"; term = l"3P1")
     m = 174 * AtomTwin.Units.amu
@@ -339,7 +302,7 @@ end
     function drive(; Ω, Γ, λ, pulses, shots, dm = false, decay = true, seed = 20260927)
         yb = Ytterbium174Atom(; levels = [g, e], x_init = [0.0, 0.0, 0.0],
                               v_init = [0.0, 0.0, 0.0])
-        sys = System(yb)            # free space: motion is on by default now
+        sys = System(yb)
         bp = PlanarBeam(λ, 1.0, [1.0, 0.0, 0.0], [0.0, 0.0, 1.0])
         bm = PlanarBeam(λ, 1.0, [-1.0, 0.0, 0.0], [0.0, 0.0, 1.0])
         cp = add_coupling!(sys, yb, g => e, Ω; beam = bp, active = false)
@@ -387,8 +350,7 @@ end
     end
 
     # A shaped π pulse (sin², peak 2× the nominal amplitude) sampled at four points:
-    # the envelope must reach the sub-steps (it reached the Hamiltonian only per
-    # `dt`), and the sub-steps must resolve its peak. TDSE and density matrix.
+    # the envelope reaches the sub-steps, and the sub-steps resolve its peak.
     for dm in (false, true)
         yb  = Ytterbium174Atom(; levels = [g, e], x_init = zeros(3), v_init = zeros(3))
         sys = System(yb)
@@ -418,12 +380,11 @@ end
                   shots = 1500)
     p = vec(vx); Nm = mean(N)
     @test mean(p) / Nm ≈ 1.0 rtol = 0.03
-    ## 1σ of the variance ratio at 1500 shots ≈ 4 %; the old force gave 0.35
+    ## 1σ of the variance ratio at 1500 shots ≈ 4 %
     @test 1.10 < var(p) / Nm < 1.42
 
     # Both beams at once: each photon was absorbed from one of them, ±ħk at random,
-    # so var(p) = N + N/3 about a zero mean. One momentum for the whole excited
-    # branch (the mean of the two beams) left only the emission recoil, N/3.
+    # so var(p) = N + N/3 about a zero mean.
     let yb = Ytterbium174Atom(; levels = [g, e], x_init = zeros(3), v_init = zeros(3))
         sys = System(yb)
         cs  = [add_coupling!(sys, yb, g => e, Γ * sqrt(s / 2); active = false,
@@ -440,12 +401,12 @@ end
         p  = [(x[end, 1, k] - x[end-1, 1, k]) / (t[end] - t[end-1]) / vrec(398.9e-9) for k in 1:1000]
         Nm = mean(sum(o.detectors["clicks"], dims = 1))
         @test abs(mean(p)) < 0.15 * sqrt(Nm)
-        @test 1.15 < var(p) / Nm < 1.52          # 4/3; was 1/3
+        @test 1.15 < var(p) / Nm < 1.52          # 4/3
     end
 
     # MCWF conditioning: a π/2 pulse leaves the atom half excited. A trajectory that
-    # then emits nothing was never excited and must end at rest, not with the ħk/2
-    # the mean force gave it; one that emits once absorbed exactly one photon, so
+    # then emits nothing was never excited and ends at rest; one that emits once
+    # absorbed exactly one photon, so
     # |p − ħk x̂| = ħk, the emission recoil, to rounding.
     Ω = 2π * 300e6; Tp = π / (2Ω); λ = 398.9e-9; shots = 400
     yb  = Ytterbium174Atom(; levels = [g, e], x_init = zeros(3), v_init = zeros(3))
@@ -464,70 +425,68 @@ end
     N = vec(sum(o.detectors["clicks"], dims = 1))
     n0, n1 = findall(==(0), N), findall(==(1), N)
     @test length(n0) > 50 && length(n1) > 50
-    @test maximum(abs, p[:, n0]) < 1e-6                 # was 0.5
+    @test maximum(abs, p[:, n0]) < 1e-6
     @test maximum(abs(hypot(p[1, s] - 1, p[2, s], p[3, s]) - 1) for s in n1) < 1e-6
 end
 
-@testset "motion is on by default; frozen = true freezes it" begin
-    # `play` used to freeze an atom unless a beam in the SYSTEM could exert a dipole
-    # force on it: a free atom scattering plane-wave light, with recoil, never moved.
-    g = Level("g"; term = l"1S0"); e = Level("e"; term = l"3P1")
-    function run(; frozen = false, trap = false)
-        yb  = Ytterbium174Atom(; levels = [g, e], x_init = [0.0, 0.0, 0.0],
-                               v_init = [0.0, 0.0, 0.0])
-        sys = trap ? System(yb, GaussianBeam(λ = 767e-9, w0 = 1e-6, P = 1e-3, pol = [0, 0, 1])) :
-                     System(yb)
-        c = add_coupling!(sys, yb, g => e, 2π * 1e6; active = false,
-                          beam = PlanarBeam(556e-9, 1.0, [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]))
-        add_decay!(sys, yb, e => g, 2π * 182e3; λ = 556e-9)
-        add_detector!(sys, MotionDetectorSpec(yb; dims = [1, 2, 3], name = "x"))
-        seq = Sequence(20e-9); push!(seq, Pulse(c, 20e-6; downsample = 1000))
-        o = play(sys, seq; initial_state = g, shots = 4, frozen = frozen,
-                 rng = MersenneTwister(1))
-        maximum(abs, o.detectors["x"])
+@testset "motion is on by default; frozen = true, or a static run, freezes it" begin
+    ## A free atom scattering plane-wave light moves; `frozen = true` holds it.
+    let
+        g = Level("g"; term = l"1S0"); e = Level("e"; term = l"3P1")
+        function run(; frozen = false, trap = false)
+            yb  = Ytterbium174Atom(; levels = [g, e], x_init = [0.0, 0.0, 0.0],
+                                   v_init = [0.0, 0.0, 0.0])
+            sys = trap ? System(yb, GaussianBeam(λ = 767e-9, w0 = 1e-6, P = 1e-3, pol = [0, 0, 1])) :
+                         System(yb)
+            c = add_coupling!(sys, yb, g => e, 2π * 1e6; active = false,
+                              beam = PlanarBeam(556e-9, 1.0, [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]))
+            add_decay!(sys, yb, e => g, 2π * 182e3; λ = 556e-9)
+            add_detector!(sys, MotionDetectorSpec(yb; dims = [1, 2, 3], name = "x"))
+            seq = Sequence(20e-9); push!(seq, Pulse(c, 20e-6; downsample = 1000))
+            o = play(sys, seq; initial_state = g, shots = 4, frozen = frozen,
+                     rng = MersenneTwister(1))
+            maximum(abs, o.detectors["x"])
+        end
+        @test run() > 1e-8                       # pushed along the beam
+        @test run(frozen = true) == 0.0
+        @test run(trap = true, frozen = true) == 0.0
     end
-    @test run() > 1e-8                       # pushed along the beam
-    @test run(frozen = true) == 0.0
-    @test run(trap = true, frozen = true) == 0.0
-end
 
-@testset "a run in which nothing can move takes the frozen solvers" begin
-    # Motion is the default, but an atom at rest, without recoil or plane-wave
-    # drives, at the exact centre of its trap cannot move: `_is_static` sends such
-    # a run to the frozen solvers. The answer must be identical to `frozen = true`.
-    g = Level("g"; term = l"1S0"); e = Level("e"; term = l"3P1")
-    function build(x0; neighbour = false)
-        yb  = Ytterbium174Atom(; levels = [g, e], x_init = x0, v_init = [0.0, 0.0, 0.0])
-        tw  = GaussianBeam(λ = 767e-9, w0 = 1e-6, P = 1e-3, pol = [0, 0, 1])
-        sys = neighbour ? System([yb], [tw, GaussianBeam(λ = 767e-9, w0 = 1e-6, P = 1e-3,
-                                                          r0 = [4e-6, 0, 0], pol = [0, 0, 1])]) :
-                          System(yb, tw)
-        c = add_coupling!(sys, yb, g => e, 2π * 1e6; active = false)
-        add_decay!(sys, yb, e => g, 2π * 0.2e6)
-        add_detector!(sys, PopulationDetectorSpec(yb, e; name = "Pe"))
-        seq = Sequence(10e-9); push!(seq, Pulse(c, 2e-6; downsample = 20))
-        sys, seq
+    ## An atom at rest at the centre of its trap, with no recoil or plane-wave drive,
+    ## cannot move: the run takes the frozen solvers, with identical results.
+    let
+        g = Level("g"; term = l"1S0"); e = Level("e"; term = l"3P1")
+        function build(x0; neighbour = false)
+            yb  = Ytterbium174Atom(; levels = [g, e], x_init = x0, v_init = [0.0, 0.0, 0.0])
+            tw  = GaussianBeam(λ = 767e-9, w0 = 1e-6, P = 1e-3, pol = [0, 0, 1])
+            sys = neighbour ? System([yb], [tw, GaussianBeam(λ = 767e-9, w0 = 1e-6, P = 1e-3,
+                                                              r0 = [4e-6, 0, 0], pol = [0, 0, 1])]) :
+                              System(yb, tw)
+            c = add_coupling!(sys, yb, g => e, 2π * 1e6; active = false)
+            add_decay!(sys, yb, e => g, 2π * 0.2e6)
+            add_detector!(sys, PopulationDetectorSpec(yb, e; name = "Pe"))
+            seq = Sequence(10e-9); push!(seq, Pulse(c, 2e-6; downsample = 20))
+            sys, seq
+        end
+        sys, seq = build([0.0, 0.0, 0.0])
+        a = play(sys, seq; initial_state = g, shots = 8, rng = MersenneTwister(3))
+        b = play(sys, seq; initial_state = g, shots = 8, rng = MersenneTwister(3), frozen = true)
+        @test a.detectors["Pe"] == b.detectors["Pe"]
+        job = compile(sys, seq; initial_state = [g])
+        @test AtomTwin._is_static(job)
+        # Off-centre, the trap pushes it: not static.
+        sys2, seq2 = build([0.3e-6, 0.0, 0.0])
+        @test !AtomTwin._is_static(compile(sys2, seq2; initial_state = [g]))
+        # A neighbouring tweezer's tail is never exactly zero, but far too weak to move
+        # the atom over the run: still static.
+        sys3, seq3 = build([0.0, 0.0, 0.0]; neighbour = true)
+        @test AtomTwin._is_static(compile(sys3, seq3; initial_state = [g]))
     end
-    sys, seq = build([0.0, 0.0, 0.0])
-    a = play(sys, seq; initial_state = g, shots = 8, rng = MersenneTwister(3))
-    b = play(sys, seq; initial_state = g, shots = 8, rng = MersenneTwister(3), frozen = true)
-    @test a.detectors["Pe"] == b.detectors["Pe"]
-    job = compile(sys, seq; initial_state = [g])
-    @test AtomTwin._is_static(job)
-    # Off-centre, the trap pushes it: not static.
-    sys2, seq2 = build([0.3e-6, 0.0, 0.0])
-    @test !AtomTwin._is_static(compile(sys2, seq2; initial_state = [g]))
-    # A neighbouring tweezer's tail is never exactly zero, but far too weak to move
-    # the atom over the run: still static.
-    sys3, seq3 = build([0.0, 0.0, 0.0]; neighbour = true)
-    @test AtomTwin._is_static(compile(sys3, seq3; initial_state = [g]))
 end
 
 @testset "MCWF radiation pressure through a ladder of plane-wave drives" begin
-    # g → e (beam 1) → r (beam 2): the second drive moves population WITHIN the
-    # excited branch. Booked as absorption into it, its flow was drained back out
-    # as if unobserved and the momentum came out 0.62× the Ehrenfest value, with no
-    # jump at all. Without a jump a trajectory carries ħk₁(P_e + P_r) + ħk₂P_r.
+    # g → e (beam 1) → r (beam 2): the second drive moves population within the
+    # excited branch. Without a jump a trajectory carries ħk₁(P_e + P_r) + ħk₂P_r.
     g, e, r = Level("g"), Level("e"), Level("r")
     λ1, λ2 = 780e-9, 480e-9
     at  = Atom(; levels = [g, e, r], x_init = zeros(3), v_init = zeros(3))
@@ -553,9 +512,9 @@ end
     end
 end
 
-# A detuning `Pulse` carries its rate (rad/s) in its amplitudes. The radiation
-# sub-step count scaled the drives' rotation by the largest amplitude of ANY
-# modifier, so the same Hamiltonian ran ~800× slower parameterised that way.
+# A detuning `Pulse` carries its rate (rad/s) in its amplitudes; the radiation
+# sub-step count takes each term at its own peak, so the parameterisation costs
+# nothing.
 @testset "a detuning Pulse does not inflate the radiation sub-steps" begin
     δ0 = 2π * 1e6
     N  = 20

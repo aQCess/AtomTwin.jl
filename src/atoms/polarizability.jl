@@ -292,48 +292,6 @@ function _Gamma_sc_over_I(model::PolarizabilityModel, λ_nm::Real)
     return Γsc_over_I
 end
 
-"""
-    _calc_light_shift(ω0, Γ, ωL, f = 3) -> Float64
-
-DEPRECATED
-
-Light-shift contribution from a single electric-dipole transition.
-
-# Arguments
-- `ω0`: Transition angular frequency [rad/s]. Use `|ω₀|`; the sign of the
-  transition frequency enters through `f` (see `_line_strength_factor`).
-- `Γ` : Radiative linewidth (angular) [rad/s].
-- `ωL`: Laser angular frequency [rad/s].
-- `f` : Angular-momentum line-strength factor; `3` for a `J=0 → J'=1` line.
-
-# Returns
-- `U/I`: Energy shift per intensity in J/(W/m²).
-"""
-function _calc_light_shift(ω0::Float64, Γ::Float64, ωL::Float64, f::Real = 3)
-    return -π * c^2 * f * Γ / (ω0^2 * (ω0^2 - ωL^2))
-end
-
-"""
-    _U_over_I(model::PolarizabilityModel, λ_nm::Real) -> Float64
-
-DEPRECATED
-
-Compute total light shift per intensity U/I for a given model and wavelength.
-
-# Arguments
-- `model::PolarizabilityModel`: Polarizability model for a single state.
-- `λ_nm`: Laser wavelength in nanometres.
-
-# Returns
-- `U/I` in J/(W/m²).
-"""
-function _U_over_I(model::PolarizabilityModel, λ_nm::Real)
-    @warn "_U_over_I is deprecated; use light_shift_coeff_Hz_per_Wcm2 instead, which returns an equivalent result." maxlog = 1
-    # Scalar shift in Hz/(W/cm²) → J/(W/m²). (The line loop it replaces read `t.f`, the
-    # line-strength factor the transitions no longer carry.)
-    return h * light_shift_coeff_Hz_per_Wcm2(model, λ_nm) * 1e-4
-end
-
 # ======================================================================
 # Scalar polarizability
 # ======================================================================
@@ -773,9 +731,7 @@ PolarizabilityCurve(model::PolarizabilityModel; kwargs...) =
 # ======================================================================
 #
 # One generic method per public function, dispatching through
-# `getpolarizabilitymodels`. These replaced a ~45-line block copy-pasted into
-# every species file, which had also drifted: `polarizability_si` — the one
-# function `_init_species_data!` actually calls — was missing from all of them.
+# `getpolarizabilitymodels`.
 
 """
     _model_for(atom, term) -> PolarizabilityModel

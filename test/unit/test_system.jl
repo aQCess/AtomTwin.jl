@@ -1,47 +1,48 @@
-@testset "getqstate raises before simulation" begin
-    g, e = Level("g"), Level("e")
-    atom = Atom(; levels = [g, e])
-    sys = System(atom)
-    @test_throws ErrorException getqstate(sys)
-end
+# System construction, play's state handling, and field switching.
 
-@testset "play returns valid detector output" begin
-    g, e = Level("g"), Level("e")
-    atom = Atom(; levels = [g, e])
-    sys = System(atom)
-
-    coupling = add_coupling!(sys, atom, g => e, 2π * 1e6; active = false)
-    add_detector!(sys, PopulationDetectorSpec(atom, e; name = "P_e"))
-
-    seq = Sequence(1e-9)
-    @sequence seq begin
-        Pulse(coupling, 100e-9)
+@testset "play: detector output, no detectors, getqstate before a run" begin
+    let
+        g, e = Level("g"), Level("e")
+        atom = Atom(; levels = [g, e])
+        sys = System(atom)
+        @test_throws ErrorException getqstate(sys)
     end
 
-    out = play(sys, seq; initial_state = g)
-    @test haskey(out.detectors, "P_e")
-    @test length(out.times) > 0
-    @test all(x -> 0.0 - 1e-6 ≤ x ≤ 1.0 + 1e-6, out.detectors["P_e"])
-end
+    let
+        g, e = Level("g"), Level("e")
+        atom = Atom(; levels = [g, e])
+        sys = System(atom)
 
-# With no detectors the per-instruction detector list came out as `Vector{Any}`,
-# which the solvers' signatures reject: `play` threw a TypeError.
-@testset "play runs with no detectors" begin
-    g, e = Level("g"), Level("e")
-    atom = Atom(; levels = [g, e])
-    sys = System(atom)
-    c = add_coupling!(sys, atom, g => e, 2π * 1e6; active = false)
-    seq = Sequence(1e-8)
-    @sequence seq begin
-        Pulse(c, 0.25e-6)
+        coupling = add_coupling!(sys, atom, g => e, 2π * 1e6; active = false)
+        add_detector!(sys, PopulationDetectorSpec(atom, e; name = "P_e"))
+
+        seq = Sequence(1e-9)
+        @sequence seq begin
+            Pulse(coupling, 100e-9)
+        end
+
+        out = play(sys, seq; initial_state = g)
+        @test haskey(out.detectors, "P_e")
+        @test length(out.times) > 0
+        @test all(x -> 0.0 - 1e-6 ≤ x ≤ 1.0 + 1e-6, out.detectors["P_e"])
     end
-    out = play(sys, seq; initial_state = g, savefinalstate = true)
-    @test isempty(out.detectors)
-    @test sum(abs2, out.final_states[1]) ≈ 1
+
+    let
+        g, e = Level("g"), Level("e")
+        atom = Atom(; levels = [g, e])
+        sys = System(atom)
+        c = add_coupling!(sys, atom, g => e, 2π * 1e6; active = false)
+        seq = Sequence(1e-8)
+        @sequence seq begin
+            Pulse(c, 0.25e-6)
+        end
+        out = play(sys, seq; initial_state = g, savefinalstate = true)
+        @test isempty(out.detectors)
+        @test sum(abs2, out.final_states[1]) ≈ 1
+    end
 end
 
-# `@threads :static` cannot nest. A parameter sweep that itself runs under
-# `Threads.@threads` must still be able to call a multi-shot `play`.
+# `@threads :static` cannot nest; a sweep under `Threads.@threads` runs its shots serially.
 @testset "multi-shot play inside a threaded loop" begin
     g, e = Level("g"), Level("e")
     function sweep(Ω)
@@ -65,12 +66,10 @@ end
 @testset "atom equality" begin
     a = Atom(; levels = [Level("g")])
     b = Atom(; levels = [Level("g")])
-    @test isequal(a, a)                      # was a MethodError (ambiguous)
+    @test isequal(a, a)                  
     @test !isequal(a, b)
 end
 
-# `min(V, V_cap)` with an attractive C6 (so a negative default cap) pinned the
-# interaction at the cap for every separation.
 @testset "attractive vdW interaction is capped in magnitude only" begin
     r = Level("r")
     a1, a2 = Atom(; levels = [r]), Atom(; levels = [r])
@@ -85,9 +84,8 @@ end
     @test real(f._coeff[]) ≈ C6 / (1e-6)^6          # capped inside 1 µm
 end
 
-# Fields whose `update!` recomputes `_coeff` from geometry used to overwrite the
-# commanded amplitude every step: a planar-beam coupling, a vdW interaction and a
-# light shift were permanently on, whatever `active`, `Pulse` or `ampl` said.
+# A field whose coefficient is built from geometry (planar coupling, vdW, light
+# shift) keeps the commanded amplitude separate from the geometric factor.
 @testset "position-dependent fields obey active, Pulse and ampl" begin
     g, e = Level("g"), Level("e")
     function planar(prog)
@@ -99,8 +97,7 @@ end
         prog === :wait  && @sequence q begin Wait(0.5e-6) end
         prog === :pulse && @sequence q begin Pulse(c, 0.5e-6) end
         prog === :half  && @sequence q begin Pulse(c, 0.5e-6; ampl = 0.5) end
-        ## frozen: this checks the amplitude logic. With motion (the default) the
-        ## absorbed ħk Doppler-shifts the atom and P_e = 0.999986, as it should.
+        ## frozen: this checks the amplitude logic, not the Doppler shift.
         play(s, q; initial_state = g, frozen = true).detectors["Pe"][end]
     end
     @test planar(:wait) < 1e-12
@@ -144,27 +141,63 @@ end
     @test shifted(true) < 1e-2                       # shifted off resonance
 end
 
-# A coupling left switched on at the end of a shot (`On` with no `Off`) stayed
-# on for the next shot, and for the next `play`.
-@testset "every shot starts from the declared switch state" begin
-    g, e = Level("g"), Level("e")
-    a = Atom(; levels = [g, e]); s = System([a])
-    c = add_coupling!(s, a, g => e, 2π * 1e6; active = false)
-    add_detector!(s, PopulationDetectorSpec(a, e; name = "Pe"))
-    q = Sequence(1e-8)
-    @sequence q begin
-        Wait(0.25e-6)
-        On(c)
-        Wait(1e-8)
+@testset "every shot and run starts from its declared state" begin
+    ## Switch states: a coupling left on (`On` without `Off`) is off again next shot.
+    let
+        g, e = Level("g"), Level("e")
+        a = Atom(; levels = [g, e]); s = System([a])
+        c = add_coupling!(s, a, g => e, 2π * 1e6; active = false)
+        add_detector!(s, PopulationDetectorSpec(a, e; name = "Pe"))
+        q = Sequence(1e-8)
+        @sequence q begin
+            Wait(0.25e-6)
+            On(c)
+            Wait(1e-8)
+        end
+        o = play(s, q; initial_state = g, shots = 3)
+        @test all(o.detectors["Pe"][25, :] .< 1e-12)
+        @test play(s, q; initial_state = g).detectors["Pe"][25] < 1e-12
     end
-    o = play(s, q; initial_state = g, shots = 3)
-    @test all(o.detectors["Pe"][25, :] .< 1e-12)
-    @test play(s, q; initial_state = g).detectors["Pe"][25] < 1e-12
+
+    ## Quantum state and photon clicks; process tomography runs each input from itself.
+    let
+        g, e = Level("g"), Level("e")
+        a = Atom(; levels = [g, e]); s = System(a)
+        c = add_coupling!(s, a, g => e, 2π * 1e6; active = false)
+        pd = PhotoDetectorSpec(name = "clicks")
+        add_decay!(s, a, e => g, 2π * 1e6; clicks = pd)
+        add_detector!(s, pd)
+        add_detector!(s, PopulationDetectorSpec(a, e; name = "Pe"))
+        q = Sequence(1e-9)
+        @sequence q begin
+            Pulse(c, 0.25e-6)
+        end
+        job = compile(s, q; initial_state = [g])
+        o1 = play(job, s; rng = Random.Xoshiro(1))
+        o2 = play(job, s; rng = Random.Xoshiro(1))
+        @test o2.detectors["Pe"] == o1.detectors["Pe"]        # not from the final state
+        @test o2.detectors["clicks"] == o1.detectors["clicks"]  # clicks do not accumulate
+        oe = play(job, s; initial_state = [e], rng = Random.Xoshiro(1))
+        @test oe.detectors["Pe"][1] > 0.9                      # starts in e
+        @test play(job, s; rng = Random.Xoshiro(1)).detectors["Pe"] == o1.detectors["Pe"]
+
+        # Identity process: each input must come out as itself.
+        idle = Sequence(1e-9)
+        @sequence idle begin
+            Wait(1e-8)
+        end
+        s2 = System(a)
+        add_decay!(s2, a, e => g, 1.0)
+        for dm in (true, false)
+            outs = AtomTwin.simulate_process(s2, idle, [g, e]; shots = 4, density_matrix = dm)
+            @test real(outs[1][1, 1]) ≈ 1 atol = 1e-6
+            @test real(outs[2][2, 2]) ≈ 1 atol = 1e-6
+        end
+    end
 end
 
-# A per-shot rate was rescaled from a value stored on the shared node, which was
-# never updated: successive shots compounded (V₂·V₃/V₀ instead of V₃). Each
-# field now carries its own rate, as `GlobalCoupling` always did.
+# Each job field carries its own rate, so a parameter resampled per shot is set,
+# not rescaled from a shared value.
 @testset "per-shot rates do not compound" begin
     g, r = Level("g"), Level("r")
     a1, a2 = Atom(; levels = [g, r]), Atom(; levels = [g, r])
@@ -189,8 +222,6 @@ end
     end
 end
 
-# The ramps ignored the row × column factorisation that AmplRow/AmplCol apply,
-# and did not update the bookkeeping those read.
 @testset "tweezer ramps respect the row–column factorisation" begin
     tw = TweezerArray(λ = 767e-9, w0 = 1e-6, P_total = 1e-3,
                       row_freqs = [0.0], col_freqs = [0.0, 1e6])
@@ -203,48 +234,8 @@ end
     @test ta.row_amplitudes[1] == 0.8
 end
 
-# `play(job, sys; initial_state)` wrote the requested state only to
-# `sys.state[]`, which the solvers never read, so a reused job started from the
-# previous run's FINAL state and process tomography ran every input from the
-# first (an X gate with 20% Rabi noise scored fidelity 0.25 instead of ~0.9).
-@testset "every run starts from its initial state" begin
-    g, e = Level("g"), Level("e")
-    a = Atom(; levels = [g, e]); s = System(a)
-    c = add_coupling!(s, a, g => e, 2π * 1e6; active = false)
-    pd = PhotoDetectorSpec(name = "clicks")
-    add_decay!(s, a, e => g, 2π * 1e6; clicks = pd)
-    add_detector!(s, pd)
-    add_detector!(s, PopulationDetectorSpec(a, e; name = "Pe"))
-    q = Sequence(1e-9)
-    @sequence q begin
-        Pulse(c, 0.25e-6)
-    end
-    job = compile(s, q; initial_state = [g])
-    o1 = play(job, s; rng = Random.Xoshiro(1))
-    o2 = play(job, s; rng = Random.Xoshiro(1))
-    @test o2.detectors["Pe"] == o1.detectors["Pe"]        # not from the final state
-    @test o2.detectors["clicks"] == o1.detectors["clicks"]  # clicks do not accumulate
-    oe = play(job, s; initial_state = [e], rng = Random.Xoshiro(1))
-    @test oe.detectors["Pe"][1] > 0.9                      # starts in e
-    @test play(job, s; rng = Random.Xoshiro(1)).detectors["Pe"] == o1.detectors["Pe"]
-
-    # Identity process: each input must come out as itself.
-    idle = Sequence(1e-9)
-    @sequence idle begin
-        Wait(1e-8)
-    end
-    s2 = System(a)
-    add_decay!(s2, a, e => g, 1.0)
-    for dm in (true, false)
-        outs = AtomTwin.simulate_process(s2, idle, [g, e]; shots = 4, density_matrix = dm)
-        @test real(outs[1][1, 1]) ≈ 1 atol = 1e-6
-        @test real(outs[2][2, 2]) ≈ 1 atol = 1e-6
-    end
-end
-
-# With no Hamiltonian terms the Chebyshev plan saw zero spectral width and took
-# the degenerate shortcut -- a global phase -- dropping the anti-Hermitian decay
-# of the MCWF effective Hamiltonian: an excited atom never decayed.
+# With no Hamiltonian the effective Hamiltonian is purely anti-Hermitian; the
+# degenerate (zero-width) spectral case must still decay.
 @testset "MCWF decays with no Hamiltonian" begin
     g, e = Level("g"), Level("e")
     a = Atom(; levels = [g, e]); s = System(a)
@@ -260,8 +251,6 @@ end
     @test abs(sum(o.detectors["Pe"][end, :]) / N - p) < 5 * sqrt(p * (1 - p) / N)
 end
 
-# `force` indexed the polarizability table unguarded, so a classical run with an
-# atom that has no model at the beam's wavelength threw a KeyError.
 @testset "no polarizability at a beam's wavelength means no force" begin
     a = Atom(; levels = [Level("g")], x_init = [0.0, 0, 0], v_init = [1.0, 0, 0])
     s = System([a], [GaussianBeam(λ = 800e-9, w0 = 1e-6, P = 1e-3)])

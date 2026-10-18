@@ -1,21 +1,9 @@
-# Thread-safety regression tests for the solver scratch caches.
-#
-# The caches were once a single `Dict` keyed by `(threadid(), dim)`. Per-thread
-# KEYS do not make a SHARED `Dict` safe: concurrent `get!` inserts corrupt it
-# during `rehash!`. A fresh `Dict` rehashes on insert 1 and again on insert 11,
-# so 16 threads arriving together straddle two growth boundaries — measured
-# ~29% failure, and it surfaced as an `AssertionError: Multiple concurrent
-# writes to Dict detected!` from the Chebyshev workspace during a threaded MCWF
-# run.
-#
-# The failure is a crash or a wrong-length buffer, both silent-ish and
-# load-dependent, so it is worth pinning even though it needs >1 thread to show.
-#
-# The statevector propagators no longer use a cache: their scratch lives in the
-# `IntegratorPlan`, built once per instruction and owned by one task. The engine's
-# `ThreadCache`s (listed in `Dynamiq._ENGINE_CACHES`) back the density-matrix
-# scratch and the spectral bounds; the density-matrix ones are what these tests
-# cover.
+# Thread safety of the solver scratch caches. Per-thread keys do not make a
+# shared `Dict` safe -- concurrent inserts corrupt it during `rehash!` -- so each
+# `ThreadCache` holds one store per thread. The statevector propagators keep their
+# scratch in the per-instruction plan; the density-matrix scratch and spectral
+# bounds use `ThreadCache`s (`Dynamiq._ENGINE_CACHES`), which these tests cover.
+# They need more than one thread to show anything.
 using Test, AtomTwin
 
 const _D = AtomTwin.Dynamiq

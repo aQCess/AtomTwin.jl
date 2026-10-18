@@ -15,11 +15,12 @@ Neutral‑atom quantum computers use arrays of individually trapped atoms, manip
 
 - Built in Julia for fast, composable simulation code with an accessible, research‑friendly syntax.
 - **Atom / tweezer / laser primitives** so you build simulations directly from physical components instead of abstract Hamiltonians.
-- **High‑performance engines for coupled quantum and classical dynamics** at the pulse level.
+- **Error-controlled engines for coupled quantum and classical dynamics** at the pulse level: Schrödinger, wavefunction Monte Carlo and master-equation solvers, each with semiclassical atomic motion (see [Solvers and accuracy](solvers.md)).
 - **Firmware‑like instruction sequences** to mimic execution on real neutral‑atom processors.
-- Ready‑to‑use models for common atomic species (e.g. ytterbium), easily extended to new level schemes.
+- **Light–matter physics from atomic data**: trap light shifts with full tensor polarizability, state-dependent potentials, radiation pressure and photon recoil for laser cooling and fluorescence imaging.
+- Ready‑to‑use species (Yb‑171, Yb‑174, Sr‑88, Rb‑87, K‑39) with polarizability models, easily extended to new level schemes.
 - Visualization hooks for atomic trajectories and quantum state evolution for debugging and teaching.
-- Interactive notebooks for exploring key quantum protocols in a reproducible way.
+- Worked examples covering gates, noise, state preparation, transport, spectroscopy and laser cooling.
 - Suitable for independent research, device and instruction‑set design, and structured teaching (courses, labs, workshops).
 
 ---

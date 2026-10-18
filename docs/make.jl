@@ -55,7 +55,7 @@ format = Documenter.HTML(
     collapselevel = 2,
     assets = ["assets/custom.css"],
     prettyurls = get(ENV, "CI", nothing) == "true",
-    footer = "Copyright 2025-$(year(now())) University of Strasbourg. All rights reserved.",
+    footer = "Copyright 2025-$(year(now())) University of Strasbourg. Licensed under Apache-2.0.",
 )  
 example_pages = [
     title => "$name.md"
@@ -75,6 +75,7 @@ makedocs(
     pages = [
         "Home" => "index.md",
         "Quick Start" => "quickstart.md",
+        "Solvers and accuracy" => "solvers.md",
         "Examples" => example_pages,
         "API reference"  => [
             "System building"     => "api_system.md",
@@ -83,12 +84,14 @@ makedocs(
             "Running simulations" => "api_sequence.md",
             "Parameters and noise"=> "api_noise.md",
             "Visualization"       => "api_visualization.md",
-            "Internals"           => "internals.md",
+            "Internals: AtomTwin" => "internals.md",
+            "Internals: Dynamiq"  => "internals_dynamiq.md",
+            "Internals: solvers"  => "internals_solvers.md",
         ],
         "Contributing" => "CONTRIBUTING.md"
     ],
     remotes = nothing,
-    checkdocs = :none,
+    checkdocs = :exports,
 )
 
 deploydocs(

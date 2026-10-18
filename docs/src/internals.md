@@ -1,32 +1,47 @@
-# Internals
+# Internals: AtomTwin
 
-These are internal methods are are subject to changes without warning. Use with caution
+Internal methods, subject to change without notice.
 
-## Compilation
+```@docs
+AtomTwin
+```
+
+## Atoms, levels and polarizability
 ```@autodocs
 Modules = [AtomTwin]
-Pages = ["job.jl", "compile.jl"]
+Pages = ["abstract.jl", "levels.jl", "atoms/atoms.jl", "atoms/polarizability.jl",
+         "atoms/rubidium87atom.jl", "atoms/strontium88atom.jl",
+         "atoms/ytterbium171atom.jl", "atoms/ytterbium174atom.jl"]
+Public = false
+Filter = t -> !(t === AtomTwin.AtomWrapper || t === AtomTwin.ATOM_DEFAULTS)
+```
+
+## System and DAG
+```@autodocs
+Modules = [AtomTwin]
+Pages = ["system.jl", "dag.jl", "resolve.jl", "operators.jl", "detectors.jl"]
 Public = false
 ```
 
-## System
+## Physics
 ```@autodocs
 Modules = [AtomTwin]
-Pages = ["system.jl"]
+Pages = ["physics/beams.jl", "physics/couplings.jl", "physics/detunings.jl",
+         "physics/dissipators.jl", "physics/interactions.jl"]
 Public = false
 ```
 
-## Simulation
+## Sequences, compilation and simulation
 ```@autodocs
 Modules = [AtomTwin]
-Pages = ["play.jl"]
+Pages = ["instructions.jl", "interp.jl", "job.jl", "compile.jl", "play.jl"]
 Public = false
 ```
 
-## Noise
+## Parameters, noise and tweezers
 ```@autodocs
 Modules = [AtomTwin]
-Pages = ["noise.jl"]
+Pages = ["parameters.jl", "noise.jl", "tweezerarray.jl"]
 Public = false
 ```
 
@@ -37,99 +52,9 @@ Pages = ["tomography.jl"]
 Public = false
 ```
 
-## Parameters
-```@autodocs
-Modules = [AtomTwin]
-Pages = ["parameters.jl"]
-Public = false
-```
-
-## Tweezers
-```@autodocs
-Modules = [AtomTwin]
-Pages = ["tweezerarray.jl"]
-Public = false
-```
-
-## Detectors
-```@autodocs
-Modules = [AtomTwin]
-Pages = ["detectors.jl"]
-Public = false
-```
-
-## Resolve
-```@autodocs
-Modules = [AtomTwin]
-Pages = ["resolve.jl"]
-Public = false
-```
-
-## Physics
-```@autodocs
-Modules = [AtomTwin]
-Pages = ["physics/couplings.jl", "physics/detunings.jl", "physics/dissipators.jl", "physics/interactions.jl"]
-Public = false
-```
-
 ## Visualization
 ```@autodocs
 Modules = [AtomTwin.Visualization]
 Pages = ["Visualization.jl"]
 Public = false
-```
-
-## Dynamiq engine
-
-### Atom-light couplings
-```@autodocs
-Modules = [AtomTwin.Dynamiq]
-Pages = ["Dynamiq/atomlight.jl"]
-Public = false
-```
-### Geometry
-```@autodocs
-Modules = [AtomTwin.Dynamiq]
-Pages = ["Dynamiq/geometry.jl"]
-Public = false
-```
-### Solvers
-```@autodocs
-Modules = [AtomTwin.Dynamiq]
-Pages = ["Dynamiq/solvers/kernels.jl", "Dynamiq/solvers/integrators.jl",
-         "Dynamiq/solvers/propagators.jl", "Dynamiq/solvers/control.jl",
-         "Dynamiq/solvers/solvers.jl"]
-Public = false
-```
-### Statevectors and Operators
-```@autodocs
-Modules = [AtomTwin.Dynamiq]
-Pages = ["Dynamiq/statevec.jl"]
-Public = false
-```
-### Detectors
-```@autodocs
-Modules = [AtomTwin.Dynamiq]
-Pages = ["Dynamiq/detectors/detectorspec.jl",
-        "Dynamiq/detectors/coherencedetector.jl",
-        "Dynamiq/detectors/fielddetector.jl",
-        "Dynamiq/detectors/motiondetector.jl",
-        "Dynamiq/detectors/photodetector.jl",
-        "Dynamiq/detectors/populationdetector.jl"]
-Public = false
-```
-### Modifiers
-```@autodocs
-Modules = [AtomTwin.Dynamiq]
-Pages = ["Dynamiq/modifiers/amplitudemodifier.jl",
-        "Dynamiq/modifiers/movemodifier.jl",
-        "Dynamiq/modifiers/positionmodifier.jl"]
-Public = false
-```
-
-## Units
-```@autodocs
-Modules = [AtomTwin.Dynamiq.Units]
-Pages = ["Dynamiq/Units.jl"]
-Public = true
 ```

@@ -13,7 +13,7 @@
 # Covered: TDSE (no dissipation) and QME (with dissipation), plus WFMC to
 # exercise the jump path.
 #
-#   atwin run bench/bench1_small.jl
+#   julia --project=. -t auto bench/bench1_small.jl
 
 using AtomTwin
 using Random: MersenneTwister

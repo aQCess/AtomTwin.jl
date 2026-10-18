@@ -237,12 +237,9 @@ julia --project=docs docs/make.jl
 
 This compiles the documentation and writes the generated HTML into the docs build directory `docs/build`.
 
-To publish the updated documentation:
-
-1. Ensure `docs/make.jl` has completed successfully.
-2. Check out the `pages` branch of AtomTwin.
-3. Inspect and copy the generated build files (e.g. from `docs/build/`) into the root of the `pages` branch.
-4. Commit and push the changes on `pages` so that the hosted documentation is updated.
+Publishing is automatic: CI's documentation job runs `docs/make.jl`, whose
+`deploydocs` pushes the build to the `gh-pages` branch for pushes to `main` and for
+release tags.
 
 ***
 

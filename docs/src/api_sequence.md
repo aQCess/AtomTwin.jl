@@ -21,11 +21,16 @@ Off
 Wait
 ```
 
+### Composite instructions
+```@docs
+Parallel
+```
 ### Tweezer instructions
 ```@docs
 MoveCol
 MoveRow
 RampCol
+RampRow
 AmplCol
 AmplRow
 FreqCol
@@ -47,7 +52,7 @@ coupling = add_coupling!(
     system, atom, g => e, Ω;
     active = false)
 
-seq = Sequence(1e-9)           # 1 ns timestep
+seq = Sequence(1e-9)           # 1 ns output grid
 @sequence seq begin
     Pulse(coupling, 1e-6)      # 1 μs pulse
     Wait(0.5e-6)               # 0.5 μs wait
@@ -59,5 +64,9 @@ end
 play
 compile
 recompile!
+SimulationJob
 AtomTwin.Dynamiq.evolve!
 ```
+
+See [Solvers and accuracy](solvers.md) for how the solvers are chosen and what `dt`
+and `tol` control.

@@ -69,10 +69,10 @@ Register a population detector on the excited state so we can plot the dynamics 
 add_detector!(system, PopulationDetectorSpec(atom, e; name = "P_e"))
 ```
 
-Now define a simple sequence with a fixed time step of 1 ns and a 5 µs wait:
+Now define a sequence that records every 1 ns over a 5 µs wait:
 
 ```@example quickstart
-seq = Sequence(1e-9)  # fixed time step of 1 nanosecond
+seq = Sequence(1e-9)  # output every nanosecond
 @sequence seq begin
     Wait(5e-6)        # duration of 5 microseconds
 end

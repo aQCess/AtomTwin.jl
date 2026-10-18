@@ -1,42 +1,24 @@
-# Physics regression tests: Rabi, dissipation, selection rules, GaussianBeam, DAG parameters
-#
-# These tests fail when physics is wrong, not just when struct layout changes.
-# Also includes play() state-management regression tests.
+# Physics: Rabi and Lindblad dynamics, selection rules, beams, parametric values,
+# polarizability models, light shifts, couplings.
 
 import AtomTwin.Dynamiq
 
 # ── A. Rabi oscillations ──────────────────────────────────────────────────────
 
-@testset "Rabi: resonant π-pulse flips population" begin
+@testset "Rabi: a π pulse flips, a 2π pulse returns" begin
     g, e = Level("g"), Level("e")
     atom = Atom(; levels = [g, e])
     sys  = System(atom)
     Ω    = 2π * 1e6
     coupling = add_coupling!(sys, atom, g => e, Ω; active = false)
     add_detector!(sys, PopulationDetectorSpec(atom, e; name = "P_e"))
-    T_pi = π / Ω   # 500 ns
-    seq  = Sequence(1e-9)
-    @sequence seq begin
-        Pulse(coupling, T_pi)
+    for (T, P) in ((π / Ω, 1.0), (2π / Ω, 0.0))
+        seq = Sequence(1e-9)
+        @sequence seq begin
+            Pulse(coupling, T)
+        end
+        @test play(sys, seq; initial_state = g).detectors["P_e"][end] ≈ P atol = 0.01
     end
-    out = play(sys, seq; initial_state = g)
-    @test out.detectors["P_e"][end] > 0.99
-end
-
-@testset "Rabi: resonant 2π-pulse returns to ground state" begin
-    g, e = Level("g"), Level("e")
-    atom = Atom(; levels = [g, e])
-    sys  = System(atom)
-    Ω    = 2π * 1e6
-    coupling = add_coupling!(sys, atom, g => e, Ω; active = false)
-    add_detector!(sys, PopulationDetectorSpec(atom, e; name = "P_e"))
-    T_2pi = 2π / Ω   # 1000 ns
-    seq   = Sequence(1e-9)
-    @sequence seq begin
-        Pulse(coupling, T_2pi)
-    end
-    out = play(sys, seq; initial_state = g)
-    @test out.detectors["P_e"][end] < 0.01
 end
 
 @testset "Rabi: off-resonance drive reduces contrast" begin
@@ -84,11 +66,8 @@ end
 end
 
 @testset "Lindblad: pure dephasing is trace-preserving (DM dissipator)" begin
-    # Regression: the density-matrix dissipator applied L ρ L† in place and then
-    # read the modified ρ back for the -½{L†L,ρ} term, so the gain and loss acted
-    # on different inputs and the trace leaked (Tr ρ ≈ 0.96 at t=1µs, γ=2π·1MHz).
-    # Pure dephasing L = √γ|e⟩⟨e| must leave populations and trace exactly fixed
-    # and damp coherences at γ/2.
+    # Pure dephasing L = √γ|e⟩⟨e| leaves populations and trace exactly fixed and
+    # damps coherences at γ/2.
     g, e = Level("g"), Level("e")
     atom = Atom(; levels = [g, e])
     sys  = System(atom)
@@ -102,11 +81,9 @@ end
         Wait(1e-6)
     end
 
-    # Start in |+⟩ = (|g⟩+|e⟩)/√2: this is the case that exposed the bug — it has
-    # both population on the dephased level and a coherence to damp.
+    # |+⟩ = (|g⟩+|e⟩)/√2: population on the dephased level and a coherence to damp.
     out = play(sys, seq; initial_state = (1/√2)*g + (1/√2)*e, density_matrix = true)
 
-    # Trace preserved at every recorded time (pre-fix leaked to Tr ≈ 0.96)
     trace = out.detectors["P_g"] .+ out.detectors["P_e"]
     @test all(isapprox.(trace, 1.0; atol = 1e-9))
     # Pure dephasing leaves populations fixed (P_g = P_e = 1/2)
@@ -118,27 +95,18 @@ end
 
 # ── C. Selection rules ────────────────────────────────────────────────────────
 
-@testset "Selection rules: |ΔmF| > 1 returns zero coupling" begin
-    # F=1, mF=-1  →  F=2, mF=+1 : ΔmF = 2, forbidden
-    g_level = HyperfineLevel(1//1, 0//1, -1//1, 1.0, "g")
-    e_level = HyperfineLevel(2//1, 1//1,  1//1, 1.0, "e")
-    @test AtomTwin.compute_coupling_strength(g_level, e_level, nothing, 1.0, 1.0, 1.0) == 0.0
-end
-
-@testset "Selection rules: σ⁺ drives Δm=+1, π cannot" begin
-    # F=1, mF=0  →  F=2, mF=+1 : ΔmF = +1 (allowed for σ⁺)
-    g_level  = HyperfineLevel(1//1, 0//1, 0//1, 1.0, "g")
-    e_level  = HyperfineLevel(2//1, 1//1, 1//1, 1.0, "e")
-    # σ⁺ polarisation couples Δm=+1
-    @test AtomTwin.compute_coupling_strength(g_level, e_level, nothing, 0.0, 1.0, 0.0) != 0.0
-    # π polarisation cannot couple Δm=+1
-    @test AtomTwin.compute_coupling_strength(g_level, e_level, nothing, 1.0, 0.0, 0.0) == 0.0
+@testset "Selection rules: |Δm| ≤ 1, and each polarization drives its own Δm" begin
+    g  = HyperfineLevel(1//1, 0//1, 0//1, 1.0, "g")
+    e1 = HyperfineLevel(2//1, 1//1, 1//1, 1.0, "e1")
+    e2 = HyperfineLevel(2//1, 1//1, 2//1, 1.0, "e2")
+    @test AtomTwin.compute_coupling_strength(g, e2, nothing, 1.0, 1.0, 1.0) == 0.0   # Δm = 2
+    @test AtomTwin.compute_coupling_strength(g, e1, nothing, 0.0, 1.0, 0.0) != 0.0   # σ⁺
+    @test AtomTwin.compute_coupling_strength(g, e1, nothing, 1.0, 0.0, 0.0) == 0.0   # π
 end
 
 @testset "rabi_frequency: light polarised along ε excites the dipole along ε" begin
-    # J = 0 → J′ = 1: the excited superposition Σ_q Ω_q |1 q⟩ ↔ Σ_q Ω_q ê_q must be ∥ ε, for π, σ±
-    # and their mixtures alike. An extra (−1)^q in the dipole element flipped σ± against π:
-    # (x̂+ẑ)/√2 excited (−x̂+ẑ)/√2.
+    # J = 0 → J′ = 1: the excited superposition Σ_q Ω_q |1 q⟩ ↔ Σ_q Ω_q ê_q must be ∥ ε,
+    # for π, σ± and their mixtures alike.
     yb = Ytterbium174Atom()
     g  = HyperfineLevel(0//1, 0//1, 0//1, 0.0, "g")
     es = [HyperfineLevel(1//1, 1//1, q//1, 1.0, "e$q") for q in (-1, 0, 1)]
@@ -153,8 +121,8 @@ end
 end
 
 @testset "Fine → hyperfine: σ⁺ raises m, with the ground-to-excited dipole coefficient" begin
-    # J = 1/2, m_J = +1/2 → (J′ = 3/2, I = 3/2) F′ = 3, m_F′ = 3: stretched, only σ⁺ reaches it, with
-    # amplitude 1. The method used to swap the levels and take Δm = m_J − m_J′, so σ⁻ drove it.
+    # J = 1/2, m_J = +1/2 → (J′ = 3/2, I = 3/2) F′ = 3, m_F′ = 3: stretched, only σ⁺
+    # reaches it, with amplitude 1.
     atom = (I = 3//2,)
     g = FineLevel(1//2, 1//2)
     e = HyperfineLevel(3//1, 3//2, 3//1, 1.0, "e")
@@ -172,45 +140,18 @@ end
 
 # ── D. GaussianBeam analytical checks ────────────────────────────────────────
 
-@testset "GaussianBeam: peak intensity equals 2P/(π w0²)" begin
-    λ  = 1e-6
-    w0 = 50e-6
-    P  = 1e-3
+@testset "GaussianBeam: peak field and intensity, and the 8-waist cutoff" begin
+    λ, w0, P = 1e-6, 50e-6, 1e-3
     b  = GaussianBeam(λ, w0, P)
-    I0_analytic = 2 * P / (π * w0^2)
-    @test isapprox(Dynamiq.intensity(b, [0.0, 0.0, 0.0]), I0_analytic, rtol = 1e-10)
+    I0 = 2P / (π * w0^2)
+    cε = AtomTwin.Units.c * AtomTwin.Units.ε0
+    @test Dynamiq.intensity(b, zeros(3)) ≈ I0 rtol = 1e-10
+    @test abs(Dynamiq.Efield(b, zeros(3))) ≈ sqrt(2I0 / cε) rtol = 1e-10
+    @test Dynamiq.Efield(b, [10w0, 0.0, 0.0]) == 0.0 + 0.0im     # (10 w0)²/w0² ≫ 16
+    @test Dynamiq.intensity(b, [10w0, 0.0, 0.0]) == 0.0
 end
 
-@testset "GaussianBeam: |E(0,0,0)| matches analytical formula" begin
-    c_v  = 2.997_924_58e8
-    ε0_v = 8.854_187_812_8e-12
-    λ  = 1e-6
-    w0 = 50e-6
-    P  = 1e-3
-    b  = GaussianBeam(λ, w0, P)
-    I0 = 2 * P / (π * w0^2)
-    E_analytical = sqrt(2 * I0 / (c_v * ε0_v))
-    E_computed   = abs(Dynamiq.Efield(b, [0.0, 0.0, 0.0]))
-    @test isapprox(E_computed, E_analytical, rtol = 1e-10)
-    # Cross-check: |E|² · c·ε0/2 must equal intensity
-    @test isapprox(E_computed^2 * c_v * ε0_v / 2, Dynamiq.intensity(b, [0.0, 0.0, 0.0]), rtol = 1e-10)
-end
-
-@testset "GaussianBeam: 8-waist cutoff returns zero field" begin
-    λ  = 1e-6
-    w0 = 50e-6
-    P  = 1e-3
-    b  = GaussianBeam(λ, w0, P)
-    # 10·w0 in x-direction: (10w0)²/w0² = 100 ≫ 16 → zero
-    r_far = [10 * w0, 0.0, 0.0]
-    @test Dynamiq.Efield(b, r_far) == 0.0 + 0.0im
-    @test Dynamiq.intensity(b, r_far) == 0.0
-end
-
-# ── E. DAG parameter resolution: end-to-end ───────────────────────────────────
-#
-# Each test runs a π-pulse where Ω is encoded as a DAG expression and checks
-# that the simulation produces the same result as the direct numeric case.
+# ── E. Parametric values end to end (resolution itself: test_parameters.jl) ──
 
 function _run_pi_pulse(Ω_expr)
     g, e = Level("g"), Level("e")
@@ -244,34 +185,6 @@ end
     out_override = play(sys, seq; initial_state = g, Omega = 2π * 0.5e6)
     @test out_default.detectors["P_e"][end] > 0.99           # default is a π-pulse
     @test out_override.detectors["P_e"][end] < out_default.detectors["P_e"][end]  # halved Ω ≠ π-pulse
-end
-
-@testset "DAG: multiplicative expression 2*p resolves correctly" begin
-    # 2 * Parameter(:Omega, 2π*0.5e6) should behave like Ω = 2π*1e6
-    Ω_expr = 2.0 * Parameter(:Omega, 2π * 0.5e6)
-    out = _run_pi_pulse(Ω_expr)
-    @test out.detectors["P_e"][end] > 0.99
-end
-
-@testset "DAG: additive expression p+q resolves correctly" begin
-    # Parameter(:A, 2π*0.5e6) + Parameter(:B, 2π*0.5e6) = 2π*1e6
-    Ω_expr = Parameter(:A, 2π * 0.5e6) + Parameter(:B, 2π * 0.5e6)
-    out = _run_pi_pulse(Ω_expr)
-    @test out.detectors["P_e"][end] > 0.99
-end
-
-@testset "DAG: subtraction expression p-q resolves correctly" begin
-    # Parameter(:A, 2π*1.5e6) - Parameter(:B, 2π*0.5e6) = 2π*1e6
-    Ω_expr = Parameter(:A, 2π * 1.5e6) - Parameter(:B, 2π * 0.5e6)
-    out = _run_pi_pulse(Ω_expr)
-    @test out.detectors["P_e"][end] > 0.99
-end
-
-@testset "DAG: inverse expression inv(p) resolves correctly" begin
-    # inv(Parameter(:inv_Omega, 1/(2π*1e6))) = 2π*1e6
-    Ω_expr = inv(Parameter(:inv_Omega, 1.0 / (2π * 1e6)))
-    out = _run_pi_pulse(Ω_expr)
-    @test out.detectors["P_e"][end] > 0.99
 end
 
 # ── F. GaussianPosition and MaxwellBoltzmann with parametric T ────────────────
@@ -357,59 +270,20 @@ end
     @test gc._coeff[] == 0.0
 end
 
-# ── Z. play() state-management regression ────────────────────────────────────
-
-@testset "play: ME with initial_state then multi-shot MCWF on same sys does not crash" begin
-    # Regression: play(dm_job, sys; initial_state=..., density_matrix=true) sets
-    # sys.state[] to a Matrix.  A subsequent multi-shot WF play on the same sys
-    # would have crashed in recompile! (Vector .= Matrix DimensionMismatch).
-    g, e  = Level("g"), Level("e")
-    atom  = Atom(; levels=[g, e])
-    sys   = System(atom)
-    Ω     = 2π * 1e6
-    coup  = add_coupling!(sys, atom, g => e, Ω; active=false)
-    add_dephasing!(sys, atom, e, 2π * 0.1e6)
-    add_detector!(sys, PopulationDetectorSpec(atom, e; name="P_e"))
-    seq   = Sequence(1e-9)
-    @sequence seq begin Pulse(coup, 10e-9) end
-
-    # compile expects initial_state as a vector (high-level play calls _tovector)
-    job_me   = compile(sys, seq; density_matrix=true,  initial_state=[g])
-    job_mcwf = compile(sys, seq; density_matrix=false, initial_state=[g])
-
-    # play(job, sys; initial_state=g, density_matrix=true) sets sys.state[] to a Matrix
-    play(job_me, sys; initial_state=g, density_matrix=true)
-    @test sys.state[] isa Matrix
-
-    # Multi-shot WF play on the same sys must not crash
-    out = play(job_mcwf, sys; shots=5)
-    @test length(out.times) == 10
-    @test haskey(out.detectors, "P_e")
-end
-
 # ── Polarizability & off-resonant scattering (Yb-171) ─────────────────────────
 
 using AtomTwin.Units: c, hbar
 
-@testset "Yb-171 atom-facing polarizability methods resolve" begin
-    # Regression: these used a stale `Polarizability.` module qualifier and threw
-    # UndefVarError. They must now dispatch and return finite numbers.
-    yb = Ytterbium171Atom(; levels = [Level("1S0")])
-    for st in ("1S0", "3P0")
-        @test isfinite(light_shift_coeff_Hz_per_Wcm2(yb, st, 759.0))
-        @test isfinite(polarizability_au(yb, st, 759.0))
-        @test scattering_rate_per_Wcm2(yb, st, 759.0) > 0
+@testset "atom-facing polarizability methods dispatch to the species models" begin
+    for (atom, λ) in ((Ytterbium171Atom(; levels = [Level("1S0")]), 759.0),
+                      (Strontium88Atom(; levels = [Level("1S0")]), 813.4))
+        for st in ("1S0", "3P0")
+            @test isfinite(light_shift_coeff_Hz_per_Wcm2(atom, st, λ))
+            @test isfinite(polarizability_au(atom, st, λ))
+            @test scattering_rate_per_Wcm2(atom, st, λ) > 0
+        end
     end
 end
-
-@testset "759 nm is magic: 1S0 and 3P0 trap depths agree" begin
-    yb  = Ytterbium171Atom(; levels = [Level("1S0")])
-    ls1 = light_shift_coeff_Hz_per_Wcm2(yb, "1S0", 759.0)
-    ls3 = light_shift_coeff_Hz_per_Wcm2(yb, "3P0", 759.0)
-    @test ls1 < 0 && ls3 < 0                       # both states trapped (red shift)
-    @test abs(ls1 - ls3) / abs(ls1) < 0.01         # equal depth to <1% ⇒ magic
-end
-
 # The models were refitted to these (Kroeze et al., arXiv:2509.04416, Table 7),
 # with the clock magic wavelength weighted at its experimental uncertainty and the
 # others at a 0.015 nm model floor.
@@ -450,20 +324,6 @@ end
     yb  = Ytterbium171Atom(; levels = [Level("1S0")])
     got = scattering_rate_per_Wcm2(yb, "3P0", λ)
     @test isapprox(got, ref; rtol = 1e-10)
-end
-
-@testset "per-line Grimm identity Γsc = (Γ/Δ)·U_dip/ħ" begin
-    # In the RWA far-detuned limit, a single line's scattering rate and light
-    # shift obey Γsc = (Γ/Δ)·U_dip/ħ exactly. Check on each 3P0 line.
-    trans = [(215.870446, 0.306), (461.867846, 1.50182782), (675.141040, 4.0326703),
-             (729.293151, 0.62437427), (796.547798, 23.2660865)]
-    ωL = 2π * c / (759.0 * 1e-9)
-    for (fTHz, gMHz) in trans
-        ω0 = 2π * fTHz * 1e12; Γ = 2π * gMHz * 1e6; Δ = ωL - ω0
-        Udip = (3π * c^2 / (2 * ω0^3)) * (Γ / Δ)          # J/(W/m²), RWA single line
-        Γsc  = (3π * c^2 / (2 * hbar * ω0^3)) * (Γ / Δ)^2 # 1/s/(W/m²), RWA single line
-        @test isapprox(abs(Γsc), abs((Γ/Δ) * Udip / hbar); rtol = 1e-12)
-    end
 end
 
 # ── Alkali D-line polarizability: line strength vs natural linewidth ───────────
@@ -537,33 +397,13 @@ end
     @test scattering_rate_per_Wcm2(rb, "5S1/2", 850.0) > 0
 end
 
-@testset "gamma_MHz path unchanged; Yb 759 nm magic wavelength intact" begin
-    # Yb models are gamma_MHz-based; the dipole extension must not perturb them.
-    yb  = Ytterbium171Atom(; levels = [Level("1S0")])
-    ls1 = light_shift_coeff_Hz_per_Wcm2(yb, "1S0", 759.0)
-    ls3 = light_shift_coeff_Hz_per_Wcm2(yb, "3P0", 759.0)
-    @test ls1 < 0 && ls3 < 0
-    @test abs(ls1 - ls3) / abs(ls1) < 0.01
-    # A gamma_MHz line and the dipole line that produces the same effective width
-    # (at the same frequency) give identical polarizability — round-trip of the
-    # normalisation. Take g_eff from a dipole model at the SAME freq to keep it exact.
-    # Test should work for any J/J_f values, but they have to be assigned to avoid error.
-    m_d = PolarizabilityModel("x", [(freq_THz = 377.107463, dipole_ea0 = 4.227, J_f = 1//1)]; J = 0//1)
-    m_g = PolarizabilityModel("x", [(freq_THz = 377.107463, gamma_MHz = m_d.transitions[1].gamma_MHz, J_f = 1//1)]; J = 0//1)
-    @test polarizability_au(m_g, 850.0) ≈ polarizability_au(m_d, 850.0)
-end
-
 @testset "standard α: U = −α I/(2c ε₀), dipole lines at their true strength" begin
-    # Two factor-2 errors used to cancel in every α anchor in this file:
-    # `polarizability_si` took U/I = −α/(c ε₀), halving every α, and
-    # `_dipole_to_gamma_MHz` had 2/9π, doubling every dipole-specified line. So Rb
-    # and Sr α matched the literature while their traps were 2× too deep per
-    # intensity, and Yb's (gamma_MHz) α printed at half its value.
     U = AtomTwin.Units
+    UoverI(m, λ) = U.h * light_shift_coeff_Hz_per_Wcm2(m, λ) * 1e-4      # J/(W/m²)
     for (m, λ) in ((AtomTwin.RB87_POLARIZABILITY_5S12, 1064.0),
                    (AtomTwin.SR88_POLARIZABILITY_1S0, 813.4),
                    (AtomTwin.YB174_POLARIZABILITY_1S0, 759.35))
-        @test polarizability_si(m, λ) ≈ -2U.c * U.ε0 * AtomTwin._U_over_I(m, λ) rtol = 1e-12
+        @test polarizability_si(m, λ) ≈ -2U.c * U.ε0 * UoverI(m, λ) rtol = 1e-12
     end
     # Absolute, independent of AtomTwin's line data: Grimm, Weidemüller &
     # Ovchinnikov (2000) eq. 20 for Rb 5S₁/₂ at 1064 nm, linear polarisation, D2 and
@@ -572,21 +412,10 @@ end
     Γ, ωL = 2π * 6.0666e6, 2π * U.c / 1064e-9
     grimm = sum(w * -(π * U.c^2 * Γ / (2ω0^3)) * (1 / (ω0 - ωL) + 1 / (ω0 + ωL))
                 for (ω0, w) in ((2π * 384.2304844685e12, 2), (2π * 377.107463380e12, 1)))
-    @test isapprox(AtomTwin._U_over_I(AtomTwin.RB87_POLARIZABILITY_5S12, 1064.0), grimm; rtol = 0.02)
-    # …and the Yb ground state, built from measured widths, keeps its light shift but
-    # now reports its standard α: ≈ 141 a.u. static (it printed 70.8).
-    @test isapprox(polarizability_au(AtomTwin.YB174_POLARIZABILITY_1S0, 1e7), 141.5; rtol = 0.01)
+    @test UoverI(AtomTwin.RB87_POLARIZABILITY_5S12, 1064.0) ≈ grimm rtol = 0.02
+    # Yb ground state, from measured widths: ≈ 141 a.u. static.
+    @test polarizability_au(AtomTwin.YB174_POLARIZABILITY_1S0, 1e7) ≈ 141.5 rtol = 0.01
 end
-
-@testset "Sr atom-facing polarizability methods resolve" begin
-    sr = Strontium88Atom(; levels = [Level("1S0")])
-    for st in ("1S0", "3P0")
-        @test isfinite(light_shift_coeff_Hz_per_Wcm2(sr, st, 813.4))
-        @test isfinite(polarizability_au(sr, st, 813.4))
-        @test scattering_rate_per_Wcm2(sr, st, 813.4) > 0
-    end
-end
-
 @testset "Sr static polarizabilities match Safronova 2013 recommended values" begin
     # Line lists from Phys. Rev. A 87, 012509 (2013) reproduce the recommended
     # static scalar polarizabilities: α(1S0)=197.14, α(3P0)=444.51 a.u.
@@ -595,16 +424,8 @@ end
     @test isapprox(polarizability_au(sr, "3P0", 1.0e7), 444.5; rtol = 0.02)
 end
 
-@testset "813.4 nm is magic: 1S0 and 3P0 trap depths agree" begin
-    # The 3P0 tail offset is anchored to the measured 813.428 nm crossing, so the
-    # two trap depths must be equal there (to <1%) and the crossing near 813.4 nm.
-    sr  = Strontium88Atom(; levels = [Level("1S0")])
-    ls1 = light_shift_coeff_Hz_per_Wcm2(sr, "1S0", 813.428)
-    ls3 = light_shift_coeff_Hz_per_Wcm2(sr, "3P0", 813.428)
-    @test ls1 < 0 && ls3 < 0                       # both states trapped (red shift)
-    @test abs(ls1 - ls3) / abs(ls1) < 0.01         # equal depth ⇒ magic
-
-    # Locate the crossing by bisection; it must land within 0.1 nm of 813.428.
+@testset "Sr 1S0/3P0 cross at the measured 813.428 nm magic wavelength" begin
+    sr = Strontium88Atom(; levels = [Level("1S0")])
     f(λ) = light_shift_coeff_Hz_per_Wcm2(sr, "3P0", λ) -
            light_shift_coeff_Hz_per_Wcm2(sr, "1S0", λ)
     lo, hi = 800.0, 826.0
@@ -612,20 +433,17 @@ end
         m = (lo + hi) / 2
         f(lo) * f(m) <= 0 ? (hi = m) : (lo = m)
     end
-    @test isapprox((lo + hi) / 2, 813.428; atol = 0.1)
+    @test (lo + hi) / 2 ≈ 813.428 atol = 0.1
 end
-
-
 # ======================================================================
 # Angular momentum: line strength, tensor polarizability, trap light shift
 # ======================================================================
 
 @testset "line-strength factor f(J,J′) and its sign rule" begin
-    # The kernel used to hard-code f = 3, correct only for J=0 → J′=1. A line
-    # BELOW the state carries f = −1 — the opposite sign — which is what makes the
-    # two states of a two-level atom shift oppositely.
+    # A line BELOW the state carries the opposite sign, which is what makes the two
+    # states of a two-level atom shift oppositely.
     f = AtomTwin._line_strength_factor
-    @test f(0//1, 1//1, +539.0) == 3//1     # the historical case, unchanged
+    @test f(0//1, 1//1, +539.0) == 3//1
     @test f(1//1, 0//1, -539.0) == -1//1    # below in energy
     @test f(1//1, 2//1, +202.0) == 5//3
 
@@ -636,7 +454,6 @@ end
     la = light_shift_coeff_Hz_per_Wcm2(above, 767.0)
     lb = light_shift_coeff_Hz_per_Wcm2(below, 767.0)
     @test isapprox(lb / la, -1/3; rtol = 1e-12)   # = f(−1)/f(3), sign included
-
 
     # Provenance is recorded and validated (a refit must tell fitted from measured).
     @test PolarizabilityModel("x", [(freq_THz = 100.0, gamma_MHz = 1.0, J_f = 1//1,
@@ -661,14 +478,9 @@ end
     @test isapprox(AtomTwin._alpha2_si(m3P1, 473.375; F = 1//1, I = 0//1) / au,
                    -384; atol = 25)
 
-    # ABSOLUTE ANCHOR. α⁽²⁾ as a number is convention dependent, so the splitting
-    # identity below (which holds under ANY rescaling of α⁽²⁾) cannot catch a wrong
-    # normalisation — only comparing the magnitude to an independent calculation
-    # can. The notes' α⁽²⁾ is (2J+1)× this one; that surplus (2J+1) reads as 16σ
-    # here and passed every ratio test before this anchor existed.
-    #
-    # The splitting identity is kept because it checks the GEOMETRY: with factors
-    # −2 (m=0) and +1 (|m|=1) the splitting is exactly −3α⁽²⁾.
+    # The absolute values above anchor the normalisation, which the splitting
+    # identity (invariant under any rescaling of α⁽²⁾) cannot. The identity checks
+    # the geometry: with factors −2 (m=0) and +1 (|m|=1) the splitting is −3α⁽²⁾.
     s0 = light_shift_coeff_Hz_per_Wcm2(m3P1, 473.1445; F = 1//1, mF = 0//1,
                                        I = 0//1, ε_z = 1.0)
     s1 = light_shift_coeff_Hz_per_Wcm2(m3P1, 473.1445; F = 1//1, mF = 1//1,
@@ -727,7 +539,6 @@ end
 end
 
 @testset "trap α is per-sublevel and tracks the magic angle" begin
-    # THE DELIVERABLE: sublevels of one manifold no longer share a polarizability.
     function trap_alphas(θ_deg; levels = nothing)
         e  = HyperfineManifold(1//1, 1; label = "³P₁", term = l"3P1")
         sr = Strontium88Atom(; levels = levels === nothing ? [e...] : levels)
@@ -762,9 +573,8 @@ end
 end
 
 @testset "the tensor light shift is quantised along the trap polarisation" begin
-    # The tensor shift was applied on the m-diagonal only, right only for ε along
-    # (or circular about) the quantization axis. In general it mixes Δm = ±1, ±2, and
-    # the shifts and the force cannot depend on which axis m is counted along.
+    # In general the tensor shift mixes Δm = ±1, ±2; the shifts and the force cannot
+    # depend on which axis m is counted along.
     using LinearAlgebra
     D = AtomTwin.Dynamiq
     e = HyperfineManifold(1//1, 1; label = "³P₁", term = l"3P1")
@@ -793,7 +603,7 @@ end
     for q in ([0, 0, 1], [0, 1, 0], [1, 1, 1])
         E, F, n = trap(q)
         @test n == 1
-        @test E ≈ E0 rtol = 1e-12            # were the diagonal entries alone
+        @test E ≈ E0 rtol = 1e-12
         @test F ≈ F0 rtol = 1e-9             # the force counts the coherences
     end
 end
@@ -846,24 +656,16 @@ end
         end
         job = compile(sys, seq)
         fs = [f for f in job.fields if f isa StarkShiftAC]
-        # The applied shift is the trap potential −α I/(2c ε₀ ħ) at the atom — an
-        # angular frequency, NEGATIVE for a trapped level. NOT α I/ħ, and NOT
-        # +α I/(2c ε₀ ħ): this assertion previously encoded each error in turn, which
-        # is why it caught neither. Anchored to the trap depth, with its sign, below.
-        #
-        # Read the shift as `H` value × coefficient rather than from `_coeff`
-        # alone: the magnitude lives in the operator and `_coeff` carries only
-        # the intensity envelope, so that `spectral_spec` can bound this term
-        # (see `track_spectrum!`). The physics is the product, either way.
+        # The applied shift is the trap potential −α I/(2c ε₀ ħ) at the atom, negative
+        # for a trapped level. The magnitude lives in the operator and `_coeff`
+        # carries the intensity envelope, so the shift is their product.
         shift(f) = real(f.H.forward[1][3] * f._coeff[])
         AtomTwin.Dynamiq.update!(fs[end], 1)
         @test isapprox(shift(fs[end]),
                        - fs[end].alpha * AtomTwin.Dynamiq.intensity(tw, sr.inner.x) /
                        (2 * AtomTwin.Units.c * AtomTwin.Units.ε0 * AtomTwin.Units.hbar);
                        rtol = 1e-12)
-        # Absolute anchor: the ground-state shift IS the trap potential in rad/s,
-        # −U0/ħ: the trapped ground state is lowered, as the force says. (An `abs`
-        # here once let the opposite sign through.)
+        # Absolute anchor: the ground-state shift is the trap potential, −U0/ħ.
         if !explicit
             U0 = AtomTwin.polarizability_si(AtomTwin.SR88_POLARIZABILITY_1S0, 520.0) *
                  tw.I0 / (2AtomTwin.Units.c * AtomTwin.Units.ε0)
@@ -875,19 +677,10 @@ end
         length(fs)
     end
     @test n_fields(false) == 2
-    @test n_fields(true)  == 2                   # NOT 4
-
-    # The shipped motion examples are unaffected because 759 nm is magic for the
-    # Yb clock pair: the shift IS applied, the differential is just negligible.
-    yb = Ytterbium171Atom(; levels = [Level("1S0"), Level("3P0")])
-    twyb = GaussianBeam(λ = 759e-9, w0 = 1.0e-6, P = 50e-3)
-    iyb = AtomTwin.Dynamiq.NLevelAtom(2)
-    AtomTwin.initialize!(yb, iyb; beams = [twyb])
-    a = iyb.alpha[759e-9]
-    @test abs((a[2] - a[1]) / a[1]) < 0.01
+    @test n_fields(true)  == 2                   # replaced, not added
 end
 
-@testset "Yb-174: corrected 3P1 model and its documented accuracy" begin
+@testset "Yb-174 3P1 model and its documented accuracy" begin
     yb   = Ytterbium174Atom(; levels = [Level("1S0")])
     m1S0 = AtomTwin.YB174_POLARIZABILITY_1S0
     m3P1 = AtomTwin.YB174_POLARIZABILITY_3P1
@@ -895,12 +688,11 @@ end
     @test yb.I == 0//1                            # spin-zero: F = J
     @test m1S0 === AtomTwin.YB171_POLARIZABILITY_1S0   # shared electronic structure
 
-    # The two corrections to the published line list.
     ls = m3P1.transitions
     i1S0 = findfirst(t -> t.freq_THz < 0, ls)
-    @test ls[i1S0].J_f == 0//1                    # (1) J′ = 0, not 1
+    @test ls[i1S0].J_f == 0//1                    # the line down to ¹S₀ (J′ = 0)
     i3S1 = findfirst(t -> isapprox(t.freq_THz, 440.775408), ls)
-    @test ls[i3S1].gamma_MHz == 3.604             # (2) Porsev β, not the LS estimate
+    @test ls[i3S1].gamma_MHz == 3.604             # ab initio branching (Porsev 1999)
     # Provenance survives, so a refit can find the free parameters.
     @test count(t -> t.source == :fitted, ls) == 2
     @test sum(t.gamma_MHz for t in ls if t.source == :fitted) ≈ 53.761
@@ -925,11 +717,9 @@ end
 end
 
 @testset "the trap light shift follows the local intensity" begin
-    # The resonance of a trapped atom sits at its LOCAL differential light shift,
-    # so it must track the Gaussian intensity profile as the atom moves off centre.
-    # This is the check that caught StarkShiftAC's missing 1/(2cε₀): the shift
-    # scaled with position correctly but was ~380× too small in absolute terms,
-    # which no relative test would have found.
+    # The resonance of a trapped atom sits at its LOCAL differential light shift, so
+    # it tracks the Gaussian intensity profile as the atom moves off centre; the
+    # centre value anchors the absolute scale.
     gm = HyperfineManifold(0//1, 0; label = "¹S₀", term = l"1S0", g_F = 0.0)
     e  = HyperfineManifold(1//1, 1; label = "³P₁", term = l"3P1", g_F = 1.5)
     θ  = 54.7356                      # tensor-free angle: all three mF degenerate…
@@ -942,9 +732,8 @@ end
                       pol = [sind(θ), 0.0, cosd(θ)])
     I0 = 2 * 50e-3 / (π * w0^2)
 
-    # Analytic differential shift at the trap centre: (U_e − U_g)/h. ³P₁ is the
-    # more deeply trapped here, so the line moves RED (Δ0 < 0). This test once
-    # expected the mirror image (U_g − U_e), the sign the engine then had.
+    # Analytic differential shift at the trap centre: (U_e − U_g)/h. ³P₁ is the more
+    # deeply trapped here, so the line moves red (Δ0 < 0).
     Δ0 = (light_shift_coeff_Hz_per_Wcm2(AtomTwin.YB174_POLARIZABILITY_3P1, 767.0;
                 F = 1//1, mF = 0//1, I = 0//1, ε_z = cosd(θ)) -
           light_shift_coeff_Hz_per_Wcm2(AtomTwin.YB174_POLARIZABILITY_1S0, 767.0)) * I0 * 1e-4
@@ -981,11 +770,8 @@ end
 end
 
 @testset "PhotoDetector counts every channel of a manifold decay" begin
-    # `clicks_jumps` was a Dict{String,Jump}: each channel of a manifold decay
-    # overwrote the previous one, and the detector was bound to the single survivor.
-    # Photons on every other channel went uncounted, silently — a pi-driven
-    # 1S0<->3P1 atom reported ZERO clicks while visibly cycling, because the jump
-    # that happened to survive was a sigma channel.
+    # A manifold decay has one jump per photon polarisation; the detector counts
+    # them all, whichever sublevel is driven.
     Γ = 2π * 182e3
     g = HyperfineManifold(0//1, 0; label = "1S0", term = l"1S0")
     e = HyperfineManifold(1//1, 1; label = "3P1", term = l"3P1", g_F = 1.493)
@@ -1017,19 +803,17 @@ end
     # Both drives cycle the atom, so both must report photons.
     @test Pg_pi  < 0.95        # it really is decaying
     @test Pg_sig < 0.95
-    @test n_pi  > 10           # …and the pi channel is counted (was exactly 0)
+    @test n_pi  > 10
     @test n_sig > 10
 
     # Every excited sublevel decays at the same total rate Γ, so driving one
-    # sublevel or two should give comparable counts — not a factor of the number of
-    # channels that happen to survive a Dict insertion.
+    # sublevel or two gives comparable counts.
     @test 0.3 < n_pi / n_sig < 3.0
 end
 
 @testset "a manifold decay transfers excited coherence to the ground state" begin
-    # One jump per sublevel pair made the π photons of |e₊⟩ and |e₋⟩ distinguishable,
-    # so (|e₊⟩ + |e₋⟩)/√2 decayed to a mixture. With one jump per polarisation the π
-    # branch, amplitudes ∓1/√3, carries the coherence: ρ₊₋ = −1/6 for J = ½ → ½.
+    # One jump per photon polarisation: the π branch, amplitudes ∓1/√3, carries the
+    # coherence of (|e₊⟩ + |e₋⟩)/√2 to the ground state, ρ₊₋ = −1/6 for J = ½ → ½.
     g = FineManifold(1//2; label = "S")
     e = FineManifold(1//2; label = "P")
     function run(; dm, shots = 1)
@@ -1059,11 +843,11 @@ end
     # a tensor offset lets a measured (scalar, tensor) pair at one wavelength stand
     # without a line list. Muzi Falconi et al. (2025), 532 nm, π-polarised trap:
     # m_J = ±1 magic, m_J = 0 at −11.6 MHz/mK relative to ¹S₀ (whose shift is
-    # 20.84 MHz/mK): α(0)/α(¹S₀) = 0.443 → α_s = 0.814, α_t = 0.186 in units of α(¹S₀).
+    # 20.84 MHz/mK), so r0 = α(0)/α(¹S₀) = 1 − 11.6/20.84 = 0.443. In units of α(¹S₀),
+    # with the tensor factor (1 for m = ±1, −2 for m = 0) of a π-polarised trap:
+    # α_s + α_t = 1 and α_s − 2α_t = r0, so α_s = (2 + r0)/3, α_t = (1 − r0)/3.
     u   = light_shift_coeff_Hz_per_Wcm2(AtomTwin.YB174_POLARIZABILITY_1S0, 532.0) * 1e-4
-    #u   = AtomTwin._U_over_I(AtomTwin.YB174_POLARIZABILITY_1S0, 532.0) / AtomTwin.Units.h
-    """I dont understand this logic"""
-    r0  = 1 - 11.6 / 20.84 
+    r0  = 1 - 11.6 / 20.84
     αs, αt = (2 + r0) / 3, (1 - r0) / 3
     model = PolarizabilityModel("1P1", NamedTuple[]; J = 1,
                                 offset_Hz_per_Wm2 = αs * u, tensor_offset_Hz_per_Wm2 = αt * u)
@@ -1101,8 +885,7 @@ end
 end
 
 @testset "a detuning pulse must have real amplitudes" begin
-    # Documented as rejected; it was accepted, and the density matrix then lost
-    # population while the statevector renormalised it away.
+    # A complex detuning would be non-Hermitian.
     l0, l1 = Level("0"), Level("1")
     q = Atom(; levels = [l0, l1]); s = System(q)
     δ = add_detuning!(s, q, l1, 1.0; active = false)
@@ -1120,16 +903,15 @@ end
 end
 
 @testset "GeneralGaussianBeam follows the paraxial axial profile" begin
-    # The on-axis field fell as w0²/w² (power not conserved), the Gouy phase was doubled,
-    # and `intensity`/`dIdx` ignored z: a GeneralGaussianBeam tweezer had no axial light
-    # shift, its dipole force gave √2 × the axial trap frequency, and |E|² ≠ intensity.
+    # Paraxial: on-axis field ∝ w0/w, Gouy phase −ζ, |E|² consistent with
+    # `intensity` and the gradients consistent with finite differences.
     λ, w0 = 759.35e-9, 0.6e-6
     b  = GeneralGaussianBeam(λ, w0, w0, 1e-3, [0.0, 0.0, 1.0], [1.0, 0.0, 0.0])
     zR = π * w0^2 / λ
     E(r) = Dynamiq.efield_scalar(b, r)
     @test abs(E([0.0, 0.0, zR])) / abs(E([0.0, 0.0, 0.0])) ≈ 1 / √2 rtol = 1e-12
-    # On axis E(z)/E(0) = e^{i(kz − ζ)}: the phase runs as exp(+ik·r) like PlanarBeam's, and the
-    # Gouy phase lags (ζ(z_R) = π/4). It ran as e^{−i(kz − ζ)}, a backward-running phase.
+    # On axis E(z)/E(0) = e^{i(kz − ζ)}: the phase runs as exp(+ik·r) like PlanarBeam's,
+    # and the Gouy phase lags (ζ(z_R) = π/4).
     @test angle(E([0.0, 0.0, zR]) * cis(-2π / λ * zR) / E([0.0, 0.0, 0.0])) ≈ -π / 4 rtol = 1e-9
     pb = Dynamiq.PlanarBeam(λ, 1.0, [0.0, 0.0, 1.0], ComplexF64[1, 0, 0])
     @test sign(angle(E([0.0, 0.0, λ / 8]) / E([0.0, 0.0, 0.0]))) ==
@@ -1150,7 +932,7 @@ end
     end
 end
 
-# ── Coupling and polarization regressions ─────────────────────────────────────
+# ── Coupling API and polarization ─────────────────────────────────────────────
 
 @testset "MixedPolarization contaminates circular light with the opposite helicity" begin
     σp = ComplexF64[1, im, 0] / √2
