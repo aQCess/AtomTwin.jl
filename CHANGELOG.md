@@ -59,7 +59,7 @@ old tolerance. Re-run anything you intend to compare against 0.1.x.
 - MCWF places every quantum jump at the time its norm threshold is crossed, found on
   the Chebyshev step's dense output (its expansion vectors do not depend on the step
   length, so the state anywhere inside a step costs no matrix-vector products). There
-  is no jump sub-stepping and no jump tolerance: `jtol` is accepted and ignored. A
+  is no jump sub-stepping and no jump tolerance. A
   constant Hamiltonian takes one Chebyshev step per sample, plus one propagation per
   jump. Jumps used to be tested once per sub-step and placed at its ends, which
   needed sub-steps bounded by both a jump-omission tolerance and the spectral width:

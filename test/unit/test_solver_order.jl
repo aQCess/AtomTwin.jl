@@ -696,10 +696,7 @@ end
 
 @testset "MCWF is independent of the sampling step" begin
     # `dt` is a SAMPLING resolution on the MCWF path, so the trajectory mean must
-    # not depend on it. It did: `jump_substeps` bounded only the two-jump omission
-    # probability (√jtol against Γmax) and ignored how far the state rotates
-    # between jump tests, letting the sub-step reach ΔE·h = 3 and overestimating
-    # the off-resonant population 7×.
+    # not depend on it.
     #
     # The configuration matters: a plain two-level atom does NOT show this. It
     # needs a manifold with several jump channels and a detuning ≫ Γ. Fixed first

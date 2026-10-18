@@ -41,17 +41,11 @@ struct Sequence
     dt::Union{Float64,Nothing}     # `nothing` ⇒ derive from ‖H‖ and `tol` at build time
     downsample::Int
     tol::Float64                   # target local error per step (NOT a global bound)
-    jtol::Union{Float64,Nothing}   # unused (deprecated): MCWF jump times are exact
 end
 
-# Backwards compatibility: `tol` was added after the struct was public, so the
-# original three-field positional form must keep working unchanged.
+# The 0.1 three-field positional form.
 Sequence(instructions::Vector{<:AbstractInstruction}, dt, downsample::Int) =
-    Sequence(instructions, dt, downsample, 1e-6, nothing)
-Sequence(instructions::Vector{<:AbstractInstruction}, dt, downsample::Int, tol) =
-    Sequence(instructions, dt, downsample, tol, nothing)
-Sequence(instructions::Vector{<:AbstractInstruction}, dt) =
-    Sequence(instructions, dt, 1, 1e-6, 1e-4)
+    Sequence(instructions, dt, downsample, 1e-6)
 
 """
     Sequence(dt::Float64; downsample::Int = 1)
@@ -94,17 +88,15 @@ push!(seq, Wait(1e-6))                # coarse dt (default) for slow evolution
 push!(seq, Ramp(tw, r, a, t; downsample=10))  # sparse output for slow ramp
 ```
 """
-function Sequence(dt::Float64; downsample::Int = 1, tol::Float64 = 1e-6,
-                  jtol::Union{Float64,Nothing} = nothing)
+function Sequence(dt::Float64; downsample::Int = 1, tol::Float64 = 1e-6)
     dt > 0 || throw(ArgumentError("dt must be positive, got $dt"))
     downsample > 0 || throw(ArgumentError("downsample must be positive, got $downsample"))
     tol > 0 || throw(ArgumentError("tol must be positive, got $tol"))
-    _warn_jtol(jtol)
-    return Sequence(AbstractInstruction[], dt, downsample, tol, jtol)
+    return Sequence(AbstractInstruction[], dt, downsample, tol)
 end
 
 """
-    Sequence(; downsample = 1, tol = 1e-6, jtol = nothing)
+    Sequence(; downsample = 1, tol = 1e-6)
 
 Create a `Sequence` with **no explicit time step**: the output grid is derived
 at build time, and the solvers meet `tol` within it.
@@ -122,7 +114,7 @@ needs it (`Dynamiq.suggested_dt`). Within a step:
   resolve the drive. `compile` warns when this applies.
 
 The MCWF solver needs no tolerance of its own: it places every quantum jump at the
-time its norm threshold is crossed. The `jtol` keyword is accepted and ignored.
+time its norm threshold is crossed.
 
 ```julia
 seq = Sequence()                  # one output sample per instruction, tol = 1e-6
@@ -130,18 +122,11 @@ seq = Sequence(; tol = 1e-9)      # tighter
 seq = Sequence(1e-9)              # explicit dt: a trace, and the control grid
 ```
 """
-function Sequence(; downsample::Int = 1, tol::Float64 = 1e-6,
-                  jtol::Union{Float64,Nothing} = nothing)
+function Sequence(; downsample::Int = 1, tol::Float64 = 1e-6)
     downsample > 0 || throw(ArgumentError("downsample must be positive, got $downsample"))
     tol > 0 || throw(ArgumentError("tol must be positive, got $tol"))
-    _warn_jtol(jtol)
-    return Sequence(AbstractInstruction[], nothing, downsample, tol, jtol)
+    return Sequence(AbstractInstruction[], nothing, downsample, tol)
 end
-
-_warn_jtol(::Nothing) = nothing
-_warn_jtol(::Real) = Base.depwarn("`jtol` is ignored: the MCWF solver places every quantum " *
-                                  "jump at its exact time and needs no jump tolerance.",
-                                  :Sequence)
 
 """
     Sequence(instruction_duration, tsteps::Integer; downsample = 1)
@@ -166,12 +151,12 @@ per-instruction step count. Use the `dt` keyword on an individual instruction to
 override it, or `Sequence(; tol = ...)` to let the solver choose.
 """
 function Sequence(instruction_duration::Real, tsteps::Integer; downsample::Int = 1,
-                  tol::Float64 = 1e-6, jtol::Union{Float64,Nothing} = nothing)
+                  tol::Float64 = 1e-6)
     instruction_duration > 0 ||
         throw(ArgumentError("instruction_duration must be positive, got $instruction_duration"))
     tsteps > 0 || throw(ArgumentError("tsteps must be positive, got $tsteps"))
     return Sequence(Float64(instruction_duration) / tsteps; downsample = downsample,
-                    tol = tol, jtol = jtol)
+                    tol = tol)
 end
 
 """
