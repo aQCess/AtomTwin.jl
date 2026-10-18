@@ -176,7 +176,7 @@ plot_labels = [
     "Ground |↑⟩",
     "Leakage ×100",
     "Ideal theory",
-    "Leak theory",
+    "Leak theory ×100",
 ]
 
 plt = Plots.plot(
