@@ -701,10 +701,10 @@ end
     # between jump tests, letting the sub-step reach ΔE·h = 3 and overestimating
     # the off-resonant population 7×.
     #
-    # The configuration matters: a plain two-level atom does NOT show this (its
-    # H_eff spectral width is set by Ω, so the new bound never binds). It needs a
-    # manifold with several jump channels and a detuning ≫ Γ — verified by
-    # mutation that removing the spectral bound fails this testset.
+    # The configuration matters: a plain two-level atom does NOT show this. It
+    # needs a manifold with several jump channels and a detuning ≫ Γ. Fixed first
+    # by a sub-step bound on the spectral width, now by exact jump times
+    # (`mcwf_advance!`), which need no sub-steps at all.
     gm = HyperfineManifold(0//1, 0; label = "g", term = l"1S0", g_F = 0.0)
     ex = HyperfineManifold(1//1, 1; label = "e", term = l"3P1", g_F = 1.5)
     Ω, Γ = 2π * 50e3, 2π * 182e3
@@ -925,11 +925,9 @@ end
 @testset "MCWF photon counts match the master equation" begin
     # A jump used to be applied at the END of the sub-step it was detected in, which
     # lengthened every emission cycle by ~h/2: on a saturated line the photon count
-    # was ~√jtol/4 low (−2.5 % at s = 40 with the default jtol). The jump is now
-    # placed at the start or the end of its sub-step with the probabilities that
-    # make its time right on average. The manifold decay (three channels, two of
-    # them dark) checks that the jump is drawn from a state that holds the decaying
-    # amplitude: right after a jump, a sub-step's start state holds none.
+    # was ~2.5 % low. Jumps are now placed at their exact time. The manifold decay
+    # (three channels, two of them dark) checks that the jump is drawn from the
+    # state at that time, which holds the decaying amplitude.
     Γ = 2π * 29.1e6; s = 40.0; Ω = Γ * sqrt(s / 2); T = 400e-9; dt = 1e-9
     function build(clicks, manifold)
         if manifold
@@ -991,4 +989,46 @@ end
     end
     @test run(true; dm = true) ≈ run(false; dm = true) rtol = 1e-10
     @test run(true; dm = false) == run(false; dm = false)
+end
+
+
+# Jumps used to be tested once per (sub-)step and placed at its ends. With a step
+# that is a whole number of Rabi periods every trajectory restarted in phase and
+# never dephased (P_e = 0.000 against 0.453); with γ·dt ≳ 1 the omitted second
+# jumps stranded population. Each jump is now placed at the time its norm
+# threshold is crossed, on the Chebyshev step's dense output.
+@testset "MCWF jump times are exact, whatever the sampling step" begin
+    function twolevel(Ω, Γ, T, nsamp; dm = false, shots = 1000, Δ = 0.0, clicks = false)
+        g, e = Level("g"), Level("e"); a = Atom(; levels = [g, e]); s = System(a)
+        c = add_coupling!(s, a, g => e, Ω; active = false)
+        Δ != 0 && add_detuning!(s, a, e, -Δ)
+        if clicks
+            pd = PhotoDetectorSpec(name = "clicks"); add_detector!(s, pd)
+            add_decay!(s, a, e => g, Γ; clicks = pd)
+        else
+            add_decay!(s, a, e => g, Γ)
+        end
+        add_detector!(s, PopulationDetectorSpec(a, e; name = "P"))
+        q = Sequence(T, nsamp); @sequence q begin Pulse(c, T) end
+        play(s, q; initial_state = g, density_matrix = dm, shots = dm ? 1 : shots,
+             rng = MersenneTwister(11))
+    end
+    # Sampling step = 10 Rabi periods (the preprint's Rabi benchmark).
+    Ω, Γ, T = 2π * 1e6, 2π * 0.5e3, 1e-3
+    ref = twolevel(Ω, Γ, T, 100; dm = true).detectors["P"]
+    P   = twolevel(Ω, Γ, T, 100; shots = 2000).detectors["P"]
+    @test mean(P[end, :]) ≈ ref[end] atol = 4 * 0.5 / sqrt(2000)
+    # Saturated line sampled at Γ·dt = 10: several jumps per step.
+    Ω, Γ = 2π * 2e6, 2π * 1e6
+    ref = twolevel(Ω, Γ, 20e-6, 20; dm = true).detectors["P"]
+    P   = twolevel(Ω, Γ, 20e-6, 20; shots = 2000).detectors["P"]
+    @test mean(P[end, :]) ≈ ref[end] atol = 4 * 0.5 / sqrt(2000)
+    # Photon counts on a far-detuned line equal Γ∫P_e dt at any sampling step.
+    Ω, Δ, Γ, T = 2π * 10e6, 2π * 50e6, 2π * 1e6, 5e-6
+    fine = twolevel(Ω, Γ, T, 5000; dm = true, Δ = Δ).detectors["P"]
+    expected = Γ * sum(fine) * (T / 5000)
+    for nsamp in (500, 12)                             # dt = 10 ns and 417 ns
+        n = vec(sum(twolevel(Ω, Γ, T, nsamp; shots = 20000, Δ = Δ, clicks = true).detectors["clicks"], dims = 1))
+        @test mean(n) ≈ expected atol = 4 * std(n) / sqrt(length(n))
+    end
 end

@@ -1,50 +1,115 @@
-# Step control: how finely one user step must be divided. WFMC divides a priori
-# from a jump-rate bound (`jump_substeps`); QME divides adaptively, by Richardson
-# estimation under a PI filter (`strang_substeps!`, `_strang_adapt`). Also holds
-# the MCWF jump machinery and the modifier resampling helpers.
+# Step control: how finely one user step must be divided. QME divides adaptively,
+# by Richardson estimation under a PI filter (`strang_substeps!`, `_strang_adapt`).
+# WFMC needs no division: each quantum jump is placed at the time its norm
+# threshold is crossed (`mcwf_advance!`). Also holds the modifier resampling helpers.
 
 #------------------------------------------------------------------------------
 # Wavefunction Monte Carlo evolution
 #------------------------------------------------------------------------------
 
+# Explicit loop: `psi ./= n` allocates per step.
+@inline function _renormalise!(psi::Vector{ComplexF64}, n::Float64)
+    inv_n = 1.0 / n
+    @inbounds for i in eachindex(psi)
+        psi[i] *= inv_n
+    end
+    return psi
+end
+
+# −d‖ψ‖²/dτ under H_eff = H − (i/2) Σⱼ γⱼ Lⱼ†Lⱼ: ⟨ψ|Σⱼ γⱼ Lⱼ†Lⱼ|ψ⟩, from the cached
+# diagonals (AtomTwin's jumps are single transitions, so Lⱼ†Lⱼ is diagonal). NaN
+# if a jump carries no cached diagonal; the root finder then falls back to secant.
+function _jump_rate(jumps, psi::Vector{ComplexF64})
+    r = 0.0
+    @inbounds for j in jumps
+        (hasproperty(j, :_coeff) && hasproperty(j, :LdagL_diag)) || return NaN
+        j.LdagL_diag === nothing && return NaN
+        γ = abs2(j._coeff[])
+        γ == 0 && continue
+        d = j.LdagL_diag
+        s = 0.0
+        for i in eachindex(d)
+            s += d[i] * abs2(psi[i])
+        end
+        r += γ * s
+    end
+    return r
+end
+
+# The time τ ∈ (0, D.dur] at which ‖ψ(τ)‖² = `target`, given ‖ψ(0)‖² = 1 and
+# ‖ψ(dur)‖² = `n2end` ≤ target; leaves ψ(τ) in `out`. ‖ψ(τ)‖² falls monotonically
+# (Σγ L†L ≥ 0), so a bracketed Newton iteration on the dense output converges in a
+# few evaluations, each O(deg·dim) with no matrix-vector products.
+function _jump_time!(out, plan, D, target::Float64, n2end::Float64, jumps)
+    lo, hi = 0.0, D.dur
+    flo, fhi = 1.0 - target, n2end - target
+    # first guess: exponential decay across the step
+    τ = n2end > 0 ? clamp(D.dur * log(target) / log(n2end), 0.0, D.dur) : 0.5 * D.dur
+    for _ in 1:60
+        dense_state!(out, plan, D, τ)
+        f = real(dot(out, out)) - target
+        abs(f) <= 1e-12 * target && return τ
+        f > 0 ? (lo = τ; flo = f) : (hi = τ; fhi = f)
+        hi - lo <= 1e-14 * D.dur && return τ
+        r = _jump_rate(jumps, out)
+        τn = isfinite(r) && r > 0 ? τ + f / r :                 # Newton: d‖ψ‖²/dτ = −r
+             lo + (hi - lo) * flo / (flo - fhi)                # secant on the bracket
+        τ = lo < τn < hi ? τn : 0.5 * (lo + hi)
+    end
+    dense_state!(out, plan, D, τ)
+    return τ
+end
+
 """
-    quantum_jump!(psi, n, jumps, photo_detectors, i, steps, downsample,
-                  _prob, _q1, _q2, rng) -> (fired jump or nothing, early::Bool)
+    mcwf_advance!(psi, Heff, plan, D, h, jumps, photo_detectors, i, steps,
+                  downsample, _prob, _q1, _q2, rng; rp = nothing) -> psi
 
-Test for a quantum jump after one MCWF sub-step, fire one if `‖ψ‖² < u` for a
-fresh uniform `u`, and renormalise. `n = ‖ψ‖`.
+Advance a normalised MCWF state by `h` under the effective Hamiltonian `Heff`,
+firing every quantum jump at the time it happens.
 
-**Jump time.** The norm crossed `u` somewhere inside the sub-step; if it decayed
-exponentially across it, at the fraction `f = ln u / ln n²` of the way through.
-Applying every jump at the END of its sub-step — the classic first-order scheme —
-delays each by `(1 − f)h`, which lengthens every emission cycle: on a saturated
-transition the photon count comes out low by about `R h/2 ≈ √jtol/4` (2.5 % at
-`jtol = 1e-2`, the largest default). Instead, with probability `1 − f` the jump is
-`early`: it is taken to have happened at the START of the sub-step, and the caller
-propagates the post-jump state over the sub-step (see [`wfmc`](@ref)). The
-post-jump evolution time is then right on average and the bias second order. The
-jump itself — channel and post-jump state — is always drawn from the end-of-sub-step
-state, the one whose norm crossed `u`: the start state may hold none of the
-decaying amplitude yet. Cost: one extra propagation for a fraction `1 − f` of the
-jumps, i.e. at most a few per cent of the sub-steps.
+A uniform threshold `u` is drawn and the step propagated ([`chebyshev_dense!`](@ref)).
+If `‖ψ(h)‖² ≥ u` no jump occurred and ψ is renormalised. Otherwise the jump time `τ`
+solves `‖ψ(τ)‖² = u` on the step's dense output, the jump is applied to `ψ(τ)`, a
+fresh `u` is drawn and the rest of the step `h − τ` is taken the same way, so any
+number of jumps fit in one step. Drawing a fresh threshold at the start of every
+step is exact: from a normalised state the survival probability to `τ` is
+`‖ψ(τ)‖²` whatever happened before.
 
-At most one jump fires per sub-step; [`jump_substeps`](@ref) sizes the step so
-two-jump events stay within `jtol`. A fired jump writes a click to any
-`PhotoDetector` bound to it, in the downsampled bin containing raw step `i`.
+Jump times are therefore exact to the dense output's precision, with no sub-step
+bound: no omitted second jump, and no jump pinned to a step boundary (where a step
+commensurate with a Rabi period would keep every trajectory in phase). A jump costs
+one root solve on the stored Chebyshev vectors and one propagation of the
+post-jump state.
+
+With `rp` (semiclassical runs), the radiation impulse is integrated over each
+stretch between jumps and the jump draws its recoil ([`radiation_jump!`](@ref)).
+A fired jump writes a click to any `PhotoDetector` bound to it, in the downsampled
+bin containing raw step `i`.
 """
-@inline function quantum_jump!(psi::Vector{ComplexF64}, n::Float64, jumps,
-                               photo_detectors, i::Int, steps::Int, downsample::Int,
-                               _prob, _q1, _q2, rng)
-    n2 = n * n
-    u  = rand(rng)
-    fired = nothing
-    early = false
-    if n2 < u
+function mcwf_advance!(psi::Vector{ComplexF64},
+                       Heff::Vector{Tuple{Base.RefValue{ComplexF64},Op}},
+                       plan::ChebyshevPlan, D::ChebyshevDense, h::Float64,
+                       jumps, photo_detectors, i::Int, steps::Int, downsample::Int,
+                       _prob, _q1, _q2, rng; rp = nothing)
+    left = h
+    while true
+        u = rand(rng)
+        chebyshev_dense!(psi, Heff, plan, D, left)
+        n2 = real(dot(psi, psi))
+        if n2 >= u || isempty(jumps)
+            radiation_step!(rp, psi, 1 / n2, left)
+            _renormalise!(psi, sqrt(n2))
+            return psi
+        end
+        τ = _jump_time!(psi, plan, D, u, n2, jumps)       # ψ ← ψ(τ), ‖ψ‖² = u
+        nτ2 = real(dot(psi, psi))
+        radiation_step!(rp, psi, 1 / nτ2, τ)
+        _renormalise!(psi, sqrt(nτ2))
         fired = jump!(psi, jumps, _prob, _q1, _q2, rng)
-        early = rand(rng) * log(n2) < log(u)    # probability 1 − f (ln n² < 0)
+        _renormalise!(psi, norm(psi))
         @inbounds for d in photo_detectors
             ## `any(===(fired), d.jumps)` rather than a single identity test: a
-            ## manifold decay has one jump per sublevel channel and all of them
+            ## manifold decay has one jump per photon polarisation and all of them
             ## belong to this detector.
             for j in d.jumps
                 if j === fired
@@ -53,101 +118,10 @@ two-jump events stay within `jtol`. A fired jump writes a click to any
                 end
             end
         end
-        n = norm(psi)
+        radiation_jump!(rp, fired, psi, 1.0, rng)
+        left -= τ
+        left > 1e-15 * h || return psi
     end
-    _renormalise!(psi, n)
-    return fired, early
-end
-
-# Explicit loop: `psi ./= n` allocates per step.
-@inline function _renormalise!(psi::Vector{ComplexF64}, n::Float64)
-    inv_n = 1.0 / n
-    @inbounds @simd for k in eachindex(psi)
-        psi[k] *= inv_n
-    end
-    return psi
-end
-
-"""
-    jump_rate_bound(jumps) -> Float64
-
-Largest per-state jump rate `Γ_max = λ_max(Σⱼ γⱼ Lⱼ†Lⱼ)`, or 0 when there are no
-jumps.
-
-`Σⱼ γⱼ Lⱼ†Lⱼ` is diagonal (AtomTwin's jumps are single transitions), so this is
-the largest cached `LdagL_diag` entry scaled by its rate -- no
-eigendecomposition. Being state-independent, it bounds the jump probability over
-a step of `h` by `1 − exp(−Γ_max·h)` before the run starts.
-"""
-function jump_rate_bound(jumps)
-    Γmax = 0.0
-    for j in jumps
-        (hasproperty(j, :_coeff) && hasproperty(j, :LdagL_diag)) || continue
-        j.LdagL_diag === nothing && continue
-        γ = abs2(j._coeff[])
-        for x in j.LdagL_diag
-            Γmax = max(Γmax, γ * x)
-        end
-    end
-    return Γmax
-end
-
-"""
-    THETA_JUMP
-
-Rotation `ΔE·h` tolerated between MCWF jump tests. See [`jump_substeps`](@ref).
-"""
-const THETA_JUMP = 0.5
-
-"""
-    jump_substeps(dt, Γmax, jtol, ΔE = 0.0) -> Int
-
-How many equal sub-steps of `dt` the MCWF jump test needs. Returns 1 when there
-is nothing to bound.
-
-Two separate errors set the sub-step `h`, and the smaller bound wins:
-
-1. **Two-jump omission.** At most one jump fires per sub-step, so the
-   probability of missing a second is `Δp²` where `Δp` bounds the per-sub-step
-   jump probability (Dörner et al., Comput. Phys. Commun. 234 (2019) 44).
-   `Δp = √jtol` bounds the omission by `jtol` with no fitted constant, giving
-   `h ≤ −log1p(−√jtol)/Γmax`.
-
-2. **Jump-time resolution.** A jump is placed at one end of the sub-step it is
-   detected in ([`quantum_jump!`](@ref)), so its time carries an error of order
-   `h`. What makes that
-   matter is not the decay rate but how far the state rotates meanwhile: the
-   error is `O(ΔE·h)` with `ΔE` the spectral half-width of `H_eff`. This needs
-   `ΔE·h ≲ 1` and is the binding constraint whenever `ΔE ≫ Γmax` — a
-   far-detuned drive, a large Zeeman or light shift.
-
-Bounding only (1) makes the trajectory mean depend on the user's sampling `dt`,
-which it must not: with `Γmax = 2π×182 kHz` and a 2 MHz detuning, `jtol = 1e-2`
-permits `ΔE·h = 3.3` and overestimates the off-resonant population **7×**, while
-the master equation is exact at every `dt` (regression test: "MCWF is
-independent of the sampling step"). `ΔE = 0` recovers the old behaviour for
-callers that have no spectral estimate.
-
-`THETA_JUMP` is the tolerated rotation per sub-step. It is not a fitted
-constant: at `ΔE·h = 1` the timing error is a radian, and the measured bias is
-already below shot noise there.
-"""
-@inline function jump_substeps(dt::Float64, Γmax::Float64, jtol::Float64,
-                               ΔE::Float64 = 0.0)
-    dt > 0 || return 1
-    h_max = Inf
-
-    # (1) two-jump omission
-    if Γmax > 0
-        Δp    = sqrt(min(jtol, 0.25))
-        h_max = -log1p(-Δp) / Γmax
-    end
-
-    # (2) jump-time resolution: the state must not rotate far between tests.
-    ΔE > 0 && (h_max = min(h_max, THETA_JUMP / ΔE))
-
-    (isfinite(h_max) && h_max < dt) || return 1
-    return max(1, ceil(Int, dt / h_max))
 end
 
 #------------------------------------------------------------------------------

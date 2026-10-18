@@ -489,7 +489,7 @@ _dissipator_ws2(n::Int) = get_ws!(_DISS_WS2, n)
 Apply one randomly selected jump from `J` to `psi` in place, and return the
 `Jump` chosen. With several jumps, each is weighted by `‖Jₖ psi‖²`.
 
-`psi` is projected but NOT renormalised -- the caller ([`quantum_jump!`](@ref))
+`psi` is projected but NOT renormalised -- the caller ([`mcwf_advance!`](@ref))
 does that. A jump of vanishing norm leaves `psi` untouched.
 """
 Base.@inline function jump!(psi::Vector{ComplexF64},

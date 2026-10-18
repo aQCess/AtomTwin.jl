@@ -110,9 +110,6 @@ function play(sys::System, seq::Sequence;
         @warn "Initial state not specified. Defaulting to classical dynamics." maxlog=1
     end
 
-    # `shots` reaches `compile` because the derived step depends on it: an unset
-    # `jtol` resolves to `1/sqrt(shots)` (see `resolve_jtol`), which feeds
-    # `_derive_dt`.
     job = compile(sys, seq; initial_state = s, density_matrix=density_matrix, rng=rng,
                   shots=shots, kwargs...)
     return play(job, sys; initial_state = s, density_matrix=density_matrix, rng=rng,
@@ -399,7 +396,7 @@ function _play(job::SimulationJob;
                     modifiers=job.modifiers[i], detectors=job.detectors[i],
                     rng=rng, frozen=frozen, downsample=job.downsamples[i],
                     dt=job.inst_dts[i],
-                    tol=_propagator_tol(job.tol), steptol=job.tol, jtol=job.jtol,
+                    tol=_propagator_tol(job.tol), steptol=job.tol,
                     integrator=job.integrator)
             for m in job.boundary_modifiers[i]; end_instruction!(m); end
         end

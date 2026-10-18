@@ -599,6 +599,138 @@ function chebyshev!(ψ::Vector{ComplexF64},
 end
 
 """
+    ChebyshevDense(dim)
+
+The Chebyshev vectors `φ_k = T_k(H̃)ψ₀` of the last step taken by
+[`chebyshev_dense!`](@ref). They do not depend on the step length -- only the
+Bessel weights do -- so the state at any `τ` inside the step,
+
+    ψ(τ) = e^{-iĒτ} [ J₀(ΔE·τ) φ₀ + 2 Σ_{k≥1} (-i)ᵏ J_k(ΔE·τ) φ_k ],
+
+is a weighted sum with no further matrix-vector products ([`dense_state!`](@ref)).
+MCWF uses it to place each quantum jump at the time its norm threshold is crossed.
+The truncation error at `τ < dur` is bounded by the full step's: past the turning
+point `k > ΔE·dur`, `J_k(x)` grows with `x`.
+"""
+mutable struct ChebyshevDense
+    φ::Vector{Vector{ComplexF64}}    # φ_k at index k + 1
+    deg::Int                         # vectors in use
+    dur::Float64                     # length of the stored step
+    coef::Vector{Float64}            # Bessel scratch
+end
+ChebyshevDense(dim::Int) =
+    ChebyshevDense([zeros(ComplexF64, dim) for _ in 1:8], 0, 0.0, zeros(Float64, 256))
+
+function _ensure_vectors!(D::ChebyshevDense, n::Int)
+    dim = length(D.φ[1])
+    while length(D.φ) < n
+        push!(D.φ, zeros(ComplexF64, dim))
+    end
+    return D
+end
+
+# Bessel weights J_k(ΔE·τ), k = 0 … n-1, into `D.coef`; entries past what Miller's
+# recurrence reaches are zero (astronomically small there).
+function _dense_coef!(D::ChebyshevDense, x::Float64, n::Int, tol::Float64)
+    need = max(n, ceil(Int, x) + 128 + 8 * ceil(Int, sqrt(max(x, 1.0))))
+    length(D.coef) < need && resize!(D.coef, nextpow(2, need))
+    @inbounds for j in 1:length(D.coef); D.coef[j] = 0.0; end
+    return besselj_series!(D.coef, x, tol)
+end
+
+"""
+    chebyshev_dense!(ψ, terms, plan, D, dur) -> ψ
+
+`ψ ← exp(-iH·dur)ψ` with the plan's spectral interval, keeping the Chebyshev
+vectors in `D` for [`dense_state!`](@ref). `dur ≤ plan.dt`; the plan's own Bessel
+coefficients are used when `dur == plan.dt`, otherwise they are rebuilt for `dur`.
+The same matrix-vector products as [`chebyshev!`](@ref); the vectors are stored
+instead of rotated.
+"""
+function chebyshev_dense!(ψ::Vector{ComplexF64},
+                          terms::Vector{Tuple{Base.RefValue{ComplexF64},Op}},
+                          plan::ChebyshevPlan, D::ChebyshevDense, dur::Float64)
+    ΔE, Ē = plan.ΔE, plan.Ē
+    D.dur = dur
+    if plan.degenerate
+        D.deg = 1
+        copyto!(D.φ[1], ψ)
+        phase = cis(-Ē * dur)
+        @inbounds for i in eachindex(ψ); ψ[i] *= phase; end
+        return ψ
+    end
+    if dur == plan.dt
+        coef, deg = plan.ws.coef, plan.deg
+    else
+        deg  = _dense_coef!(D, ΔE * dur, 0, plan.tol)
+        coef = D.coef
+    end
+    _ensure_vectors!(D, deg)
+    D.deg = deg
+    φ = D.φ
+
+    copyto!(φ[1], ψ)
+    fill!(φ[2], 0)
+    apply!(φ[2], terms, φ[1], ComplexF64(1.0))
+    @inbounds for i in eachindex(ψ)
+        φ[2][i] = (φ[2][i] - Ē * φ[1][i]) / ΔE
+        ψ[i] = coef[1] * φ[1][i] + 2 * (-1im) * coef[2] * φ[2][i]
+    end
+    ik = ComplexF64(-1im)
+    @inbounds for k in 2:deg-1
+        φkm1, φk, φkp1 = φ[k-1], φ[k], φ[k+1]
+        fill!(φkp1, 0)
+        apply!(φkp1, terms, φk, ComplexF64(1.0))
+        for i in eachindex(φkp1)
+            φkp1[i] = 2 * (φkp1[i] - Ē * φk[i]) / ΔE - φkm1[i]
+        end
+        ik *= -1im
+        ck = 2 * coef[k+1] * ik
+        for i in eachindex(ψ)
+            ψ[i] += ck * φkp1[i]
+        end
+    end
+    phase = cis(-Ē * dur)
+    @inbounds for i in eachindex(ψ); ψ[i] *= phase; end
+    return ψ
+end
+
+"""
+    dense_state!(out, plan, D, τ) -> out
+
+The state at time `τ ∈ [0, D.dur]` into the step last taken by
+[`chebyshev_dense!`](@ref), from its stored Chebyshev vectors: O(deg·dim), no
+matrix-vector products.
+"""
+function dense_state!(out::Vector{ComplexF64}, plan::ChebyshevPlan,
+                      D::ChebyshevDense, τ::Float64)
+    φ = D.φ
+    if D.deg == 1
+        phase = cis(-plan.Ē * τ)
+        @inbounds for i in eachindex(out); out[i] = phase * φ[1][i]; end
+        return out
+    end
+    _dense_coef!(D, plan.ΔE * τ, D.deg, plan.tol)
+    c = D.coef
+    @inbounds for i in eachindex(out)
+        out[i] = c[1] * φ[1][i]
+    end
+    ik = ComplexF64(1.0)
+    @inbounds for k in 1:D.deg-1
+        ik *= -1im
+        ck = 2 * c[k+1] * ik
+        ck == 0 && continue
+        φk = φ[k+1]
+        for i in eachindex(out)
+            out[i] += ck * φk[i]
+        end
+    end
+    phase = cis(-plan.Ē * τ)
+    @inbounds for i in eachindex(out); out[i] *= phase; end
+    return out
+end
+
+"""
     propagate!(integrator, ψ, terms, dt, spec; tol)
 
 Apply `exp(-iH dt)` to `ψ` in place using `integrator`.

@@ -83,8 +83,8 @@ function evolve!(state::Tuple{Vector{ComplexF64},Vector{<:NLevelAtom}},
                  frozen::Bool                     = false,
                  rng = Random.Xoshiro(),
                  kwargs...)
-    # Both caches: `Hnh` for the propagation, `LdagL_diag` for the jump-rate
-    # bound that sizes the sub-steps (`jump_rate_bound` skips a jump without it).
+    # Both caches: `Hnh` for the propagation, `LdagL_diag` for the decay rate whose
+    # slope the jump-time solve uses (`_jump_rate` falls back to secant without it).
     for j in jumps
         isnothing(j.Hnh)        && precompute!(j, Vector)
         isnothing(j.LdagL_diag) && precompute!(j, Matrix)
@@ -192,7 +192,6 @@ function tdse(psi::Vector{ComplexF64},
               integrator::AbstractIntegrator     = Chebyshev(),
               tol::Float64                       = 1e-12,
               steptol::Float64                   = 1e-4,
-              jtol::Float64                      = 1e-4,
               downsample::Int                    = 1,
               dt                                 = nothing)
 
@@ -245,7 +244,6 @@ function tdse_semiclassical(psi::Vector{ComplexF64},
                             integrator::AbstractIntegrator      = Chebyshev(),
                             tol::Float64                        = 1e-12,
                             steptol::Float64                    = 1e-4,
-                            jtol::Float64                       = 1e-4,
                             downsample::Int                     = 1,
                             dt                                  = nothing) where {A}
 
@@ -653,9 +651,10 @@ Wavefunction Monte Carlo solver: one trajectory of `psi` over the equidistant
 grid `tspan`.
 
 `H` holds the Hermitian terms and `Hnh` the anti-Hermitian ones that make up the
-effective Hamiltonian; `jumps` are applied stochastically. Each step propagates
-under `H + Hnh` and then tests for a jump ([`quantum_jump!`](@ref)), sub-stepping
-as [`jump_substeps`](@ref) requires.
+effective Hamiltonian; `jumps` are applied stochastically, each at the time its
+norm threshold is crossed ([`mcwf_advance!`](@ref)). Like [`tdse`](@ref), one
+Chebyshev step per sample for a constant Hamiltonian; a time-dependent drive is
+read at each step's midpoint.
 """
 function wfmc(psi::Vector{ComplexF64},
               H::Vector{Tuple{Base.RefValue{ComplexF64},Op}},
@@ -669,13 +668,13 @@ function wfmc(psi::Vector{ComplexF64},
               integrator::AbstractIntegrator               = Chebyshev(),
               tol::Float64                             = 1e-12,
               steptol::Float64                   = 1e-4,
-              jtol::Float64                      = 1e-4,
               downsample::Int                          = 1,
               dt                                       = nothing,
               _q1::Vector{ComplexF64}                  = copy(psi),
               _q2::Vector{ComplexF64}                  = copy(psi),
               rng = Random.Xoshiro())
 
+    _require_chebyshev(integrator)
     steps = length(tspan)
     dt    = _step_of(tspan, dt)
 
@@ -688,22 +687,14 @@ function wfmc(psi::Vector{ComplexF64},
     state_detectors = [d for d in detectors if !(d isa PhotoDetector)]
     has_detectors  = !isempty(state_detectors)
 
-    # The deterministic step propagates the NON-HERMITIAN `H_eff = H - (i/2)Σγ L†L`,
-    # which is `H` and `Hnh` summed. Chebyshev handles it -- the expansion is
-    # valid over the complex plane -- and holds to machine precision far past
-    # where Taylor-4 diverges, out to γ·dt = 5 for purely dissipative evolution.
-    #
-    # Built once, not per step: `vcat` in the loop would allocate every step.
+    # The step propagates the NON-HERMITIAN `H_eff = H - (i/2)Σγ L†L`, which is
+    # `H` and `Hnh` summed. Chebyshev handles it -- the expansion is valid over the
+    # complex plane. Built once, not per step: `vcat` in the loop would allocate.
     Heff_terms = vcat(H, Hnh)
-    # `dt` is the SAMPLING resolution; the jump test needs its own, possibly
-    # finer, step, bounded BOTH by `jtol` (two-jump omission) and by the
-    # spectral width of H_eff (jump-time resolution) -- see `jump_substeps`.
     refresh_fields!(fields)
     spec = spectral_spec(Heff_terms)
-    ΔE   = (spec.Emax - spec.Emin) / 2
-    nsub = jump_substeps(dt, jump_rate_bound(jumps), jtol, ΔE)
-    h    = dt / nsub
-    plan = plan_step(integrator, psi, h, spec; tol = tol)
+    plan = plan_step(integrator, psi, dt, spec; tol = tol)
+    D    = ChebyshevDense(length(psi))
 
     @inbounds for i in 1:steps
         _resample!(modifiers, (i - 0.5) * dt, dt)
@@ -712,25 +703,19 @@ function wfmc(psi::Vector{ComplexF64},
                 update!(f, i)
             end
         end
-        t0 = (i - 1) * dt
-        for q in 1:nsub
-            # Drives are read at each sub-step's own midpoint, not frozen across
-            # the sampling step -- see `strang_substeps!` for why.
-            if has_modifiers
-                _resample!(modifiers, t0 + (q - 0.5) * h, h)
-                track_spectrum!(plan, Heff_terms; recenter = false)
-            end
-            propagate!(integrator, psi, Heff_terms, plan)
-            _, early = quantum_jump!(psi, norm(psi), jumps, photo_detectors, i, steps,
-                                     downsample, _prob, _q1, _q2, rng)
-            if early                   # the jump opened the sub-step: see `quantum_jump!`
-                propagate!(integrator, psi, Heff_terms, plan)
-                _renormalise!(psi, norm(psi))
-            end
-        end
+        has_modifiers && track_spectrum!(plan, Heff_terms; recenter = false)
+        mcwf_advance!(psi, Heff_terms, plan, D, dt, jumps, photo_detectors, i, steps,
+                      downsample, _prob, _q1, _q2, rng)
         has_detectors && write_detectors!(state_detectors, i, steps, downsample)
     end
 end
+
+# Exact jump times need the step's dense output, which only the Chebyshev
+# propagator provides.
+_require_chebyshev(::Chebyshev) = nothing
+_require_chebyshev(i) = throw(ArgumentError(
+    "the wavefunction Monte Carlo solver needs the Chebyshev integrator (it places " *
+    "each quantum jump on the step's dense output); got $(typeof(i))"))
 
 
 """
@@ -811,13 +796,13 @@ function wfmc_semiclassical(psi::Vector{ComplexF64},
                             integrator::AbstractIntegrator             = Chebyshev(),
                             tol::Float64                           = 1e-12,
                             steptol::Float64                    = 1e-4,
-                            jtol::Float64                       = 1e-4,
                             downsample::Int                        = 1,
                             dt                                     = nothing,
                             _q1::Vector{ComplexF64}                = copy(psi),
                             _q2::Vector{ComplexF64}                = copy(psi),
                             rng = Random.Xoshiro()) where {A}
 
+    _require_chebyshev(integrator)
     steps = length(tspan)
     dt    = _step_of(tspan, dt)
 
@@ -833,11 +818,14 @@ function wfmc_semiclassical(psi::Vector{ComplexF64},
     Heff_terms = vcat(H, Hnh)          # see `wfmc`
     refresh_fields!(fields)
     spec = spectral_spec(Heff_terms)
-    ΔE   = (spec.Emax - spec.Emin) / 2
-    nsub = jump_substeps(dt, jump_rate_bound(jumps), jtol, ΔE)
+    rp   = radiation_pressure(fields, atoms; conditional = true)   # `nothing` without planar drives
+    # The radiation impulse is a trapezoid over each stretch of evolution, so a
+    # coherent drive needs the same resolution as in `tdse_semiclassical`: 0.1 rad
+    # of the driven states' rotation. Jumps need none (see `mcwf_advance!`).
+    nsub = rp === nothing ? 1 : _radiation_substeps(rp, H, dt, modifiers)
     h    = dt / nsub
     plan = plan_step(integrator, psi, h, spec; tol = tol)
-    rp   = radiation_pressure(fields, atoms; conditional = true)   # `nothing` without planar drives
+    D    = ChebyshevDense(length(psi))
     radiation_resume!(rp, psi)
     xbuf = [similar(a.x) for a in atoms]
 
@@ -856,25 +844,15 @@ function wfmc_semiclassical(psi::Vector{ComplexF64},
         for q in 1:nsub
             # Drives are read at each sub-step's own midpoint, not frozen across
             # the sampling step -- see `strang_substeps!` for why.
-            if has_modifiers
+            if has_modifiers && nsub > 1
                 _resample!(modifiers, t0 + (q - 0.5) * h, h)
                 track_spectrum!(plan, Heff_terms; recenter = false)
                 radiation_eval!(rp, psi, 1.0)      # the drives changed: restart the trapezoid
             end
-            propagate!(integrator, psi, Heff_terms, plan)
-            n = norm(psi)
-            radiation_step!(rp, psi, 1 / (n * n), h)
-            fired, early = quantum_jump!(psi, n, jumps, photo_detectors, i, steps,
-                                         downsample, _prob, _q1, _q2, rng)
-            fired === nothing || radiation_jump!(rp, fired, psi, 1.0, rng)
-            if early                   # the jump opened the sub-step: see `quantum_jump!`
-                propagate!(integrator, psi, Heff_terms, plan)
-                n = norm(psi)
-                radiation_step!(rp, psi, 1 / (n * n), h)
-                _renormalise!(psi, n)
-            end
+            mcwf_advance!(psi, Heff_terms, plan, D, h, jumps, photo_detectors, i, steps,
+                          downsample, _prob, _q1, _q2, rng; rp = rp)
         end
-        # After every sub-step's jump: `quantum_jump!` has left ψ normalised.
+        # `mcwf_advance!` leaves ψ normalised.
         _kick_atoms!(atoms, psi, beams, modifiers, i, dt, false)
         has_detectors && write_detectors!(state_detectors, i, steps, downsample)
     end
@@ -901,7 +879,6 @@ function qme(rho::Matrix{ComplexF64},
              integrator::AbstractIntegrator             = Chebyshev(),
              tol::Float64                           = 1e-12,
              steptol::Float64                       = 1e-4,
-             jtol::Float64                          = 1e-4,
              downsample::Int                        = 1,
              dt                                     = nothing,
              _q1::Matrix{ComplexF64}                = copy(rho),
@@ -952,7 +929,6 @@ function qme_semiclassical(rho::Matrix{ComplexF64},
                            integrator::AbstractIntegrator             = Chebyshev(),
                            tol::Float64                           = 1e-12,
                            steptol::Float64                       = 1e-4,
-                           jtol::Float64                          = 1e-4,
                            downsample::Int                        = 1,
                            dt                                     = nothing,
                            _q1::Matrix{ComplexF64}                = copy(rho),

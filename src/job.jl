@@ -54,7 +54,6 @@ struct SimulationJob{S}
                              # single absolute time, from which no spacing can
                              # be recovered
     tol::Float64             # target local relative error, forwarded to the propagator
-    jtol::Float64            # target MCWF jump-omission probability
     integrator::Dynamiq.AbstractIntegrator  # propagator backend, forwarded to the solver
 end
 
@@ -70,9 +69,9 @@ _tovector(state) = [state]
 Pick a solver step for a `Sequence` built without an explicit `dt`.
 
 Returns the **output** resolution, not the integration step. The solver
-sub-divides this as its own error estimators require (`strang_substeps!` for the
-splitting error, `jump_substeps` for the MCWF jump test), so `tol` and `jtol`
-govern accuracy while this governs only how often results are recorded.
+sub-divides this as its own error estimator requires (`strang_substeps!` for the
+splitting error; MCWF places each jump exactly and needs no division), so `tol`
+governs accuracy while this governs only how often results are recorded.
 
 With no `dt` or `steps` on the `Sequence`, the default is one sample per
 instruction: a user who wrote only `Sequence(; tol)` is asking for an accurate
@@ -91,22 +90,6 @@ instruction so every duration is realised exactly.
 # silently losing a noisy system's Hamiltonian.
 _hamiltonian_source(f) = hasproperty(f, :coupling) ? f.coupling : f
 
-"""
-    resolve_jtol(jtol, shots) -> Float64
-
-The MCWF jump-omission tolerance to use. An explicit `jtol` is honoured
-unchanged; `nothing` — the default — derives one from the shot count as
-`clamp(1/sqrt(shots), 1e-4, 1e-2)`.
-
-`jtol` bounds a sampling error, the probability of missing a second jump within
-one sub-step, not an integrator error. Tightening it past the statistical noise
-floor costs sub-steps as `1/sqrt(jtol)` and buys nothing, so it is matched to the
-`1/sqrt(N)` noise of an `N`-shot trajectory mean. The clamps bound the ends,
-where a single trajectory has no ensemble to average a bias into and where the
-bound would otherwise cost more than the statistics it protects.
-"""
-resolve_jtol(jtol::Float64, ::Integer) = jtol
-resolve_jtol(::Nothing, shots::Integer) = clamp(1 / sqrt(max(shots, 1)), 1e-4, 1e-2)
 
 function _derive_dt(seq::Sequence, fields, jumps = (), qstate = nothing;
                     integrator::Dynamiq.AbstractIntegrator = Dynamiq.Chebyshev(),
@@ -143,55 +126,12 @@ function _derive_dt(seq::Sequence, fields, jumps = (), qstate = nothing;
     # the floor, not the tolerance, was choosing the step.
     #
     # The integration step is NOT this: the solver sub-divides `dt` as its own
-    # error estimator requires (`strang_substeps!`, `jump_substeps`).
+    # error estimator requires (`strang_substeps!`).
     dt = min(Dynamiq.suggested_dt(terms, seq.tol; integrator = integrator),
              longest > 0 ? longest : Inf)
 
-    # MCWF tests `‖ψ‖² < rand()` ONCE per step, so at most one jump can fire per
-    # step. When the norm drops appreciably within a single step the extra jumps
-    # are lost and population is stranded in the decaying level -- a SILENT
-    # failure, no NaN and no warning. Measured on a driven two-level atom
-    # (steady state Ω²/(2Ω²+γ²) = 0.3333): γ·dt = 2.5 gave 0.2269 and γ·dt = 4.0
-    # gave 0.1528, 32% and 54% low.
-    #
-    # It is not a propagator error. Chebyshev integrates the deterministic part
-    # correctly, which is exactly why it made this worse: a more accurate
-    # propagator licenses larger steps.
-    #
-    # The fix is the standard MCWF Δp-criterion (Dörner et al.,
-    # Comput. Phys. Commun. 234 (2019) 44, arXiv:1803.08589): bound the total
-    # jump probability per step by `Δp`, whereupon the probability of TWO jumps
-    # in one step -- the event the one-jump-per-step scheme omits -- is `Δp²`.
-    # Setting `Δp = sqrt(tol)` therefore bounds the omitted probability by `tol`,
-    # with no fitted constant.
-    #
-    # `Δp` converts to a step through a rigorous, state-independent bound. With
-    # `D = Σⱼ γⱼ Lⱼ†Lⱼ`, `d‖ψ‖²/dt = −⟨ψ|D|ψ⟩ ≥ −λ_max(D)·‖ψ‖²`, so the jump
-    # probability over one step is at most `1 − exp(−Γ_max·dt)` for ANY state.
-    # `D` is diagonal because AtomTwin's jumps are single-transition operators
-    # (verified on k39: max |offdiag| = 0), so `Γ_max` is the largest entry of the
-    # cached `LdagL_diag` sums -- no eigendecomposition. Checked on k39 (d=24,
-    # 54 jumps): the worst ratio of actual to bounded jump probability over 2000
-    # random states is 0.911, so the bound holds and is tight.
-    # MCWF ONLY. The bound corrects a sampling error of the stochastic unravelling
-    # -- omitted second jumps -- which the master equation does not have: it
-    # propagates the ensemble directly and never draws a jump. Measured on the ME
-    # path, `jtol` moves nothing but the step count (identical P_e to 8 digits at
-    # `tol = 1e-6`, 469 steps either way), so applying it there buys no accuracy
-    # and costs up to 67x (eit_with_dissipation 0.18 s -> 12.0 s).
-    #
-    # The ME and MCWF grids may therefore differ. Code that compares the two
-    # elementwise must put them on a common grid explicitly, as
-    # `rabi_with_dissipation` now does, rather than relying on both being clamped
-    # by a bound only one of them needs.
-    if qstate isa Vector{ComplexF64} && !isempty(jumps)
-        Γmax = Dynamiq.jump_rate_bound(jumps)
-        jt = resolve_jtol(seq.jtol, shots)
-        if Γmax > 0
-            Δp = sqrt(min(jt, 0.25))          # two-jump probability ≈ Δp² ≤ jtol
-            dt = min(dt, -log1p(-Δp) / Γmax)
-        end
-    end
+    # MCWF needs no bound here: every quantum jump is placed at the time its norm
+    # threshold is crossed (`Dynamiq.mcwf_advance!`), however many fall in one step.
 
     # The Strang splitting error is NOT bounded here. It is measured and
     # corrected inside the solver: `strang_substeps!` divides each `dt` into
@@ -524,7 +464,6 @@ function compile(sys::System, seq::Sequence;
                         n_auto_fields, resolved_jumps,
                         modifiers, boundary_modifiers, detectors, local_tspans,
                         detector_outputs, times, inst_ds, inst_dts, seq.tol,
-                        resolve_jtol(seq.jtol, shots),
                         integrator)
 end
 

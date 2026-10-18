@@ -56,10 +56,16 @@ old tolerance. Re-run anything you intend to compare against 0.1.x.
   Hamiltonian at every solver sub-step. Inside MCWF sub-steps and density-matrix
   sub-step pairs it was applied as a staircase at `dt`, however fine those were: a
   detuned sin² pulse sampled at four points was off by 5–10 % in population.
-- MCWF jumps are placed within their sub-step (at its start or end with the
-  probabilities that make the jump time right on average) instead of always at its
-  end. Photon counts on a saturated line were ~√jtol/4 low (2.5 % at the default
-  jtol); they now match the master equation. Every MCWF realisation changes.
+- MCWF places every quantum jump at the time its norm threshold is crossed, found on
+  the Chebyshev step's dense output (its expansion vectors do not depend on the step
+  length, so the state anywhere inside a step costs no matrix-vector products). There
+  is no jump sub-stepping and no jump tolerance: `jtol` is accepted and ignored. A
+  constant Hamiltonian takes one Chebyshev step per sample, plus one propagation per
+  jump. Jumps used to be tested once per sub-step and placed at its ends, which
+  needed sub-steps bounded by both a jump-omission tolerance and the spectral width:
+  on the preprint's Rydberg benchmark (N = 2–6) MCWF is now 5–27× faster than with
+  those bounds and 4–20× faster than published, and photon counts equal Γ∫P_e dt at
+  any sampling step. Every MCWF realisation changes.
 - Motion is the default: `play(…; frozen = true)` freezes the atoms. `play` used to
   freeze them unless a trapping beam could exert a force and the atom had a velocity
   or recoil, so a free atom driven by plane waves never moved, and an atom released
@@ -70,9 +76,7 @@ old tolerance. Re-run anything you intend to compare against 0.1.x.
   `play(…; frozen = true)` restores the previous speed and physics.
 - A `Pulse` on a detuning with a complex amplitude is an error, as documented; it
   was silently accepted.
-- The density-matrix dissipator is an exact channel; MCWF sub-steps are bounded
-  by the jump-omission tolerance `jtol` (default from `shots`) and by the
-  spectral width.
+- The density-matrix dissipator is an exact channel.
 - Shaped envelopes are read with `:cubic` interpolation by default
   (`:lagrange`, `:piecewise_constant` remain as aliases).
 - An instruction shorter than its `downsample` keeps its step count and records

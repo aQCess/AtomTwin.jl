@@ -41,8 +41,7 @@ struct Sequence
     dt::Union{Float64,Nothing}     # `nothing` ⇒ derive from ‖H‖ and `tol` at build time
     downsample::Int
     tol::Float64                   # target local error per step (NOT a global bound)
-    jtol::Union{Float64,Nothing}   # target MCWF jump-omission probability (see `_derive_dt`);
-                                   # `nothing` ⇒ derive from the shot count at play time
+    jtol::Union{Float64,Nothing}   # unused (deprecated): MCWF jump times are exact
 end
 
 # Backwards compatibility: `tol` was added after the struct was public, so the
@@ -100,6 +99,7 @@ function Sequence(dt::Float64; downsample::Int = 1, tol::Float64 = 1e-6,
     dt > 0 || throw(ArgumentError("dt must be positive, got $dt"))
     downsample > 0 || throw(ArgumentError("downsample must be positive, got $downsample"))
     tol > 0 || throw(ArgumentError("tol must be positive, got $tol"))
+    _warn_jtol(jtol)
     return Sequence(AbstractInstruction[], dt, downsample, tol, jtol)
 end
 
@@ -121,8 +121,8 @@ needs it (`Dynamiq.suggested_dt`). Within a step:
   per step. There `tol` does not control the error: pass `dt` fine enough to
   resolve the drive. `compile` warns when this applies.
 
-`jtol` bounds the probability of missing a second quantum jump within one MCWF
-sub-step; `nothing` derives it from the shot count.
+The MCWF solver needs no tolerance of its own: it places every quantum jump at the
+time its norm threshold is crossed. The `jtol` keyword is accepted and ignored.
 
 ```julia
 seq = Sequence()                  # one output sample per instruction, tol = 1e-6
@@ -134,8 +134,14 @@ function Sequence(; downsample::Int = 1, tol::Float64 = 1e-6,
                   jtol::Union{Float64,Nothing} = nothing)
     downsample > 0 || throw(ArgumentError("downsample must be positive, got $downsample"))
     tol > 0 || throw(ArgumentError("tol must be positive, got $tol"))
+    _warn_jtol(jtol)
     return Sequence(AbstractInstruction[], nothing, downsample, tol, jtol)
 end
+
+_warn_jtol(::Nothing) = nothing
+_warn_jtol(::Real) = Base.depwarn("`jtol` is ignored: the MCWF solver places every quantum " *
+                                  "jump at its exact time and needs no jump tolerance.",
+                                  :Sequence)
 
 """
     Sequence(instruction_duration, tsteps::Integer; downsample = 1)
