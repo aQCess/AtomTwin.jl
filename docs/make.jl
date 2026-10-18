@@ -22,7 +22,6 @@ example_titles = (
     "yb171_raman_gate"                 => "Yb-171 Raman gate",
     "k39_state_prep"                   => "K-39 state preparation",
     "atom_sorting"                     => "Atom sorting using AODs",
-    "yb174_lightshift_spectroscopy"    => "Yb-174 light-shift spectroscopy",
     "yb174_tweezer_cooling"            => "Laser cooling in a tweezer",
 )
 

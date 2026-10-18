@@ -89,8 +89,7 @@ anything you intend to compare against 0.1.x.
 - Symbolic `Operator`s (`ket * bra'`), `ExpectationDetectorSpec`,
   `PhotoDetectorSpec`, `getjumps`, `getheffective`, `getliouvillian`.
 - Typed term symbols: `TermSymbol`, `@term`, `l"3P1"`.
-- Examples: two-qubit exchange, Yb-174 light-shift spectroscopy, laser cooling in
-  a tweezer (Doppler and Sisyphus). A "Solvers and accuracy" documentation page.
+- Examples: two-qubit exchange, laser cooling in a tweezer (Doppler and Sisyphus). A "Solvers and accuracy" documentation page.
 - A precompile workload, and solver benchmarks under `bench/`.
 
 ### Fixed

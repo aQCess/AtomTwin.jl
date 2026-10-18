@@ -129,7 +129,6 @@ examples = [
     joinpath(ex_path, "gateX_tomography.jl"),
     joinpath(ex_path, "eit_with_dissipation.jl"),
     joinpath(ex_path, "atom_sorting.jl"),
-    joinpath(ex_path, "yb174_lightshift_spectroscopy.jl"),
     joinpath(ex_path, "yb174_tweezer_cooling.jl"),
 ]
 

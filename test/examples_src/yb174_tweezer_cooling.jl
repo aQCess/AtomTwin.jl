@@ -51,7 +51,7 @@ end           #src
 w0     = 1.0µm               # tweezer waist
 U0     = 20MHz               # trap depth of ¹S₀, in Hz (h × 20 MHz ≈ 1 mK)
 s0     = 0.05                # saturation parameter of each cooling beam
-T_run  = 1.2ms
+T_run  = 0.8ms
 shots  = 192
 
 m_Yb = 174amu
@@ -107,7 +107,7 @@ function cool(β, δ; seed = 1)
     add_decay!(sys, yb, em[0]  => g, Γ; λ = λ_cool, dipole = [1.0, 0, 0])
 
     add_detector!(sys, MotionDetectorSpec(yb; dims = [1, 2, 3], name = "r"))
-    seq = Sequence(0.5µs; downsample = 20)
+    seq = Sequence(1µs; downsample = 10)
     @sequence seq begin
         Parallel([Pulse(σp, T_run), Pulse(σm, T_run)])
     end
@@ -157,6 +157,7 @@ for (c, T) in zip(cases, Ts)
             c.label, T / µK, T / T_D, kb * T / (hbar * ωx))
 end
 @printf("Doppler theory for this geometry: %.2f µK\n", 0.7T_D / µK)
+@printf("colder than the magic trap by %.2f× (β = 2) and %.2f× (β = 3)\n", Ts[1]/Ts[2], Ts[1]/Ts[3])
 
 checksum_data = Ts ./ µK                                                  #src
 
