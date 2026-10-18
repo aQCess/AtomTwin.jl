@@ -48,11 +48,11 @@ end
 # Backwards compatibility: `tol` was added after the struct was public, so the
 # original three-field positional form must keep working unchanged.
 Sequence(instructions::Vector{<:AbstractInstruction}, dt, downsample::Int) =
-    Sequence(instructions, dt, downsample, 1e-4, nothing)
+    Sequence(instructions, dt, downsample, 1e-6, nothing)
 Sequence(instructions::Vector{<:AbstractInstruction}, dt, downsample::Int, tol) =
     Sequence(instructions, dt, downsample, tol, nothing)
 Sequence(instructions::Vector{<:AbstractInstruction}, dt) =
-    Sequence(instructions, dt, 1, 1e-4, 1e-4)
+    Sequence(instructions, dt, 1, 1e-6, 1e-4)
 
 """
     Sequence(dt::Float64; downsample::Int = 1)
@@ -95,7 +95,7 @@ push!(seq, Wait(1e-6))                # coarse dt (default) for slow evolution
 push!(seq, Ramp(tw, r, a, t; downsample=10))  # sparse output for slow ramp
 ```
 """
-function Sequence(dt::Float64; downsample::Int = 1, tol::Float64 = 1e-4,
+function Sequence(dt::Float64; downsample::Int = 1, tol::Float64 = 1e-6,
                   jtol::Union{Float64,Nothing} = nothing)
     dt > 0 || throw(ArgumentError("dt must be positive, got $dt"))
     downsample > 0 || throw(ArgumentError("downsample must be positive, got $downsample"))
@@ -104,7 +104,7 @@ function Sequence(dt::Float64; downsample::Int = 1, tol::Float64 = 1e-4,
 end
 
 """
-    Sequence(; downsample = 1, tol = 1e-4, jtol = nothing)
+    Sequence(; downsample = 1, tol = 1e-6, jtol = nothing)
 
 Create a `Sequence` with **no explicit time step**: the output grid is derived
 at build time, and the solvers meet `tol` within it.
@@ -125,12 +125,12 @@ needs it (`Dynamiq.suggested_dt`). Within a step:
 sub-step; `nothing` derives it from the shot count.
 
 ```julia
-seq = Sequence()                  # one output sample per instruction, tol = 1e-4
+seq = Sequence()                  # one output sample per instruction, tol = 1e-6
 seq = Sequence(; tol = 1e-9)      # tighter
 seq = Sequence(1e-9)              # explicit dt: a trace, and the control grid
 ```
 """
-function Sequence(; downsample::Int = 1, tol::Float64 = 1e-4,
+function Sequence(; downsample::Int = 1, tol::Float64 = 1e-6,
                   jtol::Union{Float64,Nothing} = nothing)
     downsample > 0 || throw(ArgumentError("downsample must be positive, got $downsample"))
     tol > 0 || throw(ArgumentError("tol must be positive, got $tol"))
@@ -160,7 +160,7 @@ per-instruction step count. Use the `dt` keyword on an individual instruction to
 override it, or `Sequence(; tol = ...)` to let the solver choose.
 """
 function Sequence(instruction_duration::Real, tsteps::Integer; downsample::Int = 1,
-                  tol::Float64 = 1e-4, jtol::Union{Float64,Nothing} = nothing)
+                  tol::Float64 = 1e-6, jtol::Union{Float64,Nothing} = nothing)
     instruction_duration > 0 ||
         throw(ArgumentError("instruction_duration must be positive, got $instruction_duration"))
     tsteps > 0 || throw(ArgumentError("tsteps must be positive, got $tsteps"))

@@ -12,6 +12,13 @@ light shift and several solver fixes all move answers, most by more than the
 old tolerance. Re-run anything you intend to compare against 0.1.x.
 
 ### Changed
+- `Sequence`'s default `tol` is 1e-6 (was 1e-4). Only the density-matrix solver reads
+  it: on the Rabi benchmark the error falls from 1.6e-3 to 8.6e-6 for 2.9× the time;
+  on the Rydberg benchmark the cost is unchanged.
+- An explicit Rabi frequency given with a Gaussian beam (`add_coupling!(…, Ω; beam)`, or
+  the `Ω_π`/`Ω_p`/`Ω_m` keywords with `beam`) is the Rabi frequency at the beam's focus
+  `beam.r0`; the coupling follows the beam's profile and phase at the atom. The keyword
+  form used to refer it to the atom's compile-time position.
 - The default propagator is Chebyshev (no stability limit; degree set by the
   spectrum and `tol`). `Taylor(order)` remains available via `integrator`.
 - `Sequence(; tol)` with no `dt` records one output sample per instruction. The
@@ -113,6 +120,23 @@ old tolerance. Re-run anything you intend to compare against 0.1.x.
   scattering. Without `dipole`, unchanged (same RNG stream).
 
 ### Fixed
+- `add_coupling!`'s keyword form (`Ω_π`, `Ω_p`, `Ω_m`) applied the same Rabi frequency
+  to every pair of a polarization, skipping the Clebsch–Gordan coefficients the
+  positional form applies (¹S₀ F = ½ → ³P₁ F′ = 3/2: σ⁺ pairs 1 : 1 instead of
+  √(1/3) : 1), and threw on a `Parameter`.
+- The positional `add_coupling!(…; beam)` with a `GaussianBeam` or `GeneralGaussianBeam`
+  built a uniform `GlobalCoupling`: no beam profile, no Doppler phase.
+- A beam-derived J = 0 → 0 coupling (the ¹⁷¹Yb clock line) silently created nothing:
+  the J-level 6j symbol is zero. It is now an error naming the explicit-Rabi-frequency
+  path.
+- `compute_coupling_strength` turned any error into a zero coupling, so e.g. a
+  `Function` passed as a Rabi frequency created nothing, without a message.
+- `MixedPolarization(pol, ε; k)` took `pol_perp = k × pol`, which is parallel to a
+  circular `pol`: σ⁺ got no σ⁻ admixture while `estimate_PER_dB` reported the PER.
+- `rabi_frequencies(::GaussianBeam)` threw a `BoundsError`.
+- With motion on, a detuning `Pulse` (its rate in rad/s carried by the amplitudes)
+  scaled the radiation sub-step count by that rate: the same Hamiltonian ran ~800×
+  slower than with the detuning as a base value.
 - `process_tomography` evolved every input state from the first input: an X
   gate with 20% Rabi noise scored process fidelity 0.25 instead of ≈ 0.91.
 - Reusing a compiled job (`play(job, sys)`) started from the previous run's

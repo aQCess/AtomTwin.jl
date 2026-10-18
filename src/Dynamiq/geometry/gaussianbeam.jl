@@ -194,7 +194,10 @@ E(r) = \\sqrt{I_0} \\exp\\bigl[-(x^2 + y^2)/w_0^2 - z^2/w_{0z}^2\\bigr]
 with \\(k = 2\\pi/\\lambda\\) and complex coefficient `c = b._coeff[]`.
 An 8-waist cutoff is applied in the same ellipsoid used in `intensity`.
 """
-@inline function Efield(b::GaussianBeam, r::Vector{Float64})
+@inline Efield(b::GaussianBeam, r::Vector{Float64}) = _efield_bare(b, r) * b._coeff[]
+
+# The field without the amplitude coefficient `_coeff[]`.
+@inline function _efield_bare(b::GaussianBeam, r::Vector{Float64})
     dx = r[1] - b.r0[1]
     dy = r[2] - b.r0[2]
     dz = r[3] - b.r0[3]
@@ -208,9 +211,20 @@ An 8-waist cutoff is applied in the same ellipsoid used in `intensity`.
     else
         k   = 2π / b.λ
         env = sqrt(2/(c*ε0)) * sqrt(b.I0) * exp(-(dx^2 + dy^2) / w0^2 - dz^2 / wz0^2)
-        return env * cis(k * dz) * b._coeff[]
+        return env * cis(k * dz)
     end
 end
+
+"""
+    efield_vector(b, r) -> Vector{ComplexF64}
+
+Complex electric-field vector (V/m) of beam `b` at `r`, excluding the amplitude
+coefficient `_coeff[]` (a pulse or ramp envelope, applied separately). For
+`PlanarBeam` and `GeneralGaussianBeam` this is `Efield`; a `GaussianBeam`, whose
+`Efield` is a scalar, contributes its scalar field along its polarization `pol`.
+"""
+efield_vector(b::AbstractBeam, r::Vector{Float64}) = Efield(b, r)
+efield_vector(b::GaussianBeam, r::Vector{Float64}) = _efield_bare(b, r) .* b.pol
 
 """
     efield_scalar(b::GaussianBeam, r) -> ComplexF64

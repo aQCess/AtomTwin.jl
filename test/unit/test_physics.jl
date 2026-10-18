@@ -1126,3 +1126,89 @@ end
         end
     end
 end
+
+# ── Coupling and polarization regressions ─────────────────────────────────────
+
+@testset "MixedPolarization contaminates circular light with the opposite helicity" begin
+    σp = ComplexF64[1, im, 0] / √2
+    σm = ComplexF64[1, -im, 0] / √2
+    ε  = 0.1
+    mp = MixedPolarization(σp, ε; k = [0.0, 0.0, 1.0])
+    pol = AtomTwin._resolve_node_default(mp)
+    ## `k × σ⁺` is parallel to σ⁺; the orthogonal polarization is `k × σ⁺*` ∝ σ⁻.
+    @test abs(sum(conj.(σp) .* mp.pol_perp)) < 1e-12
+    @test abs2(sum(conj.(σm) .* pol)) ≈ ε^2 / (1 + ε^2) rtol = 1e-9
+    lin = MixedPolarization([1.0, 0.0, 0.0], ε; k = [0.0, 0.0, 1.0])  # unchanged for linear
+    @test lin.pol_perp ≈ ComplexF64[0, 1, 0]
+end
+
+@testset "add_coupling! keyword and positional forms build the same Hamiltonian" begin
+    Ω  = 2π * 1e6
+    σp = ComplexF64[1, im, 0] / √2
+    function σplus(keyword)
+        g  = HyperfineManifold(1//2, 0; label = "1S0", term = l"1S0")
+        e  = HyperfineManifold(3//2, 1; label = "3P1", term = l"3P1")
+        yb = Ytterbium171Atom(; levels = [g..., e...])
+        s  = System(yb)
+        beam = PlanarBeam(556e-9, 1.0, [0.0, 0.0, 1.0], σp)
+        keyword ? add_coupling!(s, yb, g => e; beam = beam, Ω_π = 0.0, Ω_p = Ω, Ω_m = 0.0) :
+                  add_coupling!(s, yb, g => e, 0.0, Ω, 0.0; beam = beam)
+        H = Matrix(AtomTwin.gethamiltonian(s))
+        i(l) = findfirst(==(l), [g..., e...])
+        [abs(H[i(e[1//2]), i(g[-1//2])]), abs(H[i(e[3//2]), i(g[1//2])])] ./ (Ω / 2)
+    end
+    ## σ⁺ pairs m = −½ → +½ and +½ → +3/2 carry CG √(1/3) and 1 in both forms.
+    @test σplus(true) ≈ [sqrt(1/3), 1.0] rtol = 1e-9
+    @test σplus(true) ≈ σplus(false) rtol = 1e-9
+end
+
+@testset "add_coupling! keyword form takes a Parameter, and a Gaussian beam in either form" begin
+    g  = HyperfineManifold(0//1, 0; label = "1S0", term = l"1S0")
+    e  = HyperfineManifold(1//1, 1; label = "3P1", term = l"3P1")
+    yb = Ytterbium174Atom(; levels = [g..., e...])
+    beam = GeneralGaussianBeam(556e-9, 5e-6, 5e-6, 1e-3, [0.0, 0.0, 1.0], [1.0, 0.0, 0.0])
+    Ωp = Parameter(:Ω, 2π * 1e6)
+    kw  = add_coupling!(System(yb), yb, g => e; beam = beam, Ω_π = Ωp, Ω_p = 0.0, Ω_m = 0.0)
+    @test length(kw) == 1 && kw[1] isa AtomTwin.Dynamiq.GaussianCoupling
+    ## The positional form used to fall back to a GlobalCoupling: no profile, no Doppler phase.
+    pos = add_coupling!(System(yb), yb, g => e, 2π * 1e6, 0.0, 0.0; beam = beam)
+    @test all(c -> c isa AtomTwin.Dynamiq.GaussianCoupling, pos)
+    ## An explicit Ω is the Rabi frequency at the focus; an atom off-centre sees the profile.
+    lg, le = Level("g"), Level("e")
+    a   = Atom(; levels = [lg, le], x_init = [2.5e-6, 0.0, 0.0])
+    s   = System(a)
+    add_coupling!(s, a, lg => le, 2π * 1e6; beam = beam)
+    seq = Sequence(1e-9); push!(seq, Wait(1e-9))
+    job = compile(s, seq; initial_state = [lg])
+    c   = only(f for f in job.fields if f isa AtomTwin.Dynamiq.GaussianCoupling)
+    @test abs(c.Ω0) ≈ 2π * 1e6 * exp(-(2.5e-6 / 5e-6)^2) rtol = 1e-9
+end
+
+@testset "a J = 0 → 0 beam-derived coupling is refused, not silently zero" begin
+    gnd  = HyperfineManifold(1//2, 0; label = "1S0", term = l"1S0")
+    clk  = HyperfineManifold(1//2, 0; label = "3P0", term = l"3P0")
+    yb   = Ytterbium171Atom(; levels = [gnd..., clk...])
+    beam = PlanarBeam(578.42e-9, 1e7, [0.0, 0.0, 1.0], ComplexF64[1, im, 0] / √2)
+    @test_throws ArgumentError add_coupling!(System(yb), yb, gnd => clk; beam = beam, d_red = 5e-34)
+    @test_throws ArgumentError add_coupling!(System(yb), yb, gnd => clk, beam; d_red = 5e-34)
+    ## The explicit path builds the F = ½ → ½ σ⁺ pair.
+    @test length(add_coupling!(System(yb), yb, gnd => clk, 0.0, 2π * 10.0, 0.0; beam = beam)) == 1
+end
+
+@testset "an unusable Rabi frequency is an error, not a zero coupling" begin
+    g  = HyperfineManifold(1//2, 0; label = "1S0", term = l"1S0")
+    e  = HyperfineManifold(3//2, 1; label = "3P1", term = l"3P1")
+    yb = Ytterbium171Atom(; levels = [g..., e...])
+    Ωt = t -> 2π * 1e6
+    @test_throws MethodError add_coupling!(System(yb), yb, g => e, 0.0, Ωt, 0.0)
+    @test_throws MethodError AtomTwin.compute_coupling_strength(g[1//2], e[3//2], yb, 0.0, Ωt, 0.0)
+end
+
+@testset "rabi_frequencies accepts a GaussianBeam" begin
+    beam = GaussianBeam(578.42e-9, 10e-6, 0.1)                 # x-polarized
+    Ωπ, Ωp, Ωm = rabi_frequencies(beam; d_red = 5e-34)
+    E0 = abs(Dynamiq.Efield(beam, beam.r0))
+    @test abs(Ωπ) < 1e-9 * abs(Ωp)
+    @test abs(Ωp) ≈ 5e-34 * E0 / √2 / AtomTwin.Units.hbar rtol = 1e-9
+    @test abs(Ωm) ≈ abs(Ωp) rtol = 1e-12
+end

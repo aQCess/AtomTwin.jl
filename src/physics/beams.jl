@@ -37,7 +37,7 @@ the polarization extinction ratio. At compile time the polarization vector
 # Example
 ```julia
 epol = Parameter(:epol, 0.0; std = 1e-3)
-pol  = MixedPolarization([0, 1im, 1]/√2, epol; k=[1,0,0])  # pol_perp = k × pol_main
+pol  = MixedPolarization([0, 1im, 1]/√2, epol; k=[1,0,0])  # pol_perp = k × pol_main*
 pol  = MixedPolarization([1, 0, 0], [0, 1, 0], epol)        # explicit pol_perp
 beam = GeneralGaussianBeam(λ, w0x, w0y, P, [1,0,0], pol; r0=r0)
 ```
@@ -58,10 +58,12 @@ end
 """
     MixedPolarization(pol_main, ε; k)
 
-Two-argument constructor: `pol_perp` is computed as `normalize(k × pol_main)`,
-the unique direction transverse to the beam propagation direction `k` and orthogonal
-to `pol_main`. This is the physically correct choice because Maxwell's equations
-require `pol ⊥ k`, so both `pol_main` and `pol_perp` must lie in the transverse plane.
+Two-argument constructor: `pol_perp` is computed as `normalize(k × pol_main*)`,
+the unique polarization transverse to the beam propagation direction `k` and orthogonal
+to `pol_main` (`pol_perp* · pol_main = 0`). Maxwell's equations require `pol ⊥ k`, so
+both lie in the transverse plane. The conjugate matters only for complex `pol_main`:
+`k × pol_main` is parallel to a circular `pol_main`, while `k × pol_main*` is the
+opposite helicity, so σ⁺ is contaminated by σ⁻.
 
 # Example
 ```julia
@@ -72,7 +74,7 @@ beam = GeneralGaussianBeam(λ, w0x, w0y, P, [1,0,0], pol; r0=r0)
 """
 function MixedPolarization(pol_main, ε; k)
     k_hat = normalize(Float64.(k))
-    pol_perp = normalize(cross(k_hat, Vector{ComplexF64}(pol_main)))
+    pol_perp = normalize(cross(k_hat, conj.(Vector{ComplexF64}(pol_main))))
     MixedPolarization(normalize(Vector{ComplexF64}(pol_main)), pol_perp, ε)
 end
 

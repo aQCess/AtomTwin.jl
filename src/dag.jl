@@ -136,10 +136,13 @@ GAUSSIAN COUPLING NODE  (position-dependent Rabi frequency)
 
 Node for a spatially-varying coupling driven by a `GaussianBeam` or `GeneralGaussianBeam`.
 
-Peak Rabi frequency Ω₀ is computed at build time from `rabi_frequency(...)` unless
-`Ω0_override` is provided (useful when E1 selection rules underestimate the effective
-coupling due to state mixing). Each solver timestep `update!` rescales `_coeff` by the
-ratio of the current to build-time field scalar.
+Peak Rabi frequency Ω₀ is computed from `rabi_frequency(...)` at the atom's position
+unless `Ω0_override` is provided (useful when E1 selection rules underestimate the
+effective coupling due to state mixing). An override is the Rabi frequency at the
+beam's reference point `beam.r0` (its focus) and may be a number, `Parameter` or
+`ParametricExpression`. Either way the coupling then follows the field at the atom:
+each solver timestep `update!` rescales `_coeff` by the ratio of the current to
+compile-time field scalar.
 """
 mutable struct GaussianCouplingNode <: AbstractNode
     atom::AbstractAtom
@@ -149,7 +152,7 @@ mutable struct GaussianCouplingNode <: AbstractNode
     d_red::Float64
     g::Any
     e::Any
-    Ω0_override::Union{Nothing, ComplexF64}
+    Ω0_override::Any        # nothing, or the Rabi frequency at beam.r0
     active::Bool
     _field::Union{Nothing, GaussianCoupling}
 end
@@ -161,47 +164,53 @@ GaussianCouplingNode(atom, transition, beam, q_axis, d_red, g, e;
 
 node_output(n::GaussianCouplingNode) = n._field
 
+# Rabi frequency at position `x`: from the beam's field and `d_red`, or an override
+# `Ωref` given at the beam's reference point and carried to `x` by the field ratio.
+function _gaussian_Ω0(node::GaussianCouplingNode, x, Ωref)
+    Ωref === nothing &&
+        return ComplexF64(rabi_frequency(node.atom, node.g, node.e, node.beam, x;
+                                         q_axis = node.q_axis, d_red = node.d_red))
+    r_ref = hasproperty(node.beam, :r0) ? Vector{Float64}(node.beam.r0) : zeros(3)
+    E_ref = Dynamiq.efield_scalar(node.beam, r_ref)
+    iszero(E_ref) && return ComplexF64(Ωref)
+    return ComplexF64(Ωref) * Dynamiq.efield_scalar(node.beam, x) / E_ref
+end
+
 function build_node!(node::GaussianCouplingNode, basis::Basis)
     node._field === nothing || return node._field
     idx1 = node.atom.level_indices[node.transition[1]]
     idx2 = node.atom.level_indices[node.transition[2]]
-    Ω0 = node.Ω0_override !== nothing ? node.Ω0_override :
-         ComplexF64(rabi_frequency(node.atom, node.g, node.e, node.beam, node.atom.x;
-                                   q_axis = node.q_axis, d_red = node.d_red))
+    Ωref = node.Ω0_override === nothing ? nothing : _resolve_node_default(node.Ω0_override)
+    Ω0 = _gaussian_Ω0(node, node.atom.x, Ωref)
     c = GaussianCoupling(basis, node.atom.inner, idx1 => idx2, node.beam, Ω0)
     c._amplitude[] = node.active ? ComplexF64(1.0) : ComplexF64(0.0)
     node._field = c
     return c
 end
 
-function compile_node!(node::GaussianCouplingNode, basis::Basis, ::Any, ::Any)
-    c = node._field
-    c === nothing && return build_node!(node, basis)
-    if node.Ω0_override === nothing
-        # Recompute Ω₀ and E₀ at current atom position (may differ between shots)
-        Ω0 = ComplexF64(rabi_frequency(node.atom, node.g, node.e, node.beam, node.atom.x;
-                                       q_axis = node.q_axis, d_red = node.d_red))
-        update!(c, Val(:_), Ω0)   # rescale H entries in-place
-        c.E0 = ComplexF64(Dynamiq.efield_scalar(node.beam, node.atom.x))
-    end
-    # Override: Ω0/E0 ratio fixed at build time; only reset amplitude
+# Ω₀ and E₀ at the atom's position for this shot (it may differ between shots),
+# with a parametric override resampled.
+function _refresh_gaussian!(node::GaussianCouplingNode, c::GaussianCoupling, x,
+                            param_values, rng)
+    Ωref = node.Ω0_override === nothing ? nothing :
+           _resolve_node_value(node.Ω0_override, param_values, rng)
+    update!(c, Val(:_), _gaussian_Ω0(node, x, Ωref))   # rescale H entries in-place
+    c.E0 = ComplexF64(Dynamiq.efield_scalar(node.beam, x))
     c._amplitude[] = node.active ? ComplexF64(1.0) : ComplexF64(0.0)
     return c
+end
+
+function compile_node!(node::GaussianCouplingNode, basis::Basis, rng, param_values)
+    c = node._field
+    c === nothing && return build_node!(node, basis)
+    return _refresh_gaussian!(node, c, node.atom.x, param_values, rng)
 end
 
 # Updates `c`, the JOB's field, at the job's atom position `c.atom.x`. Not
 # `node._field` and `node.atom`: a multi-threaded run gives each thread a deep
 # copy of the job, and only that copy was re-initialised for this shot.
-function recompile_node!(node::GaussianCouplingNode, c::GaussianCoupling, ::Any, ::Any)
-    if node.Ω0_override === nothing
-        Ω0 = ComplexF64(rabi_frequency(node.atom, node.g, node.e, node.beam, c.atom.x;
-                                       q_axis = node.q_axis, d_red = node.d_red))
-        update!(c, Val(:_), Ω0)
-        c.E0 = ComplexF64(Dynamiq.efield_scalar(node.beam, c.atom.x))
-    end
-    c._amplitude[] = node.active ? ComplexF64(1.0) : ComplexF64(0.0)
-    return c
-end
+recompile_node!(node::GaussianCouplingNode, c::GaussianCoupling, rng, param_values) =
+    _refresh_gaussian!(node, c, c.atom.x, param_values, rng)
 
 #=============================================================================
 NOISY COUPLING NODE  (NoisyField wrapping GlobalCoupling)

@@ -552,3 +552,31 @@ end
         @test p ≈ 2π / λ1 * (Pe + Pr) + 2π / λ2 * Pr rtol = 2e-3
     end
 end
+
+# A detuning `Pulse` carries its rate (rad/s) in its amplitudes. The radiation
+# sub-step count scaled the drives' rotation by the largest amplitude of ANY
+# modifier, so the same Hamiltonian ran ~800× slower parameterised that way.
+@testset "a detuning Pulse does not inflate the radiation sub-steps" begin
+    δ0 = 2π * 1e6
+    N  = 20
+    function run_once(as_amplitude)
+        g, e = Level("g"), Level("e")
+        a = Atom(; levels = [g, e], mass = 171 * AtomTwin.Units.amu,
+                 x_init = zeros(3), v_init = zeros(3))
+        s = System(a, GaussianBeam(759e-9, 1e-6, 1e-12))
+        c = add_coupling!(s, a, g => e, 2π * 1e6;
+                          beam = PlanarBeam(578e-9, 1.0, [1.0, 0, 0], [0.0, 1, 0]), active = false)
+        δ = add_detuning!(s, a, e, as_amplitude ? 1.0 : δ0; active = false)
+        add_detector!(s, PopulationDetectorSpec(a, e; name = "Pe"))
+        seq = Sequence(1e-9)
+        push!(seq, Parallel([Pulse(c, N * 1e-9),
+                             Pulse(δ, N * 1e-9; amplitudes = fill(as_amplitude ? δ0 : 1.0, N + 1))];
+                            dt = 1e-9, downsample = N))
+        play(s, seq; initial_state = g).detectors["Pe"][end]
+    end
+    run_once(false); run_once(true)
+    t_base = minimum(@elapsed(run_once(false)) for _ in 1:3)
+    t_amp  = minimum(@elapsed(run_once(true)) for _ in 1:3)
+    @test run_once(true) ≈ run_once(false) rtol = 1e-6
+    @test t_amp < 10 * t_base + 0.05
+end

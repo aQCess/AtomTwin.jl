@@ -315,17 +315,46 @@ const RAD_THETA = 0.1
 # Sub-steps per `dt` for the TDSE radiation impulse. The drives' population flow
 # oscillates at the rotation rate of the states they couple: the Gershgorin span of
 # their own rows, not of the whole spectrum, which an undriven far-detuned level
-# would inflate. `peak` takes the drives at their nominal amplitude; a shaped
-# envelope may exceed it, so the rate is scaled by the instruction's largest one.
+# would inflate. `peak` takes the drives at their nominal amplitude. A shaped
+# envelope may exceed it, so every term an `AmplitudeModifier` drives is taken at
+# its own peak, and at zero, whichever spans wider. Not one global factor: a
+# detuning `Pulse` carries its rate (rad/s) in its amplitudes, and scaling the
+# drives' rotation by it inflated the sub-steps 10⁵-fold.
 function _radiation_substeps(rp, H, dt, modifiers)
     rows = unique!(sort!([k for d in rp.drives for (i, j, _) in d.H.forward for k in (i, j)]))
-    lo, hi = gershgorin_interval(H, rows; peak = true)
-    amax = 1.0
-    for m in modifiers
-        m isa AmplitudeModifier && !isempty(m.vals) && (amax = max(amax, maximum(abs, m.vals)))
+    peaks = _modifier_peaks(modifiers)
+    saved = [(r, r[]) for r in keys(peaks)]
+    hw = 0.0
+    for at_peak in (true, false)
+        for (r, v) in peaks
+            r[] = at_peak ? v : zero(v)
+        end
+        lo, hi = gershgorin_interval(H, rows; peak = true)
+        hw = max(hw, (hi - lo) / 2)
     end
-    return max(1, ceil(Int, amax * (hi - lo) / 2 * dt / RAD_THETA))
+    for (r, v) in saved
+        r[] = v
+    end
+    return max(1, ceil(Int, hw * dt / RAD_THETA))
 end
+
+# The largest-magnitude coefficient each `AmplitudeModifier` gives the Hamiltonian
+# term it drives over the instruction, keyed by that term's coefficient `Ref`.
+function _modifier_peaks(modifiers)
+    peaks = IdDict{Base.RefValue{ComplexF64},ComplexF64}()
+    for m in modifiers
+        (m isa AmplitudeModifier && !isempty(m.vals)) || continue
+        ref, geom = _modifier_term(m.field)
+        ref === nothing && continue
+        v = m.vals[argmax(abs.(m.vals))] * geom
+        abs(v) > abs(get(peaks, ref, 0.0im)) && (peaks[ref] = v)
+    end
+    return peaks
+end
+
+_modifier_term(r::Base.RefValue{ComplexF64}) = (r, ComplexF64(1))
+_modifier_term(e::Envelope) = (e.coeff, e.geom[])
+_modifier_term(f) = hasproperty(f, :_coeff) ? (f._coeff, ComplexF64(1)) : (nothing, ComplexF64(1))
 
 #------------------------------------------------------------------------------
 # Classical updates (forces and Newton solver)
