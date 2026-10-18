@@ -5,7 +5,7 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
-## [0.2.0] — unreleased
+## [0.2.0] — 2026-10-18
 
 Numerical results change in this release: the solvers, the trap light shift, the
 polarizability conventions and motion on by default all move answers. Re-run
