@@ -112,7 +112,9 @@ anything you intend to compare against 0.1.x.
   `On`/`Off` and `ampl`; an attractive van der Waals interaction was pinned at its
   cap.
 - Parameters sampled per shot compounded, were not resampled (decay rates), or
-  were not refreshed in multi-threaded runs; density-matrix runs with motion felt
+  were not refreshed in multi-threaded runs, and a sampled beam parameter or atom
+  position in a threaded run shared the system between threads (results differed
+  from serial runs with the same seed); density-matrix runs with motion felt
   no state-dependent force without a population detector.
 - The density-matrix dissipator was not trace-preserving.
 - Moves inside `Parallel` converged at first order; a ramp after `AmplRow` started
