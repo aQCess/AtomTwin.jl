@@ -4,7 +4,7 @@
 # scratch in the per-instruction plan; the density-matrix scratch and spectral
 # bounds use `ThreadCache`s (`Dynamiq._ENGINE_CACHES`), which these tests cover.
 # They need more than one thread to show anything.
-using Test, AtomTwin
+using Test, AtomTwin, Random, Statistics
 
 const _D = AtomTwin.Dynamiq
 
@@ -56,4 +56,33 @@ end
     end
 
     @test run(parallel = true) ≈ run(parallel = false)
+end
+
+@testset "per-shot beam and position sampling is independent of threading" begin
+    # `recompile!` resolves a sampled beam into the system's nodes and reads atom
+    # positions through the system, so each thread needs its own copy of both.
+    function run(random_power; parallel)
+        gm = HyperfineManifold(0//1, 0; label = "1S0", term = l"1S0", g_F = 0.0)
+        em = HyperfineManifold(1//1, 1; label = "3P1", term = l"3P1", g_F = 1.5)
+        yb = Ytterbium174Atom(; levels = [gm..., em...],
+                              x_init = random_power ? zeros(3) : gaussian(0.4e-6, 0.4e-6, 0.0))
+        P = random_power ? Parameter(:P, 1e-9; std = 0.3e-9) : 1e-9
+        beam = GeneralGaussianBeam(556e-9, 1e-6, 1e-6, P, [1.0, 0, 0], [0.0, 0, 1.0])
+        sys = System(yb)
+        cs = add_coupling!(sys, yb, gm => em, beam; d_red = 1e-31)
+        add_detector!(sys, PopulationDetectorSpec(yb, em[0]; name = "Pe"))
+        seq = Sequence(1e-8)
+        @sequence seq begin
+            Parallel([Pulse(c, 1e-6) for c in cs])
+        end
+        out = play(sys, seq; initial_state = gm[0], shots = 64, frozen = true,
+                   rng = MersenneTwister(7),
+                   parallel_thresh = parallel ? 1 : typemax(Int))
+        out.detectors["Pe"][end, :]
+    end
+    for random_power in (true, false)
+        s = run(random_power; parallel = false)
+        @test std(s) > 1e-3                      # the sampling matters
+        @test run(random_power; parallel = true) ≈ s
+    end
 end

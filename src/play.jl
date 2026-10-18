@@ -260,7 +260,7 @@ function _play_shots(job::SimulationJob, sys::System;
     
     if use_parallel
         # Memory check
-        job_size = Base.summarysize(job)
+        job_size = Base.summarysize((job, sys))
         memory_required = job_size * Threads.maxthreadid()
         memory_available = Sys.total_memory() - Base.gc_live_bytes()
         
@@ -283,23 +283,30 @@ function _play_shots(job::SimulationJob, sys::System;
     
     # Execute
     if use_parallel
-        # Pre-allocate one job copy per thread (reused across shots)
-        thread_jobs = [deepcopy(job) for _ in 1:Threads.maxthreadid()]
-        
+        # One copy of the job and the system per thread, reused across shots.
+        # `recompile!` resolves per-shot values into `sys.nodes` (a sampled beam)
+        # and reads atom positions through `sys.atoms`, so the system cannot be
+        # shared; copying the pair together keeps `sys.atoms[i].inner` the job's
+        # atom. Each thread makes its own copy, so its state is allocated on that
+        # thread.
+        thread_copies = Vector{Tuple{typeof(job), System}}(undef, Threads.maxthreadid())
+
         # `:static` pins each task to one thread for the whole body, so
         # `threadid()` is a stable identity. Bare `@threads` is `:dynamic` on
         # Julia >= 1.12, where a task may migrate mid-body and two tasks then
-        # share one `thread_jobs` entry -- and likewise one solver workspace
+        # share one `thread_copies` entry -- and likewise one solver workspace
         # (see `ThreadCache` in Dynamiq/solvers.jl). Migration is observable
         # even on 1.11.
         Threads.@threads :static for shot in 1:shots
             tid = Threads.threadid()
+            isassigned(thread_copies, tid) || (thread_copies[tid] = deepcopy((job, sys)))
+            local_job, local_sys = thread_copies[tid]
             if shot != 1
-                recompile!(thread_jobs[tid], sys;
+                recompile!(local_job, local_sys;
                                 rng=shot_rngs[shot],
                                 kwargs...)
             end
-            _execute_shot!(shot, thread_jobs[tid], sys, shot_rngs[shot],
+            _execute_shot!(shot, local_job, local_sys, shot_rngs[shot],
                         all_outputs_vec, det_names, n_detectors, final_states,
                         savefinalstate; frozen = frozen, kwargs...)
             shot_callback !== nothing && shot_callback(shot, shots)
