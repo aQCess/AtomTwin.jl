@@ -94,9 +94,12 @@ function cool(β, δ; seed = 1)
     end
 
     ## Spontaneous emission with recoil along each transition's dipole pattern.
-    add_decay!(sys, yb, em[1]  => g, Γ; λ = λ_cool, dipole = [0.0, 1, 1im])
-    add_decay!(sys, yb, em[-1] => g, Γ; λ = λ_cool, dipole = [0.0, 1, -1im])
-    add_decay!(sys, yb, em[0]  => g, Γ; λ = λ_cool, dipole = [1.0, 0, 0])
+    ## A photon counter bound to all three channels records every scattered photon.
+    pd = PhotoDetectorSpec(name = "photons")
+    add_detector!(sys, pd)
+    add_decay!(sys, yb, em[1]  => g, Γ; λ = λ_cool, dipole = [0.0, 1, 1im], clicks = pd)
+    add_decay!(sys, yb, em[-1] => g, Γ; λ = λ_cool, dipole = [0.0, 1, -1im], clicks = pd)
+    add_decay!(sys, yb, em[0]  => g, Γ; λ = λ_cool, dipole = [1.0, 0, 0], clicks = pd)
 
     add_detector!(sys, MotionDetectorSpec(yb; dims = [1, 2, 3], name = "r"))
     seq = Sequence(1µs; downsample = 10)
@@ -142,17 +145,27 @@ cases = [(label = "magic, β = 1, δ = −Γ/2", β = 1.0, δ = -0.5Γ),
 outs = [cool(c.β, c.δ) for c in cases]
 
 Ts = [T_x(o) for o in outs]
-for (c, T) in zip(cases, Ts)
-    @printf("%-24s  T_x = %.2f µK = %.2f T_D   (k_B T_x / ħω_x = %.1f)\n",
-            c.label, T / µK, T / T_D, kb * T / (hbar * ωx))
+## Photons scattered per atom over the run, from the photon counter.
+Rs = [mean(sum(o.detectors["photons"]; dims = 1)) / T_run for o in outs]
+for (c, T, R) in zip(cases, Ts, Rs)
+    @printf("%-24s  T_x = %.2f µK = %.2f T_D   (k_B T_x / ħω_x = %.1f)   scatters %.1f kHz\n",
+            c.label, T / µK, T / T_D, kb * T / (hbar * ωx), R / 1e3)
 end
-@printf("Doppler theory for this geometry: %.2f µK\n", 0.7T_D / µK)
+@printf("Doppler theory for this geometry: %.2f µK; low-saturation scattering rate at δ = −Γ/2: %.1f kHz\n",
+        0.7T_D / µK, (Γ / 2) * 2s0 / (1 + 2s0 + 1) / 1e3)
 @printf("colder than the magic trap by %.2f× (β = 2) and %.2f× (β = 3)\n", Ts[1]/Ts[2], Ts[1]/Ts[3])
 
 
 # The magic trap settles near the one-dimensional Doppler limit; the residual
 # excess is the heat leaking in from the uncooled axes. The state-dependent
-# traps go below it: about 1.5× colder at β = 2 and 2× at β = 3.
+# traps go below it: about 1.5× colder at β = 2 and nearly 2× at β = 3.
+#
+# The photon counter shows what that costs. The magic trap scatters at the
+# low-saturation rate, \\(R = \\tfrac{\\Gamma}{2}\\,s/(1 + s + 4\\delta^2/\\Gamma^2)\\)
+# with \\(s = 2 s_0\\) for the two beams. The Sisyphus-cooled atoms are colder
+# *and* scatter fewer photons: off-centre the differential light shift detunes
+# the transition from the laser. For imaging that means more cooling per
+# scattered photon.
 
 # !!! note "Semiclassical motion"
 #     The atom's centre of mass is a classical particle; photon recoil is
