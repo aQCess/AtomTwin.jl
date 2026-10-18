@@ -410,11 +410,34 @@ end
     @test abs(ls1 - ls3) / abs(ls1) < 0.01         # equal depth to <1% ⇒ magic
 end
 
+# The models were refitted to these (Kroeze et al., arXiv:2509.04416, Table 7),
+# with the clock magic wavelength weighted at its experimental uncertainty and the
+# others at a 0.015 nm model floor.
+@testset "Yb clock-state models reproduce the measured state-(in)dependent wavelengths" begin
+    g, e = AtomTwin.YB171_POLARIZABILITY_1S0, AtomTwin.YB171_POLARIZABILITY_3P0
+    function zero_near(f, λ; w = 1.0)
+        lo, hi = λ - w, λ + w
+        flo = f(lo)
+        @assert sign(flo) != sign(f(hi))
+        for _ in 1:80
+            mid = (lo + hi) / 2
+            sign(f(mid)) == sign(flo) ? (lo = mid) : (hi = mid)
+        end
+        (lo + hi) / 2
+    end
+    magic(λ) = zero_near(x -> polarizability_au(e, x) - polarizability_au(g, x), λ)
+    @test magic(759.3560633) ≈ 759.3560633 atol = 1e-5      # clock, 394.798 267 2(16) THz
+    @test magic(459.5960)    ≈ 459.5960    atol = 0.015
+    @test magic(552.61074)   ≈ 552.61074   atol = 0.03
+    @test zero_near(x -> polarizability_au(g, x), 553.2936) ≈ 553.2936 atol = 0.03   # ¹S₀ tune-out
+    @test zero_near(x -> polarizability_au(e, x), 576.613)  ≈ 576.613  atol = 0.015  # ³P₀ tune-out
+end
+
 @testset "scattering_rate_per_Wcm2 matches independent Grimm sum" begin
     # Hand-rolled Grimm-et-al. (2000) rate sum over the 3P0 transition table
     # (Phys. Rev. A 108, 053325) — independent of the implementation under test.
-    trans = [(215.870446, 0.308), (461.867846, 1.516), (675.141040, 4.081),
-             (729.293151, 0.625), (797.204099, 22.889)]
+    trans = [(215.870446, 0.306), (461.867846, 1.50182782), (675.141040, 4.0326703),
+             (729.293151, 0.62437427), (796.547798, 23.2660865)]
     λ  = 759.0
     ωL = 2π * c / (λ * 1e-9)
     ref = 0.0   # (1/s)/(W/m²)
@@ -432,8 +455,8 @@ end
 @testset "per-line Grimm identity Γsc = (Γ/Δ)·U_dip/ħ" begin
     # In the RWA far-detuned limit, a single line's scattering rate and light
     # shift obey Γsc = (Γ/Δ)·U_dip/ħ exactly. Check on each 3P0 line.
-    trans = [(215.870446, 0.308), (461.867846, 1.516), (675.141040, 4.081),
-             (729.293151, 0.625), (797.204099, 22.889)]
+    trans = [(215.870446, 0.306), (461.867846, 1.50182782), (675.141040, 4.0326703),
+             (729.293151, 0.62437427), (796.547798, 23.2660865)]
     ωL = 2π * c / (759.0 * 1e-9)
     for (fTHz, gMHz) in trans
         ω0 = 2π * fTHz * 1e12; Γ = 2π * gMHz * 1e6; Δ = ωL - ω0

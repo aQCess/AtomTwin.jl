@@ -12,6 +12,12 @@ light shift and several solver fixes all move answers, most by more than the
 old tolerance. Re-run anything you intend to compare against 0.1.x.
 
 ### Changed
+- The Yb ¹S₀/³P₀ polarizability models (Höhn et al. 2023) are refitted to the measured
+  state-(in)dependent wavelengths (Kroeze et al., arXiv:2509.04416), with the measured
+  line strengths held at their literature values. The clock magic wavelength moves
+  from 759.395 to 759.3561 nm (measured 759.356 063 3(31) nm) and the ³P₀ tune-out
+  from 575.54 to 576.612 nm (576.613(10)); α(¹S₀) rises 0.3 %. The models are for the
+  visible and near infrared, not the static limit.
 - `Sequence`'s default `tol` is 1e-6 (was 1e-4). Only the density-matrix solver reads
   it: on the Rabi benchmark the error falls from 1.6e-3 to 8.6e-6 for 2.9× the time;
   on the Rydberg benchmark the cost is unchanged.
