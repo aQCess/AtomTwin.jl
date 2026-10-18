@@ -580,3 +580,38 @@ end
     @test run_once(true) ≈ run_once(false) rtol = 1e-6
     @test t_amp < 10 * t_base + 0.05
 end
+
+# The Doppler limit, from friction (radiation pressure integrated over the solver
+# steps) against diffusion (absorption and emission recoil). σ⁺/σ⁻ beams along the
+# quantization axis x drive m = ±1 separately, so they do not interfere, and the σ
+# emission pattern puts ⟨n_x²⟩ = 2/5 of the recoil along x. Low-saturation theory:
+# k_B T_x = ħΓ (1 + 2/5)(1 + (2δ/Γ)²) / (8|2δ/Γ|), 0.7 ħΓ/2k_B at δ = −Γ/2.
+# Measured from rest, after 11 cooling times.
+@testset "1D Doppler cooling reaches the Doppler limit" begin
+    Γ = 2π * 182.4e3; λc = 556e-9; m = 174 * AtomTwin.Units.amu
+    kB = 1.380649e-23; ħ = AtomTwin.Units.hbar
+    δ = -Γ / 2; s = 0.02; T = 6e-3; dt = 0.5e-6
+    gm = HyperfineManifold(0//1, 0; label = "1S0", term = l"1S0", g_F = 0.0)
+    em = HyperfineManifold(1//1, 1; label = "3P1", term = l"3P1", g_F = 1.5)
+    yb = Ytterbium174Atom(; levels = [gm..., em...], x_init = zeros(3), v_init = zeros(3))
+    sys = System(yb); add_quantization_axis!(sys, [1.0, 0, 0])
+    Ω = Γ * sqrt(s / 2)
+    cp = add_coupling!(sys, yb, gm => em, 0.0, Ω, 0.0;
+                       beam = PlanarBeam(λc, 1.0, [1.0, 0, 0], [0.0, 1, 1im]), active = false)
+    cm = add_coupling!(sys, yb, gm => em, 0.0, 0.0, Ω;
+                       beam = PlanarBeam(λc, 1.0, [-1.0, 0, 0], [0.0, 1, -1im]), active = false)
+    for lv in em.levels; add_detuning!(sys, yb, lv, δ); end
+    g = gm[0]
+    add_decay!(sys, yb, em[1]  => g, Γ; λ = λc, dipole = [0.0, 1, 1im])
+    add_decay!(sys, yb, em[-1] => g, Γ; λ = λc, dipole = [0.0, 1, -1im])
+    add_decay!(sys, yb, em[0]  => g, Γ; λ = λc, dipole = [1.0, 0, 0])
+    add_detector!(sys, MotionDetectorSpec(yb; dims = [1], name = "x"))
+    seq = Sequence(dt; downsample = 2)
+    @sequence seq begin Parallel([Pulse(cp, T), Pulse(cm, T)]) end
+    o = play(sys, seq; initial_state = g, shots = 300, rng = MersenneTwister(1))
+    X = o.detectors["x"]; X = ndims(X) == 3 ? X[:, 1, :] : X
+    v = diff(X, dims = 1) ./ (o.times[2] - o.times[1])
+    Tx = m * mean(abs2, v[round(Int, 2size(v, 1) / 3):end, :]) / kB
+    x = 2δ / Γ
+    @test Tx ≈ ħ * Γ * (1 + 2/5) * (1 + x^2) / (8 * abs(x)) / kB rtol = 0.12
+end

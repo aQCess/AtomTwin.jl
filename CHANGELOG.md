@@ -109,6 +109,10 @@ old tolerance. Re-run anything you intend to compare against 0.1.x.
   convergence order. (H. Schmit-Veiler)
 
 ### Added
+- Example "Laser cooling in a tweezer": ¹⁷⁴Yb on 556 nm with σ⁺/σ⁻ beams, Doppler
+  cooling in a magic trap against Sisyphus cooling in a state-dependent one
+  (β = α(³P₁)/α(¹S₀) = 2, 3: 1.5× and 2× colder than the magic trap). A unit test
+  checks the 1D Doppler limit against low-saturation theory (to 1 % at δ = −Γ/2).
 - `polarizabilities = Dict(term => model)` on any atom constructor (documented,
   never implemented): a polarizability model for a state the species does not ship,
   or an override, for that atom only.
