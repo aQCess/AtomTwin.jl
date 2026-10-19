@@ -5,7 +5,7 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
-## [0.2.1] — unreleased
+## [0.2.1] — 2026-10-19
 
 ### Fixed
 
