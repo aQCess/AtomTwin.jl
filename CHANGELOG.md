@@ -5,6 +5,27 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.2.1] — unreleased
+
+### Fixed
+
+- **Yb ³P₁ polarizability model.** The effective lines standing in for the high-lying
+  states were `J′ = 1` and `J′ = 2` only; the missing `J′ = 0` member of 6p² ³P (409 nm)
+  sets the tensor part between 470 and 540 nm, where the model had it near zero or of
+  the wrong sign (π/σ shift ratios off by up to 80σ). The line list now has the 6p²
+  ³P₀,₁,₂ multiplet (LS strengths, one fitted amplitude) and the 5d6s ¹D₂ line at
+  1032 nm, with the effective pair, (6s6d)³D₂ and (6s7s)³S₁ refitted, against 20
+  calibration-free measurements (light-shift ratios, magic angles and wavelengths;
+  χ² = 17.9 for 15 dof). Light shifts of Yb ³P₁ change at all wavelengths; at 767 nm
+  β∥ 0.381 → 0.434 and β⊥ 1.817 → 1.803.
+
+### Added
+
+- `YB171_POLARIZABILITY_3P1`: Yb-171 now has a ³P₁ model, the same line list
+  (`YB174_POLARIZABILITY_3P1` is an alias), recoupled to `F = 3/2, 1/2`.
+
+---
+
 ## [0.2.0] — 2026-10-18
 
 Numerical results change in this release: the solvers, the trap light shift, the

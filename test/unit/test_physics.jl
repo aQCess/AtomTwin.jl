@@ -691,11 +691,12 @@ end
     ls = m3P1.transitions
     i1S0 = findfirst(t -> t.freq_THz < 0, ls)
     @test ls[i1S0].J_f == 0//1                    # the line down to ¹S₀ (J′ = 0)
-    i3S1 = findfirst(t -> isapprox(t.freq_THz, 440.775408), ls)
-    @test ls[i3S1].gamma_MHz == 3.604             # ab initio branching (Porsev 1999)
+    @test m3P1 === AtomTwin.YB171_POLARIZABILITY_3P1          # one line list, both isotopes
+    @test AtomTwin.getpolarizabilitymodels(Ytterbium171Atom())["3P1"] === m3P1
+    # The J′ = 0 member of 6p² ³P (409 nm), which sets the tensor part in the blue.
+    @test any(t -> t.J_f == 0//1 && t.freq_THz > 0, ls)
     # Provenance survives, so a refit can find the free parameters.
-    @test count(t -> t.source == :fitted, ls) == 2
-    @test sum(t.gamma_MHz for t in ls if t.source == :fitted) ≈ 53.761
+    @test count(t -> t.source == :fitted, ls) == 8
 
     # The scalar part is solid — the 1S0 control against digitised thesis curves
     # is RMS 0.075 Hz/(W/cm²) — so the tensor angular dependence is what matters:
@@ -714,6 +715,29 @@ end
         sign(dV(m)) == sign(dV(lo)) ? (lo = m) : (hi = m)
     end
     @test isapprox((lo + hi) / 2, 38.5; atol = 0.9)
+end
+
+@testset "Yb 3P1 model against calibration-free light-shift data" begin
+    m, g, g1 = AtomTwin.YB174_POLARIZABILITY_3P1, AtomTwin.YB174_POLARIZABILITY_1S0, AtomTwin.YB171_POLARIZABILITY_1S0
+    # Differential polarizability of the m_J sublevel, quantization axis along the trap polarization.
+    d(λ, mJ) = polarizability_si(m, λ; F = 1//1, mF = mJ, I = 0//1, ε_z = 1.0) - polarizability_si(g, λ)
+    function crossing(f, lo, hi)
+        for _ in 1:60
+            c = (lo + hi) / 2
+            sign(f(c)) == sign(f(lo)) ? (lo = c) : (hi = c)
+        end
+        (lo + hi) / 2
+    end
+    # ¹⁷⁴Yb π/σ shift ratio ΔU₀/ΔU₁ (Ma et al., PRX 12, 021028 (2022), Fig. 6); ±2σ.
+    for (λ, R, tol) in ((473.0, 2.62, 0.6), (488.0, -0.35, 0.17), (494.0, -0.07, 0.12), (532.0, 0.015, 0.1))
+        @test isapprox(d(λ, 0//1) / d(λ, 1//1), R; atol = tol)
+    end
+    # ¹⁷⁴Yb magic wavelengths near the 1032 nm ¹D₂ resonance, ε ∥ B (Zheng et al., PRA 102, 062805 (2020)); ±3σ.
+    @test isapprox(crossing(λ -> d(λ, 0//1), 1035.0, 1036.0), 1035.68; atol = 0.12)
+    @test isapprox(crossing(λ -> d(λ, 1//1), 1035.8, 1036.6), 1036.12; atol = 0.09)
+    # ¹⁷¹Yb F = 3/2, |m_F| = 1/2 magic wavelength 486.78(10) nm (Ma et al. 2022), axis along ε; ±3σ.
+    h(λ) = polarizability_si(m, λ; F = 3//2, mF = 1//2, I = 1//2, ε_z = 1.0) - polarizability_si(g1, λ)
+    @test isapprox(crossing(h, 484.0, 489.0), 486.78; atol = 0.3)
 end
 
 @testset "the trap light shift follows the local intensity" begin
