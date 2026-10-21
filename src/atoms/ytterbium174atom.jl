@@ -41,11 +41,19 @@ import ..TermSymbol, ..TERM_REGISTRY, ..@term
 @term "3P0" 0//1      # (6s6p) ³P₀  clock
 @term "3P1" 1//1      # (6s6p) ³P₁  556 nm intercombination
 @term "1P1" 1//1      # (6s6p) ¹P₁  399 nm (no shipped polarizability model)
+@term "3P2" 2//1      # (6s6p) ³P₂  metastable (no shipped polarizability model)
 end
 
 # ======================================================================
 # Data
 # ======================================================================
+
+"""
+    YB174_DECAY_RATES
+
+E1 decay rates, shared with Yb-171: see [`YB171_DECAY_RATES`](@ref).
+"""
+const YB174_DECAY_RATES = YB171_DECAY_RATES
 
 """
     YB174_POLARIZABILITY_1S0
