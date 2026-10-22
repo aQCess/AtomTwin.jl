@@ -301,3 +301,26 @@ end
     @test_throws ArgumentError MotionDetectorSpec(Atom(; levels = [g, e]); dims = [7])
     @test_throws ArgumentError MotionDetectorSpec(PlanarBeam(1e-6, 1.0, [1.0, 0, 0], [0.0, 1, 0]); dims = [4])
 end
+
+@testset "gethamiltonian includes the trapping beams' light shifts" begin
+    g = HyperfineManifold(1//2, 0; label = "1S0", term = l"1S0")
+    e = HyperfineManifold(3//2, 1; label = "3P1", term = l"3P1")
+    yb = Ytterbium171Atom(; levels = [g.levels; e.levels])
+    s = System(yb, GaussianBeam(λ = 759e-9, w0 = 1e-6, P = 1e-3, pol = [1.0, 0, 0]))
+    add_quantization_axis!(s, [0.0, 0, 1])          # ⊥ trap polarisation: tensor mixing
+    add_zeeman_detunings!(s, yb, e; B = 1e-3)
+    q = Sequence(1e-9)
+    @sequence q begin
+        Wait(1e-9)
+    end
+    job = compile(s, q)
+    H = zeros(ComplexF64, 6, 6)
+    for f in job.fields
+        AtomTwin.Dynamiq.update!(f, 0)
+        H .+= f._coeff[] .* Matrix(f.H)
+    end
+    Hs = gethamiltonian(s)
+    @test Hs ≈ H rtol = 1e-12
+    @test abs(Hs[1, 1]) > 2π * 1e5                  # the ¹S₀ trap shift (≈ 560 kHz) is there
+    @test any(abs(Hs[i, j]) > 0 for i in 3:6, j in 3:6 if i != j)    # tensor mixing in ³P₁
+end
