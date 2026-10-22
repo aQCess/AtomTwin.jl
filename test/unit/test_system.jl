@@ -261,3 +261,43 @@ end
     end
     @test play(s, q).detectors["x"][end] ≈ 1e-7          # ballistic
 end
+
+@testset "detectors report on their own tspan" begin
+    g, e = Level("g"), Level("e")
+    function run(tspans; shots)
+        a = Atom(; levels = [g, e], x_init = [0.0, 0, 0], v_init = [1.0, 2.0, 0])
+        s = System(a)
+        c = add_coupling!(s, a, g => e, 2π * 5e6)
+        pd = PhotoDetectorSpec(name = "n", tspan = tspans)
+        add_detector!(s, pd)
+        add_decay!(s, a, e => g, 2π * 2e6; clicks = pd)
+        add_detector!(s, PopulationDetectorSpec(a, e; name = "Pe", tspan = tspans))
+        add_detector!(s, MotionDetectorSpec(a; dims = 1:6, name = "xv", tspan = tspans))
+        q = Sequence(1e-8)
+        @sequence q begin
+            Wait(1e-6)
+        end
+        play(s, q; initial_state = g, shots = shots, rng = Random.Xoshiro(7))
+    end
+    full = run(nothing; shots = 3)
+    t = full.times
+    te = [0.3e-6, 0.75e-6]
+    sub = run(te; shots = 3)
+    k = [argmin(abs.(t .- x)) for x in te]
+    in1, in2 = t .<= te[1] + 1e-15, te[1] + 1e-15 .< t .<= te[2] + 1e-15
+    @test size(sub.detectors["n"]) == (2, 3)
+    @test sub.detectors["n"][1, :] == vec(sum(full.detectors["n"][in1, :]; dims = 1))
+    @test sub.detectors["n"][2, :] == vec(sum(full.detectors["n"][in2, :]; dims = 1))
+    @test sub.detectors["Pe"] == full.detectors["Pe"][k, :]
+    @test sub.detectors["xv"] == full.detectors["xv"][k, :, :]
+    one = run(te; shots = 1)
+    @test size(one.detectors["n"]) == (2,) && size(one.detectors["xv"]) == (2, 6)
+    ## free flight: dims 4–6 are the velocity
+    @test full.detectors["xv"][end, 4:6, 1] == [1.0, 2.0, 0.0]
+    @test full.detectors["xv"][end, 1:2, 1] ≈ [1.0, 2.0] .* t[end]
+    ## tspan must be sorted and within the run; dims within 1:6 (1:3 for a beam)
+    @test_throws ArgumentError run([0.75e-6, 0.3e-6]; shots = 1)
+    @test_throws ArgumentError run([0.3e-6, 2e-6]; shots = 1)
+    @test_throws ArgumentError MotionDetectorSpec(Atom(; levels = [g, e]); dims = [7])
+    @test_throws ArgumentError MotionDetectorSpec(PlanarBeam(1e-6, 1.0, [1.0, 0, 0], [0.0, 1, 0]); dims = [4])
+end

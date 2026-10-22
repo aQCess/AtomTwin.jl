@@ -19,13 +19,14 @@ Arguments
 
 Keyword arguments
 - `name::String`: optional detector name; defaults to the empty string
+- `tspan`: times at which to report, in place of `out.times` (nearest output time)
 
 This converts `level` to its integer index via `atom.level_indices` and
 constructs a `Dynamiq.PopulationDetectorSpec` with that index.
 """
-function PopulationDetectorSpec(atom::AbstractAtom, level::AbstractLevel; name::String="")
+function PopulationDetectorSpec(atom::AbstractAtom, level::AbstractLevel; name::String="", tspan=nothing)
     level_idx = atom.level_indices[level]
-    return Dynamiq.PopulationDetectorSpec(atom; level=level_idx, name=name)
+    return Dynamiq.PopulationDetectorSpec(atom; level=level_idx, name=name, tspan=tspan)
 end
 
 """
@@ -40,21 +41,22 @@ Arguments
 
 Keyword arguments
 - `name::String`: optional detector name; defaults to the empty string
+- `tspan`: times at which to report, in place of `out.times` (nearest output time)
 
 The levels are mapped to their integer indices via `atom.level_indices`
 and passed to `Dynamiq.CoherenceDetectorSpec`.
 """
-function CoherenceDetectorSpec(atom::AbstractAtom, levels::Pair{<:AbstractLevel, <:AbstractLevel}; name::String="")
+function CoherenceDetectorSpec(atom::AbstractAtom, levels::Pair{<:AbstractLevel, <:AbstractLevel}; name::String="", tspan=nothing)
     # Convert Level to integer index
     level1_idx = atom.level_indices[levels[1]]
     level2_idx = atom.level_indices[levels[2]]
     
     # Call Dynamiq's constructor with integer level
-    return Dynamiq.CoherenceDetectorSpec(atom; levels=level1_idx=>level2_idx, name=name)
+    return Dynamiq.CoherenceDetectorSpec(atom; levels=level1_idx=>level2_idx, name=name, tspan=tspan)
 end
 
 """
-    MotionDetectorSpec(atom; dims = [1, 2, 3], name = "") -> Dynamiq.DetectorSpec
+    MotionDetectorSpec(atom; dims = [1, 2], name = "", tspan = nothing) -> Dynamiq.DetectorSpec
 
 AtomTwin wrapper for Dynamiq's motion detector specification.
 
@@ -62,8 +64,9 @@ Arguments
 - `atom::AbstractAtom`: atom whose motional degrees of freedom are monitored
 
 Keyword arguments
-- `dims`: list of coordinate indices to monitor (default `[1,2,3]` for x,y,z)
+- `dims`: components to monitor: 1–3 the position x, y, z, 4–6 the velocity
 - `name::String`: optional detector name
+- `tspan`: times at which to report, in place of `out.times` (nearest output time)
 
 This is a thin wrapper around `Dynamiq.MotionDetectorSpec`, re-exported
 for a uniform AtomTwin-facing detector API.
@@ -81,11 +84,12 @@ Arguments
 
 Keyword arguments
 - `name::String`: optional detector name
+- `tspan`: times at which to report, in place of `out.times` (nearest output time)
 
 Constructs and returns a `Dynamiq.FieldDetectorSpec(field; ...)`.
 """
-FieldDetectorSpec(field::AbstractField; name::String="") =
-    Dynamiq.FieldDetectorSpec(field; name=name)
+FieldDetectorSpec(field::AbstractField; name::String="", tspan=nothing) =
+    Dynamiq.FieldDetectorSpec(field; name=name, tspan=tspan)
 
 
 """

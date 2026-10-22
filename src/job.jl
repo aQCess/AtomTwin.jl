@@ -47,6 +47,7 @@ struct SimulationJob{S}
     detectors::Vector{Any}          # Vector{Vector{<:AbstractDetector}} — element type varies per instruction
     local_tspans::Vector     # Vector of SubArray views into full time grid, one per instruction
     detector_outputs::Dict{String, Any}
+    detector_grids::Dict{String, Any}  # detectors with their own `tspan`: see `_detector_grid`
     times::Vector{Float64}   # downsampled time grid (length = sum(t_steps[i] ÷ downsamples[i]))
     downsamples::Vector{Int} # per-instruction downsample factors
     inst_dts::Vector{Float64}# per-instruction OUTPUT step; the solver needs it
@@ -57,6 +58,36 @@ struct SimulationJob{S}
     integrator::Dynamiq.AbstractIntegrator  # propagator backend, forwarded to the solver
 end
 
+
+# A detector given its own `tspan` reports on that grid instead of `out.times`. It
+# records on the output grid like any other; each run's record is then mapped onto
+# the detector's: a `PhotoDetector` sums its clicks over (tspan[k-1], tspan[k]] (from
+# t = 0), any other detector is read at the output time nearest each tspan[k].
+function _detector_grid(spec, times)
+    name, t = spec.params.name, spec.tspan
+    T = isempty(times) ? 0.0 : times[end]
+    tol = 1e-9 * T
+    issorted(t) || throw(ArgumentError("detector \"$name\": tspan must be sorted"))
+    (isempty(t) || (t[1] > 0 && t[end] <= T + tol)) ||
+        throw(ArgumentError("detector \"$name\": tspan must lie within the run, (0, $T] s"))
+    return spec.kind === Dynamiq.PhotoDetector ?
+        (bins = [searchsortedfirst(t, x - tol) for x in times], n = length(t)) :
+        (rows = [argmin(abs.(times .- x)) for x in t],)
+end
+
+_on_detector_grid(vals, g::NamedTuple{(:rows,)}) = ndims(vals) == 1 ? vals[g.rows] : vals[g.rows, :]
+function _on_detector_grid(vals, g::NamedTuple{(:bins, :n)})
+    out = zeros(eltype(vals), g.n)
+    for (k, b) in enumerate(g.bins)
+        b <= g.n && (out[b] += vals[k])
+    end
+    return out
+end
+
+# The run's detector outputs, each on its own grid.
+_detector_outputs(job) = Dict{String, Any}(
+    name => haskey(job.detector_grids, name) ? _on_detector_grid(vals, job.detector_grids[name]) : vals
+    for (name, vals) in job.detector_outputs)
 
 _tovector(state::AbstractLevel) = [state]
 _tovector(state::Tuple) = collect(state)
@@ -448,6 +479,8 @@ function compile(sys::System, seq::Sequence;
         sys.detector_specs[j].params.name => detector_vals[j]
         for j in 1:n_detectors
     )
+    detector_grids = Dict{String, Any}(spec.params.name => _detector_grid(spec, times)
+                                       for spec in sys.detector_specs if spec.tspan !== nothing)
 
     # Snapshot the trapping beams' compile-time state (positions/amplitudes) so
     # recompile! can restore them between shots: modifiers (Move/Position/Amplitude)
@@ -462,7 +495,7 @@ function compile(sys::System, seq::Sequence;
                         atoms, resolved_beams, initial_beams, initial_atoms, resolved_fields,
                         n_auto_fields, resolved_jumps,
                         modifiers, boundary_modifiers, detectors, local_tspans,
-                        detector_outputs, times, inst_ds, inst_dts, seq.tol,
+                        detector_outputs, detector_grids, times, inst_ds, inst_dts, seq.tol,
                         integrator)
 end
 

@@ -62,21 +62,24 @@ Inert spec for constructing a `MotionDetector` at runtime.
 
 # Keywords
 
-- `dims::AbstractVector{<:Integer} = [1, 2]`: Components to record.
+- `dims::AbstractVector{<:Integer} = [1, 2]`: Components to record: 1–3 the position
+  x, y, z; for an atom also 4–6, the velocity v_x, v_y, v_z.
 - `name::AbstractString = \"\"`: Logical name used to group outputs.
-- `tspan::Union{Nothing,Vector{Float64}} = nothing`:
-  Optional time vector to attach to the spec. If `nothing`, the runtime
-  supplies the segment or full-run `tspan`.
+- `tspan::Union{Nothing,Vector{Float64}} = nothing`: Times at which to report,
+  in place of `out.times`; each is read at the nearest output time.
 
 Specs are declarative: they do not allocate buffers. At runtime, a resolver
 binds `obj` to either the original (persistent run) or a per-run copy
 (stateless run), and the detector is instantiated with the appropriate `tspan`.
 """
-MotionDetectorSpec(obj;
-                   dims::AbstractVector{<:Integer} = [1, 2],
-                   name::AbstractString            = "",
-                   tspan::Union{Nothing,Vector{Float64}} = nothing) =
-    DetectorSpec{typeof(MotionDetector)}(
+function MotionDetectorSpec(obj;
+                            dims::AbstractVector{<:Integer} = [1, 2],
+                            name::AbstractString            = "",
+                            tspan::Union{Nothing,Vector{Float64}} = nothing)
+    nmax = obj isa AbstractBeam ? 3 : 6          # a beam has a position, no velocity
+    all(d -> 1 <= d <= nmax, dims) ||
+        throw(ArgumentError("MotionDetectorSpec: dims must lie in 1:$nmax, got $(collect(dims))"))
+    return DetectorSpec{typeof(MotionDetector)}(
         MotionDetector,
         obj,
         (dims = collect(dims), name = name),
@@ -84,16 +87,17 @@ MotionDetectorSpec(obj;
         Float64,
         length(dims)
     )
+end
 
 """
     write!(d::MotionDetector{NLevelAtom}, i)
 
-Sample the position of the specified atom at time step `i`, writing each
-requested coordinate into `d.vals[i, :]`.
+Sample the position or velocity of the specified atom at time step `i`, writing each
+requested component into `d.vals[i, :]`.
 """
 function write!(d::MotionDetector{NLevelAtom,V,T}, i::Int) where {V,T}
     for (j, dim) in enumerate(d.dims)
-        d.vals[i, j] = d.obj.x[dim]
+        d.vals[i, j] = dim <= 3 ? d.obj.x[dim] : d.obj.v[dim - 3]
     end
 end
 
