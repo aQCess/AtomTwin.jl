@@ -862,6 +862,43 @@ end
     @test 0.3 < n_pi / n_sig < 3.0
 end
 
+@testset "manifold decay: recoil pattern and clicks by photon polarisation" begin
+    # J = 1 → 0 about a tilted axis (x): e₀ emits π photons only, e₊ σ photons only.
+    g = HyperfineManifold(0//1, 0; label = "1S0", term = l"1S0")
+    e = HyperfineManifold(1//1, 1; label = "3P1", term = l"3P1", g_F = 1.493)
+    function run(; Ω_π, Ω_p, shots = 8)
+        yb  = Ytterbium174Atom(; levels = [g..., e...])
+        sys = System(yb)
+        pdπ, pdσ = PhotoDetectorSpec(name = "pi"), PhotoDetectorSpec(name = "sigma")
+        add_detector!(sys, pdπ); add_detector!(sys, pdσ)
+        add_decay!(sys, yb, e => g, 2π * 182e3; λ = 556e-9, clicks = (π = pdπ, σ = pdσ))
+        add_quantization_axis!(sys, [1.0, 0.0, 0.0])          # after the decay: order is free
+        add_zeeman_detunings!(sys, yb, e; B = 0.0, delta = 0.0)
+        cp = add_coupling!(sys, yb, g => e; Ω_π = Ω_π, Ω_p = Ω_p, Ω_m = 0.0, active = false)
+        seq = Sequence(2e-7; downsample = 100)
+        @sequence seq begin
+            Pulse(cp, 1e-4)
+        end
+        out = play(sys, seq; initial_state = g[0], shots = shots, frozen = true)
+        dip = Dict(yb.level_indices[e[m]] => yb.inner.dipole[yb.level_indices[e[m]] => yb.level_indices[g[0]]]
+                   for m in (-1, 0, 1))
+        sum(out.detectors["pi"]), sum(out.detectors["sigma"]), dip, yb
+    end
+    nπ, nσ, dip, yb = run(Ω_π = 2π * 180e3, Ω_p = 0.0)
+    @test nπ > 20 && nσ == 0
+    nπ, nσ, _, _ = run(Ω_π = 0.0, Ω_p = 2π * 180e3)
+    @test nπ == 0 && nσ > 20
+    ## π dipole along the axis, σ dipoles circular in the plane ⊥ to it
+    dπ = dip[yb.level_indices[e[0]]]
+    @test abs(dπ[1]) ≈ 1 && abs(dπ[2]) < 1e-12 && abs(dπ[3]) < 1e-12
+    for m in (-1, 1)
+        d = dip[yb.level_indices[e[m]]]
+        @test abs(d[1]) < 1e-12 && abs(d[2]) ≈ abs(d[3]) ≈ 1 / √2
+    end
+    @test_throws ErrorException add_decay!(System(Ytterbium174Atom(; levels = [g..., e...])),
+        Ytterbium174Atom(; levels = [g..., e...]), e => g, 1.0; clicks = (sigma = nothing,))
+end
+
 @testset "a manifold decay transfers excited coherence to the ground state" begin
     # One jump per photon polarisation: the π branch, amplitudes ∓1/√3, carries the
     # coherence of (|e₊⟩ + |e₋⟩)/√2 to the ground state, ρ₊₋ = −1/6 for J = ½ → ½.

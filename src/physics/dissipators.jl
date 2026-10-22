@@ -42,12 +42,15 @@ function add_decay!(system, atom::AbstractAtom, level::Pair{<:AbstractLevel, <:A
 end
 
 # One jump `L = √Gamma Σ c |g⟩⟨e|` over `branches = [(e => g) => c, …]`.
+# `polarization` (a photon q about the quantization axis) instead of `dipole` defers the
+# recoil dipole to the axis a run uses: see `_set_photon_dipoles!`.
 function _add_decay!(system, atom::AbstractAtom, branches, Gamma;
-                     active=true, clicks=nothing, λ=nothing, dipole=nothing)
+                     active=true, clicks=nothing, λ=nothing, dipole=nothing, polarization=nothing)
     dipole === nothing || λ !== nothing ||
         error("add_decay!: `dipole` shapes the recoil kick, which needs the photon wavelength `λ`.")
     level = first(branches).first
-    node = DecayNode(Gamma, atom, level; active=active, clicks=_clicks_name(clicks), branches=branches)
+    node = DecayNode(Gamma, atom, level; active=active, clicks=_clicks_name(clicks), branches=branches,
+                     polarization=polarization)
     build_node!(node, system.basis)
     push!(system, node)
     if λ !== nothing
@@ -122,6 +125,15 @@ with branching ratios set by Clebsch-Gordan coefficients.
 There is one jump per photon polarisation q, `L_q = √rate Σₘ c_q(m) |g_{m+q}⟩⟨e_m|`,
 so a superposition of excited sublevels decays into the matching superposition of
 ground sublevels (coherence transfer).
+
+With `λ`, each jump's recoil kick follows the emission pattern of its polarisation
+about the quantization axis: π photons `∝ sin²θ`, σ photons `∝ (1 + cos²θ)/2`. `clicks` is one `PhotoDetectorSpec` for every
+photon, or a named tuple `(π = spec₁, σ = spec₂)` to count the two kinds apart (a
+polarisation left out is not counted):
+
+```julia
+add_decay!(sys, yb, P1 => S0, Γ; λ = 556e-9, clicks = (π = pdπ, σ = pdσ))
+```
 """
 function add_decay!(system, atom::AbstractAtom, levels::Pair{HyperfineManifold,HyperfineManifold},
                     rate; active=true, tol=1e-10, clicks=nothing, λ=nothing)
@@ -136,7 +148,8 @@ end
 # `branches = [e => [(g, CG, q), …], …]`. The emission amplitudes are normalised over
 # each excited sublevel, and grouped by q into one coherent jump each: the three
 # polarisations are orthogonal photon modes, so they decay incoherently.
-function _add_polarized_decays!(system, atom, branches, rate; tol, kwargs...)
+# Each jump carries its photon's polarisation, which sets its recoil pattern.
+function _add_polarized_decays!(system, atom, branches, rate; tol, clicks, kwargs...)
     byq = Dict(q => Pair{<:Pair,Float64}[] for q in -1:1)
     for (e, gs) in branches
         total_strength = sum(abs2(c) for (_, c, _) in gs)
@@ -146,8 +159,35 @@ function _add_polarized_decays!(system, atom, branches, rate; tol, kwargs...)
         end
     end
     for q in -1:1
-        isempty(byq[q]) || _add_decay!(system, atom, identity.(byq[q]), rate; kwargs...)
+        isempty(byq[q]) || _add_decay!(system, atom, identity.(byq[q]), rate;
+                                       clicks = _polarization_clicks(clicks, q), polarization = q,
+                                       kwargs...)
     end
+end
+
+"""
+    _set_photon_dipoles!(system, q_axis)
+
+Give every polarised decay with a recoil (`λ`) the dipole of its photon about `q_axis`:
+`ẑ′` for π, `(x̂′ ± iŷ′)/√2` for σ. Called for the axis a run uses (`compile`, and
+`recompile!` for a sampled axis), as the tensor light shift is.
+"""
+function _set_photon_dipoles!(system, q_axis)
+    ex, ey, ez = _quantization_frame(q_axis)
+    for n in system.nodes
+        (n isa DecayNode && n.polarization !== nothing) || continue
+        key = n.atom.level_indices[n.transition.first] => n.atom.level_indices[n.transition.second]
+        haskey(n.atom.inner.lambda, key) || continue
+        q = n.polarization
+        n.atom.inner.dipole[key] = Tuple(q == 0 ? ComplexF64.(ez) : (ex .+ q * im .* ey) ./ √2)
+    end
+end
+
+_polarization_clicks(clicks, q) = clicks
+function _polarization_clicks(clicks::NamedTuple, q)
+    issubset(keys(clicks), (:π, :σ)) ||
+        error("add_decay!: `clicks` as a named tuple takes the keys π and σ.")
+    return get(clicks, q == 0 ? :π : :σ, nothing)
 end
 
 """
@@ -167,7 +207,8 @@ end
     add_decay!(system, atom, levels::Pair{FineManifold,FineManifold}, rate; ...)
 
 Add spontaneous decay with Clebsch-Gordan branching ratios between fine-structure
-manifolds, one coherent jump per photon polarisation as for hyperfine manifolds.
+manifolds, one coherent jump per photon polarisation as for hyperfine manifolds
+(including the recoil patterns and `clicks` by polarisation).
 """
 function add_decay!(system, atom::AbstractAtom,
                     levels::Pair{FineManifold,FineManifold},

@@ -255,6 +255,7 @@ function compile(sys::System, seq::Sequence;
 
     # === PHASE 2: INITIALIZE ATOMS (uses resolved beams, may sample positions/velocities) ===
     q_axis = getquantizationaxis(sys)
+    _set_photon_dipoles!(sys, q_axis)
     tensor_pairs = _tensor_may_vary(sys) ? :all : :fit
     atoms = [initialize!(sys.atoms[i], sys.atoms[i].inner;
                          beams=resolved_beams, rng=rng, param_values=param_values,
@@ -545,6 +546,7 @@ function recompile!(job::SimulationJob, sys::System;
     # used. The tensor polarizability depends on it, so omitting it recomputes α
     # against ẑ from the second shot on.
     q_axis = _shot_quantization_axis(sys, rng, param_values)
+    _set_photon_dipoles!(sys, q_axis)
     for i in 1:length(sys.atoms)
         initialize!(sys.atoms[i], job.atoms[i]; beams=all_beams, rng=rng,
                     param_values=param_values, q_axis=q_axis)
