@@ -107,10 +107,6 @@ polarizability_au
 polarizability_si
 getdecayrates
 getlinefrequencies
-AtomTwin.YB171_DECAY_RATES
-AtomTwin.YB171_LINE_FREQUENCIES
-AtomTwin.YB174_DECAY_RATES
-AtomTwin.YB174_LINE_FREQUENCIES
 ```
 
 ### Utilities
