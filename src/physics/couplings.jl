@@ -535,6 +535,10 @@ function add_coupling!(
 )
     ground, excited = level
     _check_e1_allowed(first(ground.levels), first(excited.levels))
+    # A concrete beam: couplings that follow its field at the atom.
+    beam isa AbstractBeam && return add_coupling!(system, atom, level; beam, q_axis, d_red, active, tol)
+    # A parametric beam is resolved per shot (`BeamNode`), its Rabi frequencies at the
+    # atom's initial position.
     d_red = something(d_red, reduced_dipole(atom, first(ground.levels), first(excited.levels)))
     q_axis_vec = Vector{Float64}(q_axis)
     couplings = Dynamiq.AbstractField[]
@@ -566,18 +570,24 @@ end
 Add electric-dipole couplings between hyperfine manifolds.
 
 - If only `beam` is given: Rabi frequencies are derived from the beam E-field
-  at the atom's position via `d_red`, by default the species' value for the line
-  ([`reduced_dipole`](@ref)). So `add_coupling!(sys, yb, S0 => P1; beam)` drives the
-  ¹⁷¹Yb 556 nm line with the beam's intensity and polarization.
+  via `d_red`, by default the species' value for the line ([`reduced_dipole`](@ref)).
+  So `add_coupling!(sys, yb, S0 => P1; beam)` drives the ¹⁷¹Yb 556 nm line with the
+  beam's intensity and polarization. The positional form `add_coupling!(sys, yb,
+  S0 => P1, beam)` is the same, and also takes a parametric beam (a `Parameter`
+  power or a `MixedPolarization`), resolved per shot with its Rabi frequencies at
+  the atom's initial position.
 - If `Ω_π`/`Ω_p`/`Ω_m` are given without `beam`: uniform `GlobalCoupling`s
   are created with those amplitudes; a polarization left out is not driven.
-- If both `beam` and `Ω_π`/`Ω_p`/`Ω_m` are given: position-dependent
-  `GaussianCouplingNode`s are created, with the explicit values in place of the
+- If both `beam` and `Ω_π`/`Ω_p`/`Ω_m` are given: the explicit values replace the
   beam-derived ones (useful when selection rules underestimate the effective
   coupling, as for a hyperfine-mixed clock line). They are the Rabi frequencies
   at the beam's reference point (its focus); the coupling follows the beam's
   profile and phase at the atom.
 - If neither `beam` nor any Ω is provided: an error is raised.
+
+With a beam the couplings follow the field at the atom: a `PlanarBeam` gives
+`PlanarCoupling`s (phase `exp(ik·x)`, and the radiation pressure and recoil of the
+semiclassical motion), any other beam `GaussianCoupling`s (its profile and phase).
 
 `Ω_π`, `Ω_p` and `Ω_m` are polarization-resolved, exactly as the positional
 `Ω_π, Ω_σ⁺, Ω_σ⁻`: each pair takes its Clebsch–Gordan coefficient
@@ -614,14 +624,18 @@ function add_coupling!(
             _check_e1_allowed(g, e)
             d_red = something(d_red, reduced_dipole(atom, g, e))
             Ω = nothing
-            Ω0 = rabi_frequency(atom, g, e, beam, atom.x; q_axis = q_axis_vec, d_red = d_red)
+            ## a plane wave's Rabi frequency at the origin; `PlanarCoupling` adds exp(ik·x)
+            x0 = beam isa PlanarBeam ? zeros(3) : atom.x
+            Ω0 = rabi_frequency(atom, g, e, beam, x0; q_axis = q_axis_vec, d_red = d_red)
         else
             Ω  = compute_coupling_strength(g, e, atom, override, override, override)
             Ω0 = _resolve_node_default(Ω)
         end
         abs(Ω0) < tol && continue
 
-        if beam !== nothing
+        if beam isa PlanarBeam
+            push!(couplings, _add_coupling!(system, atom, g => e, something(Ω, Ω0); beam, active))
+        elseif beam !== nothing
             node = GaussianCouplingNode(atom, g => e, beam, q_axis_vec,
                                         something(d_red, 0.0), g, e;
                                         Ω0_override = Ω, active = active)
