@@ -393,3 +393,34 @@ end
     M2 = applied(2 * H, cis(0.3)); @test M2 ≈ M2'
     @test applied(2 * H, cis(0.3)) ≈ 2 * applied(H, cis(0.3))
 end
+
+@testset "an instant retune moves the atom in a quantum run, at second order" begin
+    g = Level("1S0")
+    function run(dt; quantum)
+        tw = TweezerArray(λ = 759e-9, w0 = 1e-6, P_total = 20e-3, row_freqs = [0.0], col_freqs = [0.0])
+        yb = Ytterbium174Atom(; levels = [g], x_init = [0.0, 0, 0], v_init = [0.0, 0, 0])
+        s = System([yb], [tw])
+        add_detector!(s, MotionDetectorSpec(yb; dims = [1, 4], name = "x"))
+        q = Sequence(dt)
+        @sequence q begin
+            Wait(2e-6)
+            FreqCol(tw, 1, 0.3e6)
+            Wait(2e-6)
+        end
+        o = quantum ? play(s, q; initial_state = g) : play(s, q)
+        o.detectors["x"][end, :]
+    end
+    xq, xc = run(4e-9; quantum = true), run(4e-9; quantum = false)
+    @test abs(xq[1]) > 1e-8                       # the atom follows the displaced trap
+    @test xq ≈ xc rtol = 1e-9                     # as the classical solver has it
+    ## the first drift after the retune uses the force at the new trap position
+    x = [run(dt; quantum = false)[1] for dt in (8e-9, 4e-9, 2e-9)]
+    @test 3.3 < (x[1] - x[2]) / (x[2] - x[3]) < 4.7
+end
+
+@testset "a parametric beam on a single level pair is refused, not silently dropped" begin
+    g, e = Level("g"), Level("e")
+    a = Atom(; levels = [g, e])
+    pb = GaussianBeam(556e-9, Parameter(:w0, 1e-6), 1e-3)
+    @test_throws ArgumentError add_coupling!(System(a), a, g => e, 2π * 1e6; beam = pb)
+end

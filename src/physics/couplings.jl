@@ -100,6 +100,12 @@ function _add_coupling!(
     beam !== nothing && noise !== nothing && throw(ArgumentError(
         "add_coupling!: `noise` is not applied to a beam-derived coupling; give the " *
         "noise model without `beam`, or the beam without `noise`."))
+    # A parametric beam is not an AbstractBeam: it used to fall through to a plain
+    # global coupling, losing the profile, phase and polarization without a word.
+    beam isa ParametricBeam && throw(ArgumentError(
+        "add_coupling!: a parametric beam (a Parameter waist or power, a MixedPolarization) " *
+        "is resolved per shot only by the manifold forms, add_coupling!(sys, atom, " *
+        "g_manifold => e_manifold, beam); give a single level pair a concrete beam."))
 
     node = if beam isa PlanarBeam
         PlanarCouplingNode(Ω, atom, level, beam; active=active)

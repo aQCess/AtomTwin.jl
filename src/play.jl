@@ -383,6 +383,7 @@ function _play(job::SimulationJob;
         @inbounds for i in 1:n_instructions
             for m in job.boundary_modifiers[i]; begin_instruction!(m); end
             for m in job.modifiers[i]; begin_instruction!(m); end
+            _reprime_forces!(job, i)
             isempty(job.local_tspans[i]) ||
                 evolve!(job.atoms, job.local_tspans[i];
                         beams=job.beams, modifiers=job.modifiers[i],
@@ -398,6 +399,7 @@ function _play(job::SimulationJob;
         @inbounds for i in 1:n_instructions
             for m in job.boundary_modifiers[i]; begin_instruction!(m); end
             for m in job.modifiers[i]; begin_instruction!(m); end
+            _reprime_forces!(job, i)
             isempty(job.local_tspans[i]) ||
                 evolve!((job.state, job.atoms), job.local_tspans[i];
                         fields=job.fields, beams=job.beams, jumps=job.jumps,
@@ -455,4 +457,16 @@ function _is_static(job::SimulationJob)
 end
 
 _acts_on_beam(m) = m isa Dynamiq.PositionModifier || m isa Dynamiq.MoveModifier ||
+                   m isa Dynamiq.SetPositionModifier ||
                    (hasproperty(m, :field) && getproperty(m, :field) isa Dynamiq.AbstractBeam)
+
+# A boundary modifier that moves a beam (an instant retune) changes the force at
+# the atoms' unchanged positions; the velocity-Verlet force cached from the previous
+# instruction is then stale and the next drift would use it (an O(dt) error).
+function _reprime_forces!(job, i)
+    any(m -> m isa Dynamiq.SetPositionModifier, job.boundary_modifiers[i]) || return
+    for a in job.atoms
+        Dynamiq.reset_force!(a)
+    end
+    return
+end
