@@ -372,3 +372,24 @@ end
     @test size(gethamiltonian(sys)) == (2, 2)
     @test_throws MethodError gethamiltonian(sys; bogus = 1)
 end
+
+@testset "Dynamiq basis and operator utilities" begin
+    D = AtomTwin.Dynamiq
+    a = D.NLevelAtom(2); b = D.Basis([a], [(1,), (2,)])
+    @test a._pidx == [[1], [2]]                       # explicit elements set the index lists
+    @test D.productstate(b, (2,)) == ComplexF64[0, 1]
+    @test_throws ArgumentError D.productstate(b, (3,))
+    # A scaled operator keeps its forward/reverse split, so a complex time
+    # coefficient still gives a Hermitian term.
+    H = D.Op(b, a, 1 => 2, 1.0)
+    function applied(op, c)
+        M = zeros(ComplexF64, 2, 2)
+        for j in 1:2
+            v = zeros(ComplexF64, 2); v[j] = 1; w = zeros(ComplexF64, 2)
+            D.apply!(w, [(Ref(ComplexF64(c)), op)], v, ComplexF64(1)); M[:, j] = w
+        end
+        M
+    end
+    M2 = applied(2 * H, cis(0.3)); @test M2 ≈ M2'
+    @test applied(2 * H, cis(0.3)) ≈ 2 * applied(H, cis(0.3))
+end

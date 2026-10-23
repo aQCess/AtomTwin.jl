@@ -1,13 +1,11 @@
-"""
-Features:
-
-- Semiclassical simulation of atomic dynamics including motion.
-- Accurate treatment of multilevel effects and light shifts.
-- Efficient sparse representation of operators.
-- Efficient simulation of closed and open system dynamics using high-order
-  Trotter-like or Magnus-like decompositions.
-- Support for both global and local Hamiltonian terms.
-"""
+# Features:
+#
+# - Semiclassical simulation of atomic dynamics including motion.
+# - Accurate treatment of multilevel effects and light shifts.
+# - Efficient sparse representation of operators.
+# - Efficient simulation of closed and open system dynamics using high-order
+#   Trotter-like or Magnus-like decompositions.
+# - Support for both global and local Hamiltonian terms.
 
 using StatsBase   # sample, Weights
 using Polyester   # @batch

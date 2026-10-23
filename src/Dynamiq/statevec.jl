@@ -59,11 +59,7 @@ struct Basis{N}
             elements = filter(n -> count(x -> x == levelidx, n) <= maxocc, elements)
         end
 
-        # Precompute per-atom index lists for each internal level
-        for (i, atom) in enumerate(atoms)
-            atom._pidx = [findall(v -> v[i] == lvl, elements) for lvl in 1:atom.n]
-        end
-
+        _set_pidx!(atoms, elements)
         new{length(atoms)}(Tuple(atoms), elements, length(elements),
                            elementindex(elements))
     end
@@ -77,8 +73,17 @@ struct Basis{N}
     subspace or symmetry sector is required.
     """
     function Basis(atoms::Vector, elements::Vector)
+        _set_pidx!(atoms, elements)
         new{length(atoms)}(Tuple(atoms), elements, length(elements),
                            elementindex(elements))
+    end
+end
+
+# Per-atom index lists of the basis elements in each internal level, reused when
+# building single-atom operators and reading populations.
+function _set_pidx!(atoms, elements)
+    for (i, atom) in enumerate(atoms)
+        atom._pidx = [findall(v -> v[i] == lvl, elements) for lvl in 1:atom.n]
     end
 end
 
@@ -301,8 +306,9 @@ import Base: *
 Scale the full operator (forward + reverse) by a scalar `coeff`.
 """
 function *(coeff::Number, op::Op)
-    # Scale full operator (forward + reverse)
-    return Op(coeff * sparse(op))
+    # Scale both parts, keeping the split: a time coefficient still enters as
+    # c·forward + conj(c)·reverse, so a real `coeff` keeps the term Hermitian.
+    return rescale!(Op(copy(op.forward), copy(op.reverse), op.dim), coeff)
 end
 
 """
@@ -507,7 +513,10 @@ If `rho == false`, returns the state vector `|s⟩`. If `rho == true`,
 returns the projector `|s⟩⟨s|` as a density matrix.
 """
 function productstate(b::Basis{N}, s::NTuple{N,Int}; rho = false) where {N}
-    i = findfirst(x -> x == s, b.elements)
+    i = get(b.index, s, nothing)
+    i === nothing && throw(ArgumentError(
+        "productstate: $s is not a basis element (a level index out of range, or a " *
+        "state removed by `maxoccupations`)"))
     psi = zeros(ComplexF64, b.dim)
     psi[i] = 1
     if !rho
