@@ -54,11 +54,13 @@ function _local_outer_indices(sys::System, atom::AbstractAtom, i::Int, j::Int)
     atomidx = findfirst(a -> a == atom, b.atoms)
     atomidx === nothing && error("Atom not found in system basis.")
     pairs = Tuple{Int,Int}[]
-    for (x, e1) in enumerate(b.elements), (y, e2) in enumerate(b.elements)
-        if e1[atomidx] == i && e2[atomidx] == j &&
-           Dynamiq.issame(e1, e2, except = [atomidx])
-            push!(pairs, (x, y))
-        end
+    # As `operator1`: the row partner of a column element is that element with
+    # this atom's level set to `i`, found in O(1) through the basis index.
+    for (y, e2) in enumerate(b.elements)
+        e2[atomidx] == j || continue
+        x = get(b.index, Base.setindex(e2, i, atomidx), 0)
+        x == 0 && continue                      # partner outside a truncated basis
+        push!(pairs, (x, y))
     end
     return pairs
 end

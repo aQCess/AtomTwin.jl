@@ -77,6 +77,15 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   axis. Species masses are AME2020 isotope masses (0.04–0.11 % below the mass
   numbers; trap frequencies move by up to 0.05 %); the Rb D1 reduced dipole is
   4.231 ea₀.
+- **Laser phase noise.** The synthesised phase noise was far too weak: `S_φ` was
+  taken as `S_ν/(2πf)²` for an `S_ν` in Hz²/Hz (it is `S_ν/f²`), the one-sided PSD
+  was doubled, the sinusoid amplitude was `2√(…)` for `√(2…)`, and the band started
+  at `1/T`, which drops most of a white floor's phase diffusion — together ~10× too
+  little phase variance for a servo bump and ~100× for a white floor. The
+  synthesis now reproduces `Var[φ(T) − φ(0)] = 2π² h₀ T` for a white floor `h₀` to
+  ~10 % and a servo bump's `∫S_ν/f² df` to a few %; the band starts at `1/(100T)`
+  and `n_freqs` defaults to 300. **Every run with a `LaserPhaseNoiseModel`
+  changes**, the `rabi_with_noise` example included.
 - **Instruction constructors** take any `Real` duration, `On`/`Off` a vector with
   `dt`/`downsample`, `MoveRow`/`RampRow`/`RampCol` a vector of rows and a
   `Parameter` delta, like their column twins; `FreqRow/Col` keep the array's `r0`.

@@ -12,10 +12,16 @@ NOISE MODELS
 
 """
     LaserPhaseNoiseModel(; bump_ampl, bump_center, bump_width,
-                          powerlaw_ampl, powerlaw_exp = 0.0, n_freqs = 100)
+                          powerlaw_ampl, powerlaw_exp = 0.0, n_freqs = 300)
 
-Realistic laser phase noise model using a parameterized frequency-noise
-power spectral density (PSD) in Hz²/Hz.
+Realistic laser phase noise model using a parameterized one-sided frequency-noise
+power spectral density (PSD) `S_ν(f)` in Hz²/Hz (the convention of Day et al.,
+npj Quantum Inf. 8, 72 (2022)); the phase noise is `S_φ(f) = S_ν(f)/f²`. A white
+floor `powerlaw_ampl = h₀` gives a Lorentzian linewidth `π h₀`.
+
+A noise trace is a sum of `n_freqs` sinusoids at log-spaced frequencies from two
+decades below the trace's fundamental to the Nyquist limit, each with a random
+phase; `n_freqs` should put several points across the servo bump.
 
 The PSD model combines a Gaussian “servo bump” and a power-law background:
 
@@ -46,7 +52,7 @@ struct LaserPhaseNoiseModel <: AbstractNoiseModel
             bump_width = 2.0e5,
             powerlaw_ampl = 0.25e5,
             powerlaw_exp = 0.0,
-            n_freqs = 100)
+            n_freqs = 300)
         new(bump_ampl, bump_center, bump_width, powerlaw_ampl, powerlaw_exp, n_freqs)
     end
 end
@@ -154,21 +160,27 @@ function get_noise_spectrum(noise::LaserPhaseNoiseModel, tspan::Vector{Float64})
     n_freqs = noise.n_freqs
     dt = tspan[2] - tspan[1]
     total_duration = tspan[end] - tspan[1]
-    
-    f_min = 1 / total_duration
+
+    # Below 1/T a component is a slow drift of the phase across the trace. For a
+    # white frequency floor that drift IS most of the phase diffusion over T (a
+    # random walk gains equal variance from every decade below 1/T), so the band
+    # reaches two decades under the fundamental; above, the Nyquist limit.
+    f_min = 1 / (100 * total_duration)
     f_max = 1 / (2 * dt)
-    
+
     freqs = exp.(range(log(f_min), log(f_max), length=n_freqs))
-    
+
+    # The model's parameters are the one-sided PSD (Day et al., npj QI 8, 72 (2022)
+    # convention): no doubling.
     function laser_psd_direct(f)
         servobump_freq = noise.bump_ampl * exp(-((f - noise.bump_center)^2) / (2 * noise.bump_width^2)) +
                          noise.bump_ampl * exp(-((f + noise.bump_center)^2) / (2 * noise.bump_width^2))
         powerlaw_freq = noise.powerlaw_ampl * (f + 1e-10)^noise.powerlaw_exp
         return servobump_freq + powerlaw_freq
     end
-    
-    psd_values = [2 * laser_psd_direct(f) for f in freqs]  # One-sided PSD
-    
+
+    psd_values = [laser_psd_direct(f) for f in freqs]
+
     return freqs, psd_values
 end
 
@@ -220,13 +232,11 @@ function update_noise!(vals::Vector{ComplexF64}, tspan, global_offset, nf::Noisy
     # Compute phase noise
     @inbounds for i in 1:n_f
         f = freqs[i]
-        # NOTE:
-        # psd_vals is a *one-sided* frequency-noise PSD S_ν(f) (Hz^2/Hz).
-        # Each real sinusoid sin(2π f t + θ) with random phase θ represents the ±f pair
-        # but has variance A^2 / 2. To reproduce the total variance
-        # ∫ S_φ(f) df = ∫ S_ν(f) / (2π f)^2 df,
-        # the amplitude must therefore include an extra factor of 2 (not √2).
-        amplitude = 2 * sqrt(psd_vals[i] * dlogf / f) / 2π
+        # `psd_vals` is the one-sided frequency-noise PSD S_ν(f) in Hz²/Hz. The phase
+        # is φ = 2π ∫δν dt, so S_φ(f) = S_ν(f)/f² (rad²/Hz), and the sinusoid of the
+        # log-spaced bin of width Δf = f·dlogf carries variance A²/2 = S_φ(f) Δf:
+        #     A = √(2 S_ν(f) Δf) / f.
+        amplitude = sqrt(2 * psd_vals[i] * f * dlogf) / f
         phase = phases[i]
        
         @simd for j in 1:n_t
@@ -362,10 +372,11 @@ end
     laser_phase_psd(freqs, noise::AbstractNoiseModel) -> psd_phase
 
 Compute the laser phase-noise power spectral density S_φ(f) in rad²/Hz
-from the frequency-noise PSD S_ν(f) in Hz²/Hz, using
+from the frequency-noise PSD S_ν(f) in Hz²/Hz. The phase is
+`φ = 2π ∫ δν dt`, so
 
 \\[
-S_\\phi(f) = \\frac{S_\\nu(f)}{(2\\pi f)^2}.
+S_\\phi(f) = \\frac{S_\\nu(f)}{f^2}.
 \\]
 
 Arguments:
@@ -386,7 +397,7 @@ Sφ = laser_phase_psd(f, noise) # phase noise PSD in rad^2/Hz
 """
 function laser_phase_psd(freqs, noise)
     Sν = laser_freq_psd(freqs, noise)
-    return Sν ./ ((2π .* freqs).^2)
+    return Sν ./ (freqs .^ 2)
 end
 
 # Simple linear interpolation helper

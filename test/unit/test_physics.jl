@@ -1480,3 +1480,42 @@ end
     @test_logs (:warn, r"not linearly polarised") match_mode = :any AtomTwin._init_species_data!(sr, sr.inner, [circ])
     @test_logs AtomTwin._init_species_data!(sr, sr.inner, [tw])
 end
+
+@testset "laser phase noise reproduces its spectrum: white floor and servo bump" begin
+    # S_ν in Hz²/Hz, φ = 2π∫δν dt: a white floor h₀ gives Var[φ(T) − φ(0)] = 2π² h₀ T,
+    # a servo bump Var[φ] = ∫ S_ν/f² df.
+    g, e = Level("g"), Level("e")
+    function trace(nm, T, dt)
+        a = Atom(; levels = [g, e]); s = System(a)
+        add_coupling!(s, a, g => e, 1.0; noise = nm), collect(dt:dt:T)
+    end
+    h0, T, dt = 2.5e4, 100e-6, 2e-8
+    nf, tspan = trace(LaserPhaseNoiseModel(bump_ampl = 0.0, powerlaw_ampl = h0), T, dt)
+    Random.seed!(nf.rng, 11)
+    v = 0.0
+    for _ in 1:300
+        z = AtomTwin.generate_noise(tspan, 0.0, nf)
+        φ = cumsum(vcat(0.0, angle.(z[2:end] ./ z[1:end-1])))
+        v += (φ[end] - φ[1])^2 / 300
+    end
+    @test 0.75 < v / (2π^2 * h0 * T) < 1.1
+    hg, fg, σ = 2e5, 1e6, 2e5
+    nf2, tspan2 = trace(LaserPhaseNoiseModel(bump_ampl = hg, bump_center = fg, bump_width = σ, powerlaw_ampl = 0.0), 20e-6, 2e-9)
+    Random.seed!(nf2.rng, 12)
+    v2 = sum(angle(AtomTwin.generate_noise(tspan2, 0.0, nf2)[end])^2 for _ in 1:300) / 300
+    f = exp.(range(log(1e4), log(1e8); length = 20000))
+    @test v2 ≈ sum(AtomTwin.laser_phase_psd(f, nf2.noise) .* f .* log(f[2] / f[1])) rtol = 0.15
+    @test AtomTwin.laser_phase_psd(fg, nf2.noise) ≈ hg / fg^2        # S_φ = S_ν/f²
+end
+
+@testset "a symbolic operator materialises as the low-level operator does" begin
+    g, e = Level("g"), Level("e")
+    a1, a2 = Atom(; levels = [g, e]), Atom(; levels = [g, e])
+    s = System([a1, a2])
+    P = Matrix(AtomTwin.Dynamiq.sparse(AtomTwin.Op(AtomTwin.projector(e), s, a2)))
+    s2 = System([a1, a2]); add_detuning!(s2, a2, e, -1.0)            # H_ee = −δ = |e⟩⟨e| on atom 2
+    @test P ≈ gethamiltonian(s2)
+    X = Matrix(AtomTwin.Dynamiq.sparse(AtomTwin.Op(AtomTwin.transition(g => e), s, a1)))
+    s3 = System([a1, a2]); add_coupling!(s3, a1, g => e, 2.0)
+    @test X + X' ≈ gethamiltonian(s3)
+end
