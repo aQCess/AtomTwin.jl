@@ -89,6 +89,7 @@ function update!(j::Jump, ::Val, val::Number)
     j._rate = new_rate
     j.Hnh = nothing
     j.LdagL_diag = nothing
+    return j
 end
 
 """

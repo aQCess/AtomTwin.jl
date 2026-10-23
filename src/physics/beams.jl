@@ -157,13 +157,17 @@ estimate_PER_dB(args...) = 10 * log10(estimate_PER(args...))
 PARAMETRIC BEAM CONSTRUCTORS
 =============================================================================#
 
-# GaussianBeam: w0 or P as Parameter/ParametricExpression
-function GaussianBeam(λ::Real, w0::_ParametricArg, P; r0 = [0.0, 0.0, 0.0])
-    ParametricBeam{GaussianBeam}((Float64(λ), w0, P), (r0 = Vector{Float64}(r0),))
+# GaussianBeam: w0 or P as Parameter/ParametricExpression; `pol` as for the concrete beam
+function GaussianBeam(λ::Real, w0::_ParametricArg, P; r0 = [0.0, 0.0, 0.0],
+                      pol = ComplexF64[1.0, 0.0, 0.0])
+    ParametricBeam{GaussianBeam}((Float64(λ), w0, P),
+                                 (r0 = Vector{Float64}(r0), pol = ComplexF64.(pol)))
 end
 
-function GaussianBeam(λ::Real, w0::Real, P::_ParametricArg; r0 = [0.0, 0.0, 0.0])
-    ParametricBeam{GaussianBeam}((Float64(λ), Float64(w0), P), (r0 = Vector{Float64}(r0),))
+function GaussianBeam(λ::Real, w0::Real, P::_ParametricArg; r0 = [0.0, 0.0, 0.0],
+                      pol = ComplexF64[1.0, 0.0, 0.0])
+    ParametricBeam{GaussianBeam}((Float64(λ), Float64(w0), P),
+                                 (r0 = Vector{Float64}(r0), pol = ComplexF64.(pol)))
 end
 
 # GeneralGaussianBeam: k and pol are positional to enable clean dispatch on pol type.

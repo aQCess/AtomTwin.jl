@@ -1392,3 +1392,37 @@ end
     Hr = H((s, yb) -> add_coupling!(s, yb, S0 => P1, rabi_frequencies(beam; d_red = d)...))
     @test maximum(abs.(Hr)) ≈ √3 * maximum(abs.(Hb)) rtol = 1e-9
 end
+
+@testset "beam-derived couplings keep one phase convention across manifold pairs" begin
+    # ⁸⁷Rb D1 (J = J′ = ½, I = 3/2): the far-detuned π–π Raman amplitude |1, 1⟩ → |2, 1⟩
+    # summed over F′ = 1, 2 vanishes (no rank-2 electronic operator for J = ½, rank 0 is
+    # diagonal in F); it does not for σ⁺–π. A sign fixed pair by pair broke this.
+    rb = Rubidium87Atom()
+    lv(F, m) = HyperfineLevel(F, 1//2, m, 0.0, "")
+    d(F, m, Fp, mp) = AtomTwin.dipole_matrix_element(rb, lv(F, m), lv(Fp, mp))
+    raman(m1, q1, m2) = sum(d(2//1, m2, Fp, m1 + q1) * d(1//1, m1, Fp, m1 + q1)
+                            for Fp in (1//1, 2//1) if abs(m1 + q1) <= Fp)
+    @test abs(raman(1//1, 0, 1//1)) < 1e-12          # π–π
+    @test abs(raman(0//1, 0, 0//1)) < 1e-12
+    @test abs(raman(0//1, 1, 1//1)) > 0.1             # σ⁺–π
+end
+
+@testset "d_red is honoured where there is no line data, and E1 selection rules are checked" begin
+    g, e = Level("g"), Level("e")
+    S = FineManifold(0; label = "S"); P = FineManifold(1; label = "P"); D = FineManifold(2; label = "D")
+    a = Atom(; levels = [S..., P..., D...])
+    pw = PlanarBeam(600e-9, 1.0, [0.0, 0, 1], [1.0, 0, 0])
+    gb = GaussianBeam(600e-9, 10e-6, 1e-3)
+    pb = GaussianBeam(600e-9, 10e-6, Parameter(:P, 1e-3))
+    @test length(add_coupling!(System(a), a, S => P; beam = pw, d_red = 1e-29)) == 2
+    @test length(add_coupling!(System(a), a, S => P, gb; d_red = 1e-29)) == 2
+    @test length(add_coupling!(System(a), a, S => P, pb; d_red = 1e-29)) == 3   # every |Δm| ≤ 1 pair, resolved per shot
+    @test_throws ErrorException add_coupling!(System(a), a, S => P; beam = pw)          # no line data, no d_red
+    @test_throws ArgumentError add_coupling!(System(a), a, S => D; beam = pw, d_red = 1e-29)   # |ΔJ| = 2
+    ## noise is not silently dropped with a beam
+    b = Atom(; levels = [g, e])
+    @test_throws ArgumentError add_coupling!(System(b), b, g => e, 1.0; beam = pw, noise = LaserPhaseNoiseModel())
+    ## a parametric Gaussian beam carries its polarization
+    rp = AtomTwin._resolve_beam_default(GaussianBeam(600e-9, Parameter(:w, 1e-6), 1e-3; pol = [0, 1, 0]))
+    @test rp.pol ≈ ComplexF64[0, 1, 0]
+end

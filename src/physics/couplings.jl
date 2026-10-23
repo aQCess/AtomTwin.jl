@@ -95,6 +95,11 @@ function _add_coupling!(
         @warn "Level not found in the atom; no coupling added" level_1 = level[1] level_2 = level[2]
         return nothing
     end
+    # A beam-derived coupling has no noisy form yet; dropping the model silently
+    # gave every shot the same noiseless drive.
+    beam !== nothing && noise !== nothing && throw(ArgumentError(
+        "add_coupling!: `noise` is not applied to a beam-derived coupling; give the " *
+        "noise model without `beam`, or the beam without `noise`."))
 
     node = if beam isa PlanarBeam
         PlanarCouplingNode(Ω, atom, level, beam; active=active)
@@ -252,7 +257,7 @@ function rabi_frequencies(atom::AbstractAtom, g::M, e::M, beam;
                           r0 = hasproperty(beam, :r0) ? beam.r0 : zeros(3),
                           d_red::Union{Float64,Nothing} = nothing,
                           ) where {M<:Union{HyperfineManifold,FineManifold}}
-    d = something(d_red, reduced_dipole(atom, first(g.levels), first(e.levels)))
+    d = @something d_red reduced_dipole(atom, first(g.levels), first(e.levels))
     K = 0.0
     for gl in g.levels, el in e.levels
         cg = compute_coupling_strength(gl, el, atom, 1.0, 1.0, 1.0)
@@ -278,8 +283,12 @@ The implementation includes:
 
   • Zeeman (3j) angular factor
   • Hyperfine recoupling (6j) factor
-  • A global phase choice such that a stretched σ⁺ transition
-    (if it exists) is positive
+
+The phases are the Edmonds/Condon–Shortley ones throughout, so the relative signs
+of couplings from two manifolds to a shared one (a Raman pair, a repumper) are
+consistent; an element need not be positive. The explicit-Ω forms
+(`compute_coupling_strength`) use bare Clebsch–Gordan coefficients instead, so
+there the cross-manifold signs are the caller's.
 
 `d_q = ê_q·d` are the spherical components that pair with the field coefficients
 `E_q = ê_q*·E` of `Efield_spherical` (E = Σ_q E_q ê_q), so d·E = Σ_q E_q d_q: there is
@@ -344,25 +353,16 @@ function _e1_angular(F, m, J, Fp, mp, Jp, I; norm=false)
 
     amp = threej * pref * sixj
 
-    # ---- Fix global phase via stretched σ⁺ ----
-    ms = F
-    qs = 1
-    mps = ms + qs
-
-    if abs(mps) ≤ Fp
-        threej_s = (-1)^(Fp - mps) *
-                   wigner3j(Fp, 1, F,
-                            -mps, qs, ms)
-
-        if threej_s != 0
-            sixj_s = sixj
-            pref_s = pref
-            stretched = threej_s * pref_s * sixj_s
-
-            if stretched != 0
-                amp *= sign(stretched)
-                norm && (amp /= abs(stretched))
-            end
+    # The phases above are one convention for every (F, F′) pair, which is what
+    # two pairs sharing a manifold need: a sign fixed pair by pair (say, to make
+    # each stretched σ⁺ element positive) is not a basis change and flips the
+    # interference of the two paths through the shared manifold. `norm` divides
+    # by the magnitude of the stretched σ⁺ element, when the pair has one.
+    if norm
+        mps = F + 1
+        if abs(mps) ≤ Fp
+            threej_s = wigner3j(Fp, 1, F, -mps, 1, F)
+            threej_s == 0 || (amp /= abs(threej_s * pref * sixj))
         end
     end
 
@@ -618,9 +618,13 @@ function add_coupling!(
     _check_e1_allowed(first(ground.levels), first(excited.levels))
     # A concrete beam: couplings that follow its field at the atom.
     beam isa AbstractBeam && return add_coupling!(system, atom, level; beam, q_axis, d_red, active, tol)
+    noise === nothing || throw(ArgumentError(
+        "add_coupling!: `noise` is not applied to a beam-derived coupling; give the " *
+        "noise model without `beam`, or the beam without `noise`."))
     # A parametric beam is resolved per shot (`BeamNode`), its Rabi frequencies at the
-    # atom's initial position.
-    d_red = something(d_red, reduced_dipole(atom, first(ground.levels), first(excited.levels)))
+    # atom's initial position. (`@something`: the species' line data is looked up only
+    # when no `d_red` is given.)
+    d_red = @something d_red reduced_dipole(atom, first(ground.levels), first(excited.levels))
     q_axis_vec = Vector{Float64}(q_axis)
     couplings = Dynamiq.AbstractField[]
 
@@ -649,7 +653,9 @@ end
                   d_red=nothing, q_axis=[0,0,1], active=true, tol=1e-10)
 
 Add electric-dipole couplings between hyperfine manifolds, or between fine-structure
-manifolds (`Pair{FineManifold,FineManifold}`, the `I = 0` case with `F = J`).
+manifolds (`Pair{FineManifold,FineManifold}`, the `I = 0` case with `F = J`). A mixed
+pair (a hyperfine ground manifold to a fine-structure excited one) has no
+beam-derived form: give it explicit `Ω_π, Ω_σ⁺, Ω_σ⁻`.
 
 - If only `beam` is given: Rabi frequencies are derived from the beam E-field
   via `d_red`, by default the species' value for the line ([`reduced_dipole`](@ref)).
@@ -704,7 +710,7 @@ function add_coupling!(
         if override === nothing
             beam === nothing && continue            # this polarization is not driven
             _check_e1_allowed(g, e)
-            d_red = something(d_red, reduced_dipole(atom, g, e))
+            d_red = @something d_red reduced_dipole(atom, g, e)
             Ω = nothing
             ## the Rabi frequency at the beam's reference point: the origin for a plane
             ## wave (`PlanarCoupling` adds exp(ik·x)), the focus for a Gaussian beam
@@ -736,17 +742,28 @@ function add_coupling!(
 end
 
 # A beam-derived Rabi frequency carries the J-level 6j symbol {J′ F′ I; F J 1},
-# which vanishes for J = J′ = 0: every pair would get Ω = 0 and be dropped
-# without a word. The ¹⁷¹Yb/⁸⁷Sr clock line is E1 only through hyperfine mixing,
-# which this model does not compute, so the user must supply the strength.
+# which vanishes for J = J′ = 0 and for |ΔJ| > 1: every pair would get Ω = 0 and be
+# dropped without a word. The ¹⁷¹Yb/⁸⁷Sr clock line is E1 only through hyperfine
+# mixing, which this model does not compute, so the user must supply the strength.
 function _check_e1_allowed(g, e)
-    (hasproperty(g, :J) && hasproperty(e, :J) && g.J == 0 && e.J == 0) || return nothing
-    throw(ArgumentError(
-        "add_coupling!: $(g.label) → $(e.label) is J = 0 → 0, E1-forbidden at the J level, " *
-        "so a beam-derived Rabi frequency is identically zero. For a clock line made " *
-        "allowed by hyperfine mixing (¹⁷¹Yb, ⁸⁷Sr) give the polarization-resolved Rabi " *
-        "frequencies: add_coupling!(sys, atom, g => e, Ω_π, Ω_σ⁺, Ω_σ⁻; beam), or the " *
-        "Ω_π/Ω_p/Ω_m keywords with `beam`."))
+    (hasproperty(g, :J) && hasproperty(e, :J)) || return nothing
+    if g.J == 0 && e.J == 0
+        throw(ArgumentError(
+            "add_coupling!: $(g.label) → $(e.label) is J = 0 → 0, E1-forbidden at the J level, " *
+            "so a beam-derived Rabi frequency is identically zero. For a clock line made " *
+            "allowed by hyperfine mixing (¹⁷¹Yb, ⁸⁷Sr) give the polarization-resolved Rabi " *
+            "frequencies: add_coupling!(sys, atom, g => e, Ω_π, Ω_σ⁺, Ω_σ⁻; beam), or the " *
+            "Ω_π/Ω_p/Ω_m keywords with `beam`."))
+    end
+    abs(g.J - e.J) <= 1 || throw(ArgumentError(
+        "add_coupling!: $(g.label) → $(e.label) has |ΔJ| = $(abs(g.J - e.J)) > 1: not an " *
+        "E1 line, so a beam-derived Rabi frequency is identically zero."))
+    if hasproperty(g, :F) && hasproperty(e, :F)
+        abs(g.F - e.F) <= 1 || throw(ArgumentError(
+            "add_coupling!: $(g.label) → $(e.label) has |ΔF| = $(abs(g.F - e.F)) > 1: not an " *
+            "E1 line, so a beam-derived Rabi frequency is identically zero."))
+    end
+    return nothing
 end
 
 

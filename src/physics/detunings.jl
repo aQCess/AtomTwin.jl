@@ -31,7 +31,7 @@ diagonal energy shift; a complex amplitude would make the term non-Hermitian and
 is rejected at compile time). `Pulse`'s `amplitudes` keyword reads as an
 amplitude envelope; for a detuning it is really a frequency-vs-time *sweep*.
 """
-function add_detuning!(system, atom::AbstractAtom, level::AbstractLevel, delta; active=true, tol=1e-10)
+function add_detuning!(system, atom::AbstractAtom, level::AbstractLevel, delta; active=true)
     node = DetuningNode(delta, atom, level; active=active)
     build_node!(node, system.basis)
     push!(system, node)
@@ -68,7 +68,7 @@ in units of Tesla.
 Returns a vector of the created `Detuning` objects.
 """
 function add_zeeman_detunings!(system, atom::AbstractAtom, manifold::AbstractManifold;
-                               B=0.0, delta=0.0, active=true, tol=1e-10)
+                               B=0.0, delta=0.0, active=true)
     detunings = Detuning[]
 
     for level in manifold
@@ -77,7 +77,7 @@ function add_zeeman_detunings!(system, atom::AbstractAtom, manifold::AbstractMan
         elseif manifold isa FineManifold
             zeeman_coeff = Float64(level.mJ) * zeeman_g(atom, level) * BOHR_MAGNETON_RAD_S_TESLA
         else
-            zeeman_coeff = 0.0
+            error("add_zeeman_detunings!: no Zeeman term is defined for a $(typeof(manifold))")
         end
 
         # Physical detuning for this level: delta - zeeman_coeff * B

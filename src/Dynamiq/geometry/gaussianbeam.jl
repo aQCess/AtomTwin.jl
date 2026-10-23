@@ -53,7 +53,12 @@ Construct a `GaussianBeam` from wavelength, transverse waist, and power.
 - `w0`: Waist radius (m).
 - `P`: Optical power (W).
 - `r0`: Beam center position (default `[0, 0, 0]`).
-- `pol::Vector{Complex}`: Complex polarization vector in global coordinates
+- `pol::Vector{Complex}`: Complex polarization vector in global coordinates. It is
+  normalised but **not** projected transverse to the beam, which propagates along
+  `+z`: a `pol` with a `z` component is taken as the polarization direction the
+  atom sees (the trap light shift and a beam-derived coupling use it as given),
+  which `GeneralGaussianBeam` and `PlanarBeam` would project out. Give a transverse
+  `pol` when the two beam types are to agree.
 
 `I0` and `w0z` are derived automatically from these parameters.
 """
