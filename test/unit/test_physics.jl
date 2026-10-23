@@ -1055,6 +1055,58 @@ end
     @test σplus(true) ≈ σplus(false) rtol = 1e-9
 end
 
+@testset "species line data: d_red for a beam-derived coupling" begin
+    # ¹⁷¹Yb 556 nm: a σ⁺ beam at the cycling transition's saturation intensity drives
+    # |½, ½⟩ → |3/2, 3/2⟩ at Ω = Γ/√2, and every excited sublevel decays at Γ.
+    S0  = HyperfineManifold(1//2, 0; label = "1S0", term = l"1S0")
+    P32 = HyperfineManifold(3//2, 1; label = "3P1", term = l"3P1")
+    P12 = HyperfineManifold(1//2, 1; label = "3P1'", term = l"3P1")
+    yb  = Ytterbium171Atom(; levels = [S0..., P32..., P12...])
+    Γ, ω = getdecayrates(yb)["3P1" => "1S0"], 2π * getlinefrequencies(yb)["3P1" => "1S0"]
+    d = reduced_dipole(yb, S0[1//2], P32[3//2])
+    @test reduced_dipole(yb, P32[3//2], S0[1//2]) == d                 # either order
+    Isat = AtomTwin.Units.hbar * ω^3 * Γ / (12π * AtomTwin.Units.c^2)     # πhcΓ/3λ³
+    beam = PlanarBeam(2π * AtomTwin.Units.c / ω, Isat, [0.0, 0, 1], [1.0, 1im, 0] / √2)
+    s = System(yb)
+    add_coupling!(s, yb, S0 => P32, beam)                               # no d_red
+    H = gethamiltonian(s)
+    i(l) = yb.level_indices[l]
+    @test abs(H[i(P32[3//2]), i(S0[1//2])]) ≈ Γ / (2√2) rtol = 1e-12
+    for e in (P32[1//2], P12[1//2])
+        Σd² = sum(abs2(AtomTwin.dipole_matrix_element(yb, g, e) * d) for g in S0.levels)
+        @test ω^3 * Σd² / (3π * AtomTwin.Units.ε0 * AtomTwin.Units.hbar * AtomTwin.Units.c^3) ≈ Γ rtol = 1e-12
+    end
+    @test_throws ErrorException reduced_dipole(Atom(; levels = [S0..., P32...]), S0[1//2], P32[3//2])
+end
+
+@testset "a beam-derived plane-wave coupling pushes the atom like an explicit one" begin
+    # Radiation pressure acts through `PlanarCoupling`s; a beam-derived coupling to a
+    # `PlanarBeam` must be one, so a moving atom scatters exactly as with explicit Ω.
+    S0  = HyperfineManifold(1//2, 0; label = "1S0", term = l"1S0")
+    P32 = HyperfineManifold(3//2, 1; label = "3P1", term = l"3P1")
+    yb0 = Ytterbium171Atom()
+    Γ, ω = getdecayrates(yb0)["3P1" => "1S0"], 2π * getlinefrequencies(yb0)["3P1" => "1S0"]
+    Isat = AtomTwin.Units.hbar * ω^3 * Γ / (12π * AtomTwin.Units.c^2)
+    function clicks(form)
+        yb  = Ytterbium171Atom(; levels = [S0..., P32...])
+        sys = System(yb)
+        b = PlanarBeam(2π * AtomTwin.Units.c / ω, 15Isat, [0.0, 0, 1], [1.0, 1im, 0] / √2)
+        cp = form == :explicit ? add_coupling!(sys, yb, S0 => P32, 0.0, Γ * sqrt(7.5), 0.0; beam = b, active = false) :
+             form == :keyword  ? add_coupling!(sys, yb, S0 => P32; beam = b, active = false) :
+                                 add_coupling!(sys, yb, S0 => P32, b; active = false)
+        pd = PhotoDetectorSpec(name = "n", tspan = [50e-6])
+        add_detector!(sys, pd)
+        add_decay!(sys, yb, P32 => S0, Γ; λ = 2π * AtomTwin.Units.c / ω, clicks = pd)
+        seq = Sequence(25e-9)
+        @sequence seq begin
+            Pulse(cp, 50e-6)
+        end
+        play(sys, seq; initial_state = S0[1//2], shots = 4, rng = MersenneTwister(1)).detectors["n"]
+    end
+    @test clicks(:keyword) ≈ clicks(:explicit)
+    @test clicks(:positional) ≈ clicks(:explicit)
+end
+
 @testset "add_coupling! keyword form takes a Parameter, and a Gaussian beam in either form" begin
     g  = HyperfineManifold(0//1, 0; label = "1S0", term = l"1S0")
     e  = HyperfineManifold(1//1, 1; label = "3P1", term = l"3P1")

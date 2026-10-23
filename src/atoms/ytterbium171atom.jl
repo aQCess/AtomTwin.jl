@@ -231,6 +231,28 @@ const YB171_DECAY_RATES = Dict{Pair{String,String},Float64}(
 )
 
 """
+    YB171_LINE_FREQUENCIES
+
+Measured transition frequencies (Hz) of the lines in [`YB171_DECAY_RATES`](@ref), keyed the
+same way: the line positions the polarizability models use (Kroeze et al.; NIST level
+energies). Those models fit line strengths and effective lines, not these positions; the
+strengths here come from the decay rates alone. A frequency and its decay rate give the
+line's reduced dipole ([`reduced_dipole`](@ref)), from which `add_coupling!` derives Rabi
+frequencies from a beam. Lines to ³P₂ and from ¹P₁ to ³D_J are not listed.
+"""
+const YB171_LINE_FREQUENCIES = Dict{Pair{String,String},Float64}(
+    ("1P1"       => "1S0") => 751.526389e12,
+    ("3P1"       => "1S0") => 539.386800e12,
+    ("(5d6s)3D1" => "3P0") => 215.870446e12,
+    ("(5d6s)3D1" => "3P1") => 194.778008e12,
+    ("(5d6s)3D2" => "3P1") => 202.657933e12,
+    ("(6s7s)3S1" => "3P0") => 461.867846e12,
+    ("(6s7s)3S1" => "3P1") => 440.775408e12,
+    ("(6s6d)3D1" => "3P0") => 675.141040e12,
+    ("(6s6d)3D1" => "3P1") => 654.048602e12,
+)
+
+"""
     YB171_POLARIZABILITY
 
 Dictionary of all Yb-171 polarizability models, keyed by state label.
@@ -254,3 +276,5 @@ Convenience type for a Yb-171 atom with built-in polarizability models.
 const Ytterbium171Atom = AtomWrapper{:Ytterbium171}
 
 getpolarizabilitymodels(::Ytterbium171Atom) = YB171_POLARIZABILITY
+getdecayrates(::Ytterbium171Atom) = YB171_DECAY_RATES
+getlinefrequencies(::Ytterbium171Atom) = YB171_LINE_FREQUENCIES

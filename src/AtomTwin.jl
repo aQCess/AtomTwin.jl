@@ -157,7 +157,8 @@ export play
 export add_zeeman_detunings!
 export add_quantization_axis!, getquantizationaxis
 export add_light_shift!
-export add_coupling!, add_detuning!, rabi_frequencies
+export add_coupling!, add_detuning!, rabi_frequencies, reduced_dipole
+export getdecayrates, getlinefrequencies
 export add_decay!, add_dephasing!
 export add_interaction!, add_vdwinteraction!
 export add_hamiltonian!

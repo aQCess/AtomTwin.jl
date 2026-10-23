@@ -4,6 +4,7 @@
 ```@docs
 add_coupling!
 rabi_frequencies
+reduced_dipole
 AtomTwin.Dynamiq.GlobalCoupling
 AtomTwin.Dynamiq.PlanarCoupling
 AtomTwin.Dynamiq.GaussianCoupling
