@@ -5,6 +5,47 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- **Density-matrix dephasing with signed amplitudes.** A diagonal jump over several
+  levels, `L = Σ vₛ|s⟩⟨s|`, now damps a coherence at `½γ|vᵢ − vⱼ|²` and turns it at
+  `γ Im(vᵢvⱼ*)`. The step used `|vᵢ||vⱼ|`, so a σz-type jump left the coherence
+  undamped in the density-matrix solver while MCWF damped it. The built-in
+  `add_dephasing!` (one level per jump) was not affected.
+- **`Sequence(; tol)` with a Taylor integrator.** The automatic step took the order-4
+  bound whatever the order: `Taylor(n < 4)` stepped past `tol`.
+- **Parameter expressions.** Beams and instructions resolved only `+` and `*`, so
+  `p - 1` or `1/p` built but failed at `play`; all resolvers now share one table
+  (`+`, `-`, `*`, `inv`, `abs`), and `-p` and `p/q` are defined. A noisy `Parameter`
+  in a beam or an instruction now draws from the `rng` given to `play` rather than
+  the global RNG, so such runs are reproducible (and change).
+- **Wavelength units.** `polarizability_si`, `polarizability_au`,
+  `light_shift_coeff_Hz_per_Wcm2` and `scattering_rate_per_Wcm2` take nanometres;
+  a wavelength in metres (`759e-9`, `759nm`) returned a finite, wrong value and is now
+  an error.
+- **Unknown species.** `AtomWrapper{S}` for a species with no defaults took 87 amu and
+  `I = 1/2` silently; it now needs `mass` and `I`.
+- **Beam constructors.** The `GeneralGaussianBeam` keyword form always threw; an `Int`
+  power made `GaussianBeam` throw and `GeneralGaussianBeam` return a parametric beam.
+  Both take any `Real`, and `PlanarBeam` gains a keyword form.
+- **API consistency.** Manifold `add_decay!` returns its `Jump`s (it returned
+  `nothing`); `add_zeeman_detunings!` returns a typed vector;
+  `ExpectationDetectorSpec(sys, atom, O)` takes `tspan`; the detector wrappers take
+  any string `name`; `gethamiltonian` no longer swallows unknown keywords; the
+  warning for a coupling to a level the atom lacks no longer throws.
+- **Dynamiq.** `Basis(atoms, elements)` sets the atoms' population indices;
+  `productstate` names a state missing from the basis; `coeff * op` keeps the
+  operator's forward/reverse split, so the term stays Hermitian.
+
+### Added
+
+- Beam-derived couplings between fine-structure manifolds (`FineManifold => FineManifold`,
+  e.g. Yb-174 556 nm), with the `I = 0`, `F = J` angular factor.
+
+---
+
 ## [0.2.1] — 2026-10-19
 
 ### Fixed
