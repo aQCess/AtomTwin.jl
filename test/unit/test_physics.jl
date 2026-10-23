@@ -862,6 +862,48 @@ end
     @test 0.3 < n_pi / n_sig < 3.0
 end
 
+@testset "PhotoDetector aperture: each photon collected by its own direction" begin
+    # A σ (or π) photon from J = 1 → 0 about ẑ, through an NA 0.7 objective: the fraction
+    # collected is its dipole pattern integrated over the cone, c = cos θ = √(1 − NA²):
+    #   along ẑ  f_σ = ⅜[(1 − c) + (1 − c³)/3],   f_π = ½ − ¾c + ¼c³
+    #   along x̂  f_σ = ⅜(1 − c) + (3/16)(⅔ − c + c³/3)
+    g = HyperfineManifold(0//1, 0; term = l"1S0")
+    e = HyperfineManifold(1//1, 1; term = l"3P1")
+    Γ, Ω, T = 2π * 182e3, 2π * 1e6, 1e-3
+    function counts(pol; aperture = nothing, efficiency = 1.0, λ = 556e-9, shots = 24)
+        yb  = Ytterbium174Atom(; levels = [g..., e...])
+        sys = System(yb)
+        cp  = add_coupling!(sys, yb, g => e; Ω_π = pol == :π ? Ω : 0.0, Ω_p = pol == :σ ? Ω : 0.0,
+                            active = false)
+        pd  = PhotoDetectorSpec(; name = "n", tspan = [T], aperture, efficiency)
+        add_detector!(sys, pd)
+        add_decay!(sys, yb, e => g, Γ; λ, clicks = pd)
+        seq = Sequence(1e-7)
+        @sequence seq begin
+            Pulse(cp, T)
+        end
+        sum(play(sys, seq; initial_state = g[0], shots, frozen = true,
+                 rng = MersenneTwister(3)).detectors["n"])
+    end
+    c = sqrt(1 - 0.7^2)
+    within(n, N, f) = abs(n / N - f) < 4 * sqrt(f * (1 - f) / N)
+    ## with λ the direction comes from the recoil draw: same trajectories, a subset counted
+    for (pol, axis, f) in ((:σ, [0.0, 0, 1], 3 / 8 * ((1 - c) + (1 - c^3) / 3)),
+                           (:π, [0.0, 0, 1], 1 / 2 - 3c / 4 + c^3 / 4),
+                           (:σ, [1.0, 0, 0], 3 / 8 * (1 - c) + 3 / 16 * (2 / 3 - c + c^3 / 3)))
+        N = counts(pol)
+        n = counts(pol; aperture = (axis = axis, NA = 0.7))
+        @test n <= N && within(n, N, f)
+    end
+    ## efficiency alone, and an aperture on a decay without a recoil (direction drawn for it)
+    N = counts(:σ)
+    @test within(counts(:σ; efficiency = 0.5), N, 0.5)
+    @test within(counts(:σ; λ = nothing, aperture = (axis = [0, 0, 1], NA = 0.7)), counts(:σ; λ = nothing),
+                 3 / 8 * ((1 - c) + (1 - c^3) / 3))
+    @test_throws ArgumentError PhotoDetectorSpec(aperture = (axis = [0, 0, 1], NA = 1.2))
+    @test_throws ArgumentError PhotoDetectorSpec(efficiency = 1.5)
+end
+
 @testset "manifold decay: recoil pattern and clicks by photon polarisation" begin
     # J = 1 → 0 about a tilted axis (x): e₀ emits π photons only, e₊ σ photons only.
     g = HyperfineManifold(0//1, 0; label = "1S0", term = l"1S0")
