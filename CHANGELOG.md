@@ -38,6 +38,51 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 - **Dynamiq.** `Basis(atoms, elements)` sets the atoms' population indices;
   `productstate` names a state missing from the basis; `coeff * op` keeps the
   operator's forward/reverse split, so the term stays Hermitian.
+- **Hermiticity under a complex rate.** `rescale!` scaled the conjugate half of an
+  operator by `s` instead of `conj(s)`, so a Gaussian-beam coupling refreshed at an
+  atom displaced along the beam (every thermal shot) ran with a non-Hermitian
+  Hamiltonian: populations reached 10³. Every MCWF or statevector run with a
+  beam-derived coupling and a sampled or off-origin position changes.
+- **Instant instructions and `Parallel`.** `On`, `Off`, `AmplRow/Col`, `FreqRow/Col`
+  took two solver steps each (`On(c); Wait(T); Off(c)` drove for `T + 4dt`); they
+  take none, and a zero-step instruction leaves no sample in `out.times`. A pulse
+  shorter than its `Parallel` stayed on to the end of the `Parallel`; it ends at its
+  own duration, and an `Off` inside a `Parallel` switches at the start.
+- **Gaussian-beam couplings.** Built at the beam's focus, not where the atom sat
+  before `compile` (the origin): an addressing beam focused on a distant site was
+  silently dead. A shot beyond the beam's cutoff no longer zeroes the operator for
+  good.
+- **Interactions.** `add_vdwinteraction!` read `transition` differently from
+  `add_interaction!` (`(g,r) => (g,r)` built `|rr⟩⟨gg| + h.c.`), could not take two
+  atoms with different level objects, and threw on its default `V_cap` for a
+  `Parameter` C6.
+- **Angular factors.** The hyperfine dipole element fixed its sign pair by pair
+  (stretched σ⁺ positive), which flipped the interference of two manifolds coupled
+  to a shared one: the Rb D1 π–π Raman amplitude summed over F′ did not vanish.
+  One phase convention (Edmonds) now. A hyperfine → fine-level coupling summed the
+  polarizations' amplitudes coherently although they reach orthogonal nuclear-spin
+  states; they add in quadrature. `rabi_frequencies(beam; d_red)` takes the
+  stretched-transition element (documented); `rabi_frequencies(atom, g, e, beam)`
+  converts a reduced element so the positional form matches the beam-derived one.
+- **Build-time `tol`** dropped a `Parameter`-valued Ω or rate whose default was 0
+  (keyword manifold coupling form, manifold decay) before `play` could set it.
+- **`d_red`** was never used where it is needed: the species lookup ran first and
+  threw for a line without line data. `|ΔJ| > 1`, `|ΔF| > 1` and `noise` with a
+  beam are refused instead of silently giving nothing.
+- **Atom model.** Duplicate levels and an F outside `|J−I| … J+I` are errors; a
+  level's J is checked against its polarizability model; a species with no models
+  warns once in a beam, as does elliptical trap light (vector shift not modelled);
+  a `FineLevel` takes the I = 0 tensor shift on any isotope, as its couplings do;
+  `gethamiltonian` refreshes explicit `add_light_shift!` nodes for the current
+  axis. Species masses are AME2020 isotope masses (0.04–0.11 % below the mass
+  numbers; trap frequencies move by up to 0.05 %); the Rb D1 reduced dipole is
+  4.231 ea₀.
+- **Instruction constructors** take any `Real` duration, `On`/`Off` a vector with
+  `dt`/`downsample`, `MoveRow`/`RampRow`/`RampCol` a vector of rows and a
+  `Parameter` delta, like their column twins; `FreqRow/Col` keep the array's `r0`.
+  `add_dephasing!` states its rate convention (`L = √γ|l⟩⟨l|`: a coherence decays
+  at γ/2); manifold `add_decay!` states that `rate` is the partial rate into that
+  ground manifold.
 
 ### Added
 
