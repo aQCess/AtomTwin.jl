@@ -35,7 +35,7 @@ Line frequencies are from NIST wavelengths; dipoles are `|⟨5S₁/₂‖er‖nP
 const RB87_POLARIZABILITY_5S12 = PolarizabilityModel(
     "5S1/2",
     [
-        (freq_THz = 377.107, dipole_ea0 = 4.227, J_f = 1//2, dipole_convention = :wigner3j),  # D1  5S1/2 → 5P1/2  (795 nm)
+        (freq_THz = 377.107, dipole_ea0 = 4.231, J_f = 1//2, dipole_convention = :wigner3j),  # D1  5S1/2 → 5P1/2  (795 nm)
         (freq_THz = 384.231, dipole_ea0 = 5.977, J_f = 3//2, dipole_convention = :wigner3j),  # D2  5S1/2 → 5P3/2  (780 nm)
         (freq_THz = 710.960, dipole_ea0 = 0.342, J_f = 1//2, dipole_convention = :wigner3j),  #     5S1/2 → 6P1/2  (422 nm)
         (freq_THz = 713.477, dipole_ea0 = 0.553, J_f = 3//2, dipole_convention = :wigner3j),  #     5S1/2 → 6P3/2  (420 nm)
@@ -46,7 +46,7 @@ const RB87_POLARIZABILITY_5S12 = PolarizabilityModel(
     # Static ionic-core (Rb⁺) + valence-tail polarizability, α_core ≈ 9.08 a.u.:
     #   offset_Hz_per_Wm2 = -α_core·(4πε₀a₀³) / (2 c ε₀ h).
     offset_Hz_per_Wm2 = _au_to_offset_Hz_per_Wm2(9.08),
-    reference = "Steck 2019 (D lines); Safronova & Clark PRA 69, 022509 (2004) (6P/7P + core)",
+    reference = "Safronova & Clark PRA 69, 022509 (2004) (D lines in the symmetric 3j convention, 6P/7P + core); Steck 2019 line frequencies",
 )
 
 

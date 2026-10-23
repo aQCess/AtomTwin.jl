@@ -1426,3 +1426,57 @@ end
     rp = AtomTwin._resolve_beam_default(GaussianBeam(600e-9, Parameter(:w, 1e-6), 1e-3; pol = [0, 1, 0]))
     @test rp.pol ≈ ComplexF64[0, 1, 0]
 end
+
+@testset "atom construction rejects duplicate levels and an F outside |J−I| … J+I" begin
+    g1, g2 = HyperfineManifold(1//2, 0), HyperfineManifold(1//2, 0)
+    @test_throws ArgumentError Ytterbium171Atom(; levels = [g1..., g2...])
+    a = Ytterbium171Atom(; levels = [HyperfineManifold(1//2, 0; label = "a")...,
+                                     HyperfineManifold(1//2, 0; label = "b")...])
+    @test length(a.level_indices) == 4
+    P32 = HyperfineManifold(3//2, 1; label = "3P1", term = l"3P1")
+    @test_throws ArgumentError Ytterbium174Atom(; levels = [P32...])      # I = 0 has no F = 3/2
+    @test Ytterbium171Atom(; levels = [P32...]) isa AbstractAtom
+end
+
+@testset "polarizability bookkeeping warns once and checks the level's J against its model" begin
+    g, e = Level("g"), Level("e")
+    a = Atom(; levels = [g, e])
+    beam = GaussianBeam(1064e-9, 1e-6, 10e-3)
+    @test_logs (:warn, r"no polarizability models") AtomTwin._init_species_data!(a, a.inner, [beam])
+    @test_logs AtomTwin._init_species_data!(a, a.inner, AtomTwin.AbstractBeam[])     # no beam, no warning
+    yb = Ytterbium171Atom(; levels = [Level("1S0"), Level("leak")])
+    @test_logs (:warn, r"No polarizability model for 1 level") AtomTwin._init_species_data!(yb, yb.inner, [GaussianBeam(759e-9, 1e-6, 1e-3)])
+    bad = Ytterbium171Atom(; levels = [HyperfineManifold(1//2, 0; term = "3P1")...])   # a string term skips the J check
+    @test_throws ErrorException AtomTwin._init_species_data!(bad, bad.inner, [GaussianBeam(520e-9, 1e-6, 1e-3)])
+    ## a fine level is the I = 0 picture on any isotope, as for its couplings
+    P1 = FineManifold(1; label = "3P1", term = l"3P1")
+    a171, a174 = Ytterbium171Atom(; levels = [P1...]), Ytterbium174Atom(; levels = [P1...])
+    b = GaussianBeam(520e-9, 1e-6, 1e-3)
+    AtomTwin._init_species_data!(a171, a171.inner, [b]); AtomTwin._init_species_data!(a174, a174.inner, [b])
+    λ = AtomTwin.getwavelength(b)
+    @test a171.inner.alpha[λ] ≈ a174.inner.alpha[λ]
+    @test a171.inner.alpha[λ][1] != a171.inner.alpha[λ][2]                 # the tensor part is there
+end
+
+@testset "species masses are isotope masses" begin
+    @test Ytterbium174Atom().m / AtomTwin.Units.amu ≈ 173.93887
+    @test Rubidium87Atom().m / AtomTwin.Units.amu ≈ 86.90918
+end
+
+@testset "gethamiltonian refreshes explicit light shifts for the current axis; elliptical trap light warns" begin
+    P1 = HyperfineManifold(1//1, 1; label = "3P1", term = l"3P1")
+    tw = GaussianBeam(520e-9, 1e-6, 1e-3; pol = [1.0, 0, 0])
+    function H(order)
+        sr = Strontium88Atom(; levels = [P1...]); s = System(sr)
+        order == :axis_first && add_quantization_axis!(s, [1.0, 0, 0])
+        add_light_shift!(s, sr, P1, tw)
+        order == :axis_last && add_quantization_axis!(s, [1.0, 0, 0])
+        real.(diag(gethamiltonian(s)))
+    end
+    @test H(:axis_last) ≈ H(:axis_first)
+    @test H(:axis_last)[1] != H(:axis_last)[2]                   # ε ∥ axis: m = 0 differs from |m| = 1
+    sr = Strontium88Atom(; levels = [P1...])
+    circ = GaussianBeam(520e-9, 1e-6, 1e-3; pol = [1.0, 1im, 0] / √2)
+    @test_logs (:warn, r"not linearly polarised") match_mode = :any AtomTwin._init_species_data!(sr, sr.inner, [circ])
+    @test_logs AtomTwin._init_species_data!(sr, sr.inner, [tw])
+end

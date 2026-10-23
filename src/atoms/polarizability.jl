@@ -45,7 +45,9 @@ equivalent ways to supply that weight are accepted by the constructor:
    level. For such lines just use the natural linewidth.
 
 2. `(freq_THz = …, dipole_ea0 = …)` — the reduced dipole matrix element
-   `|⟨Jg‖er‖Je⟩|` in units of `e·a₀` (Steck's D-line convention). This is the robust
+   `|⟨Jg‖er‖Je⟩|` in units of `e·a₀`, by default in the symmetric Wigner-3j
+   convention (Safronova); pass `dipole_convention = :clebschgordan` for a value
+   from Steck's D-line tables, which are `√(2Jg+1)` smaller. This is the robust
    choice for a **multiplet** such as an alkali D₁/D₂ doublet, where the two lines
    share a ground state but have unequal line strengths (D₂ carries twice the
    strength of D₁). 
@@ -782,6 +784,7 @@ function print_polarizability_model(model::PolarizabilityModel; io::IO = stdout)
     println(io, "  state: ", model.state)
     println(io, "  J: ", model.J)
     println(io, "  offset_Hz_per_Wm2: ", model.offset_Hz_per_Wm2)
+    println(io, "  tensor_offset_Hz_per_Wm2: ", model.tensor_offset_Hz_per_Wm2)
     println(io, "  reference: ", isempty(model.reference) ? "(none)" : model.reference)
     println(io, "  transitions:")
 
@@ -797,7 +800,7 @@ function print_polarizability_model(model::PolarizabilityModel; io::IO = stdout)
         print(io, "J: ", t.J, ", ")
         print(io, "J_f: ", t.J_f, ", ")
         print(io, "source: ", t.source)
-        println()
+        println(io)
     end
     return nothing
 end

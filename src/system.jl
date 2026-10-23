@@ -233,6 +233,27 @@ at the beams' peak intensity, as for [`add_light_shift!`](@ref).
 """
 function gethamiltonian(sys::System)
     m = zeros(ComplexF64, sys.basis.dim, sys.basis.dim)
+    # `compile` adds the trapping beams' light shifts itself, so they have no node.
+    # Build them as it does. That refreshes the atoms' polarizabilities in place for
+    # the current quantization axis, as `compile` would; positions are left alone.
+    # An explicit `add_light_shift!` node caches α from the axis in force when it
+    # was added, so it is refreshed the same way before it is read.
+    explicit = LightShiftNode[n for n in sys.nodes if n isa LightShiftNode]
+    trapping = AbstractBeam[resolve(b, Dict{Symbol,Any}()) for b in sys.beams]
+    if !isempty(trapping) || !isempty(explicit)
+        beams = copy(trapping)
+        for n in explicit
+            b = _lightshift_beam(n)
+            b === nothing || any(x -> x === b, beams) || push!(beams, b)
+        end
+        tensor_pairs = _tensor_may_vary(sys) ? :all : :fit
+        for a in sys.atoms
+            _init_species_data!(a, a.inner, beams; q_axis = getquantizationaxis(sys), tensor_pairs)
+        end
+        for n in explicit
+            n._field === nothing || recompile_node!(n, n._field, nothing, Dict{Symbol,Any}())
+        end
+    end
     for node in sys.nodes
         obj = node_output(node)
         obj === nothing && continue
@@ -240,18 +261,8 @@ function gethamiltonian(sys::System)
         M === nothing && continue
         m .+= M
     end
-    # `compile` adds the trapping beams' light shifts itself, so they have no node.
-    # Build them as it does. That refreshes the atoms' polarizabilities in place for
-    # the current quantization axis, as `compile` would; positions are left alone.
-    if !isempty(sys.beams)
-        beams = AbstractBeam[resolve(b, Dict{Symbol,Any}()) for b in sys.beams]
-        tensor_pairs = _tensor_may_vary(sys) ? :all : :fit
-        for a in sys.atoms
-            _init_species_data!(a, a.inner, beams; q_axis = getquantizationaxis(sys), tensor_pairs)
-        end
-        for f in _auto_light_shifts(sys, [a.inner for a in sys.atoms], beams)
-            m .+= f._coeff[] .* getmatrix(f)
-        end
+    for f in _auto_light_shifts(sys, [a.inner for a in sys.atoms], trapping)
+        m .+= f._coeff[] .* getmatrix(f)
     end
     return m
 end
