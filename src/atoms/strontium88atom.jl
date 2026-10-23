@@ -176,3 +176,11 @@ const SR88_POLARIZABILITY = Dict(
 # ======================================================================
 
 getpolarizabilitymodels(::Strontium88Atom) = SR88_POLARIZABILITY
+
+"""
+    SR88_G_FACTORS
+
+g-factors of ⁸⁸Sr: no nuclear spin; ¹S₀ only (³P₁ not yet listed).
+"""
+const SR88_G_FACTORS = (g_I = 0.0, g_J = Dict("1S0" => 0.0))
+getgfactors(::Strontium88Atom) = SR88_G_FACTORS

@@ -107,6 +107,9 @@ polarizability_au
 polarizability_si
 getdecayrates
 getlinefrequencies
+getgfactors
+lande_gF
+zeeman_g
 ```
 
 ### Utilities

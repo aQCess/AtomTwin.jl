@@ -253,6 +253,17 @@ const YB171_LINE_FREQUENCIES = Dict{Pair{String,String},Float64}(
 )
 
 """
+    YB171_G_FACTORS
+
+g-factors of ¹⁷¹Yb (units of μ_B): the nuclear `g_I`, from the ¹S₀ Zeeman shift
+(−0.7505 kHz/G per m_F, Kroeze et al. Table 5), and the electronic `g_J` of ¹S₀ and ³P₁
+(NIST ASD). Through [`lande_gF`](@ref) they reproduce Kroeze's measured ³P₁ F′ = 3/2
+and ½ g-factors (1392.674 and 2786.10 kHz/G) to 1e-6. ³P₀ is not listed: its g-factor
+comes from hyperfine mixing with ³P₁ ([`getgfactors`](@ref)).
+"""
+const YB171_G_FACTORS = (g_I = -0.7505 / 1399.6245, g_J = Dict("1S0" => 0.0, "3P1" => 1.49282))
+
+"""
     YB171_POLARIZABILITY
 
 Dictionary of all Yb-171 polarizability models, keyed by state label.
@@ -277,4 +288,5 @@ const Ytterbium171Atom = AtomWrapper{:Ytterbium171}
 
 getpolarizabilitymodels(::Ytterbium171Atom) = YB171_POLARIZABILITY
 getdecayrates(::Ytterbium171Atom) = YB171_DECAY_RATES
+getgfactors(::Ytterbium171Atom) = YB171_G_FACTORS
 getlinefrequencies(::Ytterbium171Atom) = YB171_LINE_FREQUENCIES
