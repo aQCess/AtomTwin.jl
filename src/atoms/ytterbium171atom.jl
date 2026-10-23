@@ -175,7 +175,60 @@ import ..TermSymbol, ..TERM_REGISTRY, ..@term
 @term "3P0" 0//1      # (6s6p) ³P₀  clock
 @term "3P1" 1//1      # (6s6p) ³P₁  intercombination
 @term "1P1" 1//1      # (6s6p) ¹P₁  399 nm (no shipped polarizability model)
+@term "3P2" 2//1      # (6s6p) ³P₂  metastable (no shipped polarizability model)
 end
+
+"""
+    YB171_DECAY_RATES
+
+Einstein A coefficients (s⁻¹) of the E1 decay channels of selected Yb levels, keyed
+`upper => lower`. Levels outside the 6s6p configuration carry it in the key
+(`"(6s6d)3D1"`, `"(5d6s)3D1"`). Electronic structure only, so it serves both isotopes
+([`YB174_DECAY_RATES`](@ref)).
+
+Pass a rate to `add_decay!`. Between ¹⁷¹Yb hyperfine manifolds, `add_decay!(F′ => F, rate)`
+gives every upper sublevel the full `rate`, so when the lower level has several `F`, split
+`A` with the hyperfine branching `(2F+1)(2J′+1){J J′ 1; F′ F I}²` (it sums to 1 over `F`).
+
+| channel | A (s⁻¹) | source |
+|---|---|---|
+| ¹P₁ → ¹S₀ | 1.830e8 | τ = 5.464(11) ns, Kroeze Table 8 |
+| ¹P₁ → (5d6s)³D₁, ³D₂ | 9.56, 2.19 | ⟨‖d‖⟩ = 0.27(10), 0.32(6) a.u., Porsev 1999 |
+| ³P₁ → ¹S₀ | 1.146e6 | Kroeze Table 10 |
+| (5d6s)³D₁ → ³P₀,₁,₂ | 1.920e6, 1.060e6, 2.98e4 | τ = 332(11) ns × β, Kroeze Table 12 |
+| (5d6s)³D₂ → ³P₁,₂ | 1.897e6, 2.77e5 | τ = 460(30) ns (Bowers 1996) × β from Porsev 1999 |
+| (6s7s)³S₁ → ³P₀,₁,₂, ¹P₁ | 9.42e6, 2.609e7, 3.681e7, 1.52e5 | β / τ, τ = 13.8(17) ns, Kroeze Table 13 |
+| (6s6d)³D₁ → ³P₀,₁,₂ | 2.612e7, 1.841e7, 9.28e5 | ⟨‖d‖⟩ = 1.84, 1.62 a.u. (Porsev 2014); ³P₂ from LS |
+
+The ¹P₁ leak totals 6.4e-8 per photon (Porsev 1999), against a measured lower bound of
+1.2(4)e-7 (Honda 1999). For (6s6d)³D₁ the ³P₂ element is the LS value 1.84/√20 a.u.; the
+LS ratio reproduces the ³P₁ element to 2 %. The resulting τ = 22.0 ns agrees with the
+22.7 ns implied by the measured-lifetime line in `YB171_POLARIZABILITY_3P0`.
+Not included: (6s6d)³D₁ → 6s7p ³P_J (5.8–8 µm), for which no calculation is published; a
+Coulomb-approximation estimate puts it near 1 % of the decays.
+
+References: R. M. Kroeze et al., arXiv:2509.04416 (2025); S. G. Porsev et al., PRA 60,
+2781 (1999); S. G. Porsev et al., PRA 89, 012711 (2014); C. J. Bowers et al., PRA 53,
+3103 (1996); K. Honda et al., PRA 59, R934 (1999).
+"""
+const YB171_DECAY_RATES = Dict{Pair{String,String},Float64}(
+    ("1P1"       => "1S0")       => 1 / 5.464e-9,
+    ("1P1"       => "(5d6s)3D1") => 9.56,
+    ("1P1"       => "(5d6s)3D2") => 2.19,
+    ("3P1"       => "1S0")       => 1.1460e6,
+    ("(5d6s)3D1" => "3P0")       => 1.920e6,
+    ("(5d6s)3D1" => "3P1")       => 1.060e6,
+    ("(5d6s)3D1" => "3P2")       => 2.98e4,
+    ("(5d6s)3D2" => "3P1")       => 1.897e6,
+    ("(5d6s)3D2" => "3P2")       => 2.768e5,
+    ("(6s7s)3S1" => "3P0")       => 0.130 / 13.8e-9,
+    ("(6s7s)3S1" => "3P1")       => 0.360 / 13.8e-9,
+    ("(6s7s)3S1" => "3P2")       => 0.508 / 13.8e-9,
+    ("(6s7s)3S1" => "1P1")       => 0.0021 / 13.8e-9,
+    ("(6s6d)3D1" => "3P0")       => 2.612e7,
+    ("(6s6d)3D1" => "3P1")       => 1.841e7,
+    ("(6s6d)3D1" => "3P2")       => 9.28e5,
+)
 
 """
     YB171_POLARIZABILITY

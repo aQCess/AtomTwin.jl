@@ -717,6 +717,33 @@ end
     @test isapprox((lo + hi) / 2, 38.5; atol = 0.9)
 end
 
+@testset "Yb decay rates: lifetimes, branching and their matrix elements" begin
+    A = AtomTwin.YB171_DECAY_RATES
+    @test AtomTwin.YB174_DECAY_RATES === A
+    @test l"3P2".J == 2//1
+    # A = ω³|⟨J‖d‖J′⟩|²/(3πε₀ħc³(2J′+1)), ω from the NIST energies (cm⁻¹).
+    ea0 = 1.602176634e-19 * 5.29177210903e-11
+    Arate(ν, d) = (2π * 2.99792458e10 * ν)^3 * (d * ea0)^2 /
+                  (3π * 8.8541878128e-12 * 1.054571817e-34 * 2.99792458e8^3 * 3)
+    E3P = (17288.439, 17992.007, 19710.388)
+    # (6s6d)³D₁: the CI+all-order elements 1.84 (³P₀) and 1.62 (³P₁), and the LS ³P₂ one.
+    for (J, d) in ((0, 1.84), (1, 1.62), (2, 1.84 / sqrt(20)))
+        @test isapprox(A["(6s6d)3D1" => "3P$J"], Arate(39808.72 - E3P[J+1], d); rtol = 1e-3)
+    end
+    @test isapprox(1 / sum(A["(6s6d)3D1" => "3P$J"] for J in 0:2), 22.0e-9; rtol = 0.01)
+    # (5d6s)³D₁: Kroeze Table 12 — lifetime 332 ns and β = 0.638 / 0.352 / 0.0099.
+    a = [A["(5d6s)3D1" => "3P$J"] for J in 0:2]
+    @test isapprox(1 / sum(a), 332e-9; rtol = 0.01)
+    @test isapprox(a ./ sum(a), [0.638, 0.352, 0.0099]; atol = 2e-3)
+    # (6s7s)³S₁: Kroeze Table 13 — τ = 13.8 ns, β(³P₂) = 0.508, β(³P₀) = 0.130.
+    a = [A["(6s7s)3S1" => l] for l in ("3P0", "3P1", "3P2", "1P1")]
+    @test isapprox(1 / sum(a), 13.8e-9; rtol = 0.01)
+    @test isapprox(a[3] / sum(a), 0.508; atol = 2e-3) && isapprox(a[1] / sum(a), 0.130; atol = 2e-3)
+    # ¹P₁: leak out of the cycling transition, 6.4e-8 per photon (Porsev 1999).
+    leak = (A["1P1" => "(5d6s)3D1"] + A["1P1" => "(5d6s)3D2"]) / A["1P1" => "1S0"]
+    @test isapprox(leak, 6.4e-8; rtol = 0.02)
+end
+
 @testset "Yb 3P1 model against calibration-free light-shift data" begin
     m, g, g1 = AtomTwin.YB174_POLARIZABILITY_3P1, AtomTwin.YB174_POLARIZABILITY_1S0, AtomTwin.YB171_POLARIZABILITY_1S0
     # Differential polarizability of the m_J sublevel, quantization axis along the trap polarization.
