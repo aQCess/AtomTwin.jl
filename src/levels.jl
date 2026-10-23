@@ -3,7 +3,7 @@ Specify internal levels and manifolds for simulations.
 """
 
 # Global physical constants
-const BOHR_MAGNETON_RAD_S_TESLA = 2π * 1.39962e10  # ~1.4 MHz/Gauss in rad/s
+const BOHR_MAGNETON_RAD_S_TESLA = Units.μB / Units.hbar   # μ_B/ħ, 2π × 1.39962449 MHz/G
 
 import Base: +, -, *, /
 
@@ -145,25 +145,28 @@ Represents a specific fine-structure level with quantum numbers J, mJ, and Land�
 # Fields
 - `J::Rational{Int}`: Total electronic angular momentum quantum number
 - `mJ::Rational{Int}`: Magnetic quantum number
-- `g_J::Float64`: Landé g-factor for this level
+- `g_J::Union{Float64, Nothing}`: Landé g-factor, or `nothing` for the species' value
+  of the level's term (see [`zeeman_g`](@ref))
 - `label::String`: Human-readable label (e.g., "nS₁/₂")
 
 # Constructor
-    FineLevel(J, mJ; g_J=1.0, label="")
+    FineLevel(J, mJ; g_J=nothing, label="")
     FineLevel(J, mJ, g_J, label)
 """
 struct FineLevel <: AbstractLevel
     J::Rational{Int}
     mJ::Rational{Int}
-    g_J::Float64
+    g_J::Union{Float64, Nothing}
     label::String
     term::String
 end
 
 # `term` is appended, so the 4-argument positional form keeps working.
 FineLevel(J, mJ, g_J, label) = FineLevel(J, mJ, g_J, label, "")
-FineLevel(J, mJ; g_J=1.0, label="", term=nothing) =
-    FineLevel(J, mJ, convert(Float64, g_J), String(label), termname(term))
+FineLevel(J, mJ; g_J=nothing, label="", term=nothing) =
+    FineLevel(J, mJ, _gvalue(g_J), String(label), termname(term))
+
+_gvalue(g) = g === nothing ? nothing : Float64(g)
 
 """
     HyperfineLevel <: AbstractLevel
@@ -174,26 +177,27 @@ Represents a specific hyperfine level with quantum numbers F, mF and Landé g-fa
 - `F::Rational{Int}`: Total angular momentum quantum number
 - `J::Rational{Int}`: Orbital angular momentum quantum number
 - `mF::Rational{Int}`: Magnetic quantum number
-- `g_F::Float64`: Landé g-factor for this level
+- `g_F::Union{Float64, Nothing}`: Landé g-factor, or `nothing` for the species' value
+  from the Landé formula (see [`zeeman_g`](@ref))
 - `label::String`: Human-readable label (e.g., "³P₀")
 
 # Constructor
-    HyperfineLevel(F, J, mF; g_F=1.0, label="")
+    HyperfineLevel(F, J, mF; g_F=nothing, label="")
     HyperfineLevel(F, J, mF, g_F, label)
 """
 struct HyperfineLevel <: AbstractLevel
     F::Rational{Int}
     J::Rational{Int}
     mF::Rational{Int}
-    g_F::Float64
+    g_F::Union{Float64, Nothing}
     label::String
     term::String
 end
 
 # `term` is appended, so the 5-argument positional form keeps working.
 HyperfineLevel(F, J, mF, g_F, label) = HyperfineLevel(F, J, mF, g_F, label, "")
-HyperfineLevel(F, J, mF; g_F=1.0, label="", term=nothing) =
-    HyperfineLevel(F, J, mF, convert(Float64, g_F), String(label), termname(term))
+HyperfineLevel(F, J, mF; g_F=nothing, label="", term=nothing) =
+    HyperfineLevel(F, J, mF, _gvalue(g_F), String(label), termname(term))
 
 """
     Level <: AbstractLevel
@@ -363,12 +367,15 @@ Container for all magnetic sublevels of a hyperfine manifold with quantum number
 - `F::Rational{Int}`: Total angular momentum quantum number
 - `J::Rational{Int}`: Orbital angular momentum quantum number
 - `label::String`: Manifold label (e.g., "³P₀", "³D₁")
-- `g_F::Float64`: Landé g-factor (common for all levels in manifold)
+- `g_F::Union{Float64, Nothing}`: Landé g-factor (common for all levels in manifold).
+  Left out, it is the species' value for the term, from the Landé formula with the
+  species' g_J and g_I ([`getgfactors`](@ref), [`lande_gF`](@ref)), resolved where the
+  atom is known (`add_zeeman_detunings!`).
 - `Γ::Float64`: Natural linewidth in rad/s (for excited states)
 - `levels::Vector{HyperfineLevel}`: All magnetic sublevels mF = -F, -F+1, ..., +F
 
 # Constructor
-    HyperfineManifold(F, J; label="", g_F=1.0, Γ=0.0)
+    HyperfineManifold(F, J; label="", g_F=nothing, Γ=0.0, term=nothing)
 
 Automatically creates all 2F+1 magnetic sublevels.
 """
@@ -376,12 +383,12 @@ struct HyperfineManifold <: AbstractManifold
     F::Rational{Int}
     J::Rational{Int}
     label::String
-    g_F::Float64
+    g_F::Union{Float64, Nothing}
     Γ::Float64
     term::String
     levels::Vector{HyperfineLevel}
 
-    function HyperfineManifold(F, J; label="", g_F=1.0, Γ=0.0, term=nothing)
+    function HyperfineManifold(F, J; label="", g_F=nothing, Γ=0.0, term=nothing)
         # A term carries the state's own J. Checking it here turns the classic
         # HyperfineManifold(F, J) argument-order slip into an error at the point of
         # declaration rather than a wrong polarizability much later.
@@ -392,8 +399,8 @@ struct HyperfineManifold <: AbstractManifold
                   "argument order.")
         end
         tn = termname(term)
-        levels = [HyperfineLevel(F, J, mF, g_F, label, tn) for mF in range(-F, F, step=1)]
-        new(F, J, label, g_F, Γ, tn, levels)
+        levels = [HyperfineLevel(F, J, mF, _gvalue(g_F), label, tn) for mF in range(-F, F, step=1)]
+        new(F, J, label, _gvalue(g_F), Γ, tn, levels)
     end
 end
 
@@ -409,32 +416,34 @@ Container for all magnetic sublevels of a fine-structure manifold with quantum n
 # Fields
 - `J::Rational{Int}`: Total electronic angular momentum quantum number
 - `label::String`: Manifold label (e.g., "nS₁/₂ Rydberg", "P₃/₂")
-- `g_J::Float64`: Landé g-factor (common for all levels in manifold)
+- `g_J::Union{Float64, Nothing}`: Landé g-factor (common for all levels in manifold).
+  Left out, it is the species' value for the term ([`getgfactors`](@ref)), resolved
+  where the atom is known (`add_zeeman_detunings!`).
 - `Γ::Float64`: Natural linewidth in rad/s (for excited states)
 - `levels::Vector{FineLevel}`: All magnetic sublevels mJ = -J, -J+1, ..., +J
 
 # Constructor
-    FineManifold(J; label="", g_J=1.0, Γ=0.0)
+    FineManifold(J; label="", g_J=nothing, Γ=0.0, term=nothing)
 
 Automatically creates all 2J+1 magnetic sublevels.
 """
 struct FineManifold <: AbstractManifold
     J::Rational{Int}
     label::String
-    g_J::Float64
+    g_J::Union{Float64, Nothing}
     Γ::Float64
     term::String
     levels::Vector{FineLevel}
 
-    function FineManifold(J; label="", g_J=1.0, Γ=0.0, term=nothing)
+    function FineManifold(J; label="", g_J=nothing, Γ=0.0, term=nothing)
         Jt = termJ(term)
         if Jt !== nothing && Rational{Int}(J) != Jt
             error("manifold declares J = $(Rational{Int}(J)) but term " *
                   "$(termname(term)) has J = $Jt.")
         end
         tn = termname(term)
-        levels = [FineLevel(J, mJ, g_J, label, tn) for mJ in range(-J, J, step=1)]
-        new(J, label, g_J, Γ, tn, levels)
+        levels = [FineLevel(J, mJ, _gvalue(g_J), label, tn) for mJ in range(-J, J, step=1)]
+        new(J, label, _gvalue(g_J), Γ, tn, levels)
     end
 end
 

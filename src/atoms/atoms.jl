@@ -133,6 +133,52 @@ yb = Ytterbium171Atom()
 getdecayrates(::AtomWrapper) = Dict{Pair{String,String},Float64}()
 
 """
+    getgfactors(atom) -> (g_I = Float64, g_J = Dict{String, Float64})
+
+The species' magnetic g-factors, in units of μ_B with the Zeeman energy `μ_B g m B`: the
+nuclear `g_I` and the electronic `g_J` of each term it lists. A level declared without a
+g-factor takes them ([`zeeman_g`](@ref)). Empty for a generic `Atom`.
+
+A term is listed only where Landé recoupling holds. ¹⁷¹Yb ³P₀ is not: its g-factor comes
+from hyperfine mixing with ³P₁, so it must be given (`HyperfineManifold(…; g_F)`).
+"""
+getgfactors(::AtomWrapper) = (g_I = 0.0, g_J = Dict{String,Float64}())
+
+"""
+    lande_gF(F, J, I; g_J, g_I) -> Float64
+
+The hyperfine Landé factor (units of μ_B, as `g_J` and `g_I`):
+
+    g_F = g_J [F(F+1) + J(J+1) − I(I+1)] / 2F(F+1) + g_I [F(F+1) + I(I+1) − J(J+1)] / 2F(F+1)
+
+Zero for `F = 0`.
+"""
+function lande_gF(F, J, I; g_J, g_I)
+    F == 0 && return 0.0
+    a = F * (F + 1)
+    return Float64((g_J * (a + J * (J + 1) - I * (I + 1)) + g_I * (a + I * (I + 1) - J * (J + 1))) / 2a)
+end
+
+"""
+    zeeman_g(atom, level) -> Float64
+
+The g-factor of `level` (units of μ_B): its own `g_F` or `g_J` if it was declared with
+one, otherwise the species' value for its term ([`getgfactors`](@ref)) — through
+[`lande_gF`](@ref) for a hyperfine level. Errors if the species lists no `g_J` for the
+term.
+"""
+zeeman_g(atom::AbstractAtom, l::HyperfineLevel) =
+    l.g_F === nothing ? lande_gF(l.F, l.J, atom.I; g_J = _species_gJ(atom, l), g_I = getgfactors(atom).g_I) : l.g_F
+zeeman_g(atom::AbstractAtom, l::FineLevel) = l.g_J === nothing ? _species_gJ(atom, l) : l.g_J
+
+function _species_gJ(atom, l)
+    g_J = getgfactors(atom).g_J
+    haskey(g_J, l.term) && return g_J[l.term]
+    error("no g-factor for term \"$(l.term)\" of $(getspecies(atom)): declare the level " *
+          "(or manifold) with `g_F` / `g_J`.")
+end
+
+"""
     getlinefrequencies(atom) -> Dict{Pair{String,String}, Float64}
 
 Line frequencies (Hz) of the species' E1 lines: see [`getdecayrates`](@ref).

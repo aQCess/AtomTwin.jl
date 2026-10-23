@@ -1055,6 +1055,34 @@ end
     @test σplus(true) ≈ σplus(false) rtol = 1e-9
 end
 
+@testset "g-factors: the Landé formula with species g_J and g_I" begin
+    # ¹⁷¹Yb: Kroeze et al. measure ³P₁ F′ = 3/2, ½ at 1392.674 and 2786.10 kHz/G and ¹S₀ at
+    # −0.7505 kHz/G; the Landé formula with g_J(³P₁) = 1.49282 and g_I reproduces them.
+    μB_kHz_per_G = 1399.6245
+    S0  = HyperfineManifold(1//2, 0; term = l"1S0")
+    P32 = HyperfineManifold(3//2, 1; term = l"3P1")
+    P12 = HyperfineManifold(1//2, 1; term = l"3P1")
+    yb  = Ytterbium171Atom(; levels = [S0..., P32..., P12...])
+    @test zeeman_g(yb, S0[1//2])  * μB_kHz_per_G ≈ -0.7505  rtol = 1e-9
+    @test zeeman_g(yb, P32[3//2]) * μB_kHz_per_G ≈ 1392.674 rtol = 1e-6
+    @test zeeman_g(yb, P12[1//2]) * μB_kHz_per_G ≈ 2786.10  rtol = 1e-6
+    @test lande_gF(1, 1, 0; g_J = 1.5, g_I = 0.0) == 1.5                   # no nuclear spin: g_F = g_J
+    @test lande_gF(0, 0, 0; g_J = 0.0, g_I = 0.0) == 0.0
+    ## ¹⁷⁴Yb: I = 0, so ³P₁ has g_F = g_J
+    P1 = HyperfineManifold(1, 1; term = l"3P1")
+    @test zeeman_g(Ytterbium174Atom(; levels = [P1...]), P1[1]) == 1.49282
+    ## a declared g_F wins; a term the species does not list (³P₀) must be declared
+    @test zeeman_g(yb, HyperfineManifold(1//2, 0; term = l"3P0", g_F = -6.8e-4)[1//2]) == -6.8e-4
+    @test_throws ErrorException zeeman_g(yb, HyperfineManifold(1//2, 0; term = l"3P0")[1//2])
+    @test_throws ErrorException zeeman_g(Atom(; levels = [Level("g")]), FineManifold(1//2)[1//2])
+    ## add_zeeman_detunings! uses them: H(m) = −m g_F μ_B B
+    s = System(yb)
+    add_zeeman_detunings!(s, yb, P32; B = 1e-2)
+    H = gethamiltonian(s)
+    i = yb.level_indices[P32[3//2]]
+    @test real(H[i, i]) ≈ 1.5 * 1392.674e3 * 100 * 2π rtol = 1e-6       # 3/2 × 1392.674 kHz/G × 100 G
+end
+
 @testset "species line data: d_red for a beam-derived coupling" begin
     # ¹⁷¹Yb 556 nm: a σ⁺ beam at the cycling transition's saturation intensity drives
     # |½, ½⟩ → |3/2, 3/2⟩ at Ω = Γ/√2, and every excited sublevel decays at Γ.

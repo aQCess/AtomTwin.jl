@@ -64,6 +64,14 @@ Line frequencies, shared with Yb-171 (isotope shifts are ≲ 1 GHz): see
 const YB174_LINE_FREQUENCIES = YB171_LINE_FREQUENCIES
 
 """
+    YB174_G_FACTORS
+
+g-factors of ¹⁷⁴Yb: no nuclear spin, and the electronic `g_J` of
+[`YB171_G_FACTORS`](@ref).
+"""
+const YB174_G_FACTORS = (g_I = 0.0, g_J = YB171_G_FACTORS.g_J)
+
+"""
     YB174_POLARIZABILITY_1S0
 
 Ground-state model, shared with Yb-171 (the electronic structure is isotope
@@ -109,4 +117,5 @@ const Ytterbium174Atom = AtomWrapper{:Ytterbium174}
 
 getpolarizabilitymodels(::Ytterbium174Atom) = YB174_POLARIZABILITY
 getdecayrates(::Ytterbium174Atom) = YB174_DECAY_RATES
+getgfactors(::Ytterbium174Atom) = YB174_G_FACTORS
 getlinefrequencies(::Ytterbium174Atom) = YB174_LINE_FREQUENCIES

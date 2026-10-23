@@ -61,7 +61,8 @@ For each level the total detuning (node value) is
     delta_total = delta - zeeman_coeff * B
 
 where `zeeman_coeff = mF * g_F * μ_B` (hyperfine) or `mJ * g_J * μ_B`
-(fine). `B` and `delta` may be plain numbers or `Parameter`s. `B` is
+(fine), the g-factor from [`zeeman_g`](@ref): the manifold's own, or the species'
+value for its term. `B` and `delta` may be plain numbers or `Parameter`s. `B` is
 in units of Tesla.
 
 Returns a vector of the created `Detuning` objects.
@@ -72,9 +73,9 @@ function add_zeeman_detunings!(system, atom::AbstractAtom, manifold::AbstractMan
 
     for level in manifold
         if manifold isa HyperfineManifold
-            zeeman_coeff = Float64(level.mF) * level.g_F * BOHR_MAGNETON_RAD_S_TESLA
+            zeeman_coeff = Float64(level.mF) * zeeman_g(atom, level) * BOHR_MAGNETON_RAD_S_TESLA
         elseif manifold isa FineManifold
-            zeeman_coeff = Float64(level.mJ) * level.g_J * BOHR_MAGNETON_RAD_S_TESLA
+            zeeman_coeff = Float64(level.mJ) * zeeman_g(atom, level) * BOHR_MAGNETON_RAD_S_TESLA
         else
             zeeman_coeff = 0.0
         end
