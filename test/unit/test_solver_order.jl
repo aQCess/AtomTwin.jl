@@ -451,6 +451,25 @@ end
             end
         end
 
+        # One diagonal jump over several levels, `L = Σ vₛ|s⟩⟨s|`: a coherence
+        # decays at ½γ|vᵢ-vⱼ|² and turns at γ Im(vᵢvⱼ*) -- not at all for equal
+        # amplitudes, twice as fast as for one level for opposite ones (σz).
+        for v in ((1.0, 1.0), (1.0, -1.0), (1.0, 1.0im), (0.5, -2.0))
+            op = AtomTwin.Dynamiq.Op(Tuple{Int,Int,ComplexF64}[(3, 3, v[1]), (4, 4, v[2])],
+                                     Tuple{Int,Int,ComplexF64}[], d)
+            dg = zeros(Float64, d); dg[3] = abs2(v[1]); dg[4] = abs2(v[2])
+            J = [(Ref(ComplexF64(sqrt(1.5))), op, dg)]
+            M = zeros(ComplexF64, d, d); M[3, 3] = v[1]; M[4, 4] = v[2]
+            Id = Matrix(I, d, d)
+            𝓛 = 1.5 * (kron(conj(M), M) - 0.5 * (kron(Id, M'M) + kron(transpose(M'M), Id)))
+            for dt in (0.4, 0.1)
+                ref = reshape(exp(𝓛 * dt) * vec(ρ0), d, d)
+                ρ = copy(ρ0); q1 = copy(ρ0); q2 = copy(ρ0)
+                AtomTwin.Dynamiq.fdissipator2!(dt, ρ, J, q1, q2)
+                @test norm(ρ - ref) < 1e-12          # exact, any dt (v = $v)
+            end
+        end
+
         # Non-commuting topologies: second order, still CPTP. A cascade is the
         # real case -- population leaving 4 lands on 3, which is itself decaying
         # within the same step, and no single-step Kraus set captures that.

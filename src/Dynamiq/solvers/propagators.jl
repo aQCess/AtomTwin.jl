@@ -403,14 +403,15 @@ function fdissipator2!(dt::Float64,
     end
 
     # Self-transition (dephasing) cross term. `m0[i]*m0[j]` damps a coherence at
-    # `½(Γ[i]+Γ[j])`, right for a channel that MOVES population. A
-    # self-transition damps at `½γ(vᵢ-vⱼ)²` instead -- `L = v|s⟩⟨s|` cancels on a
-    # coherence whose two states see the same amplitude. Expanding,
+    # `½(Γ[i]+Γ[j])`, right for a channel that MOVES population. A diagonal
+    # `L = Σ vₛ|s⟩⟨s|` instead takes `ρᵢⱼ` at the rate
     #
-    #   ½γ(vᵢ-vⱼ)² = ½γvᵢ² + ½γvⱼ² - γvᵢvⱼ
+    #   γ(vᵢvⱼ* - ½|vᵢ|² - ½|vⱼ|²) = -½γ|vᵢ-vⱼ|² + iγ Im(vᵢvⱼ*)
     #
-    # the first two terms are already in `Γ`, hence in `m0`; only the cross term
-    # is missing, so undo it rather than recompute the factor. Without this a
+    # -- it cancels on a coherence whose two states see the same amplitude, and
+    # doubles on one whose amplitudes are opposite (σz). The `|v|²` terms are
+    # already in `Γ`, hence in `m0`; only `γvᵢvⱼ*` is missing, signs and phase
+    # included, so apply it rather than recompute the factor. Without this a
     # coherence between two BOTH-excited states decays at the full rate instead
     # of not at all -- invisible on one two-level atom (one of vᵢ, vⱼ is always
     # 0), O(1) wrong with N atoms.
@@ -419,11 +420,10 @@ function fdissipator2!(dt::Float64,
         γ <= 0 && continue
         for (p, i, vi) in L.forward
             p == i || continue                 # self-transitions only
-            ai = abs(vi)
             for (q, j, vj) in L.forward
                 q == j || continue
                 i == j && continue             # diagonal already handled
-                ρ[i, j] *= exp(dt * γ * ai * abs(vj))
+                ρ[i, j] *= exp(dt * γ * vi * conj(vj))
             end
         end
     end
