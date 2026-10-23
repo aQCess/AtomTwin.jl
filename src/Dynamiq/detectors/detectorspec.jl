@@ -106,7 +106,7 @@ function build_detector(spec::DetectorSpec,
         return PhotoDetector(
             tspan,  # view into global tspan
             vals;   # view into detector-specific vals array (Int)
-            name = p.name
+            name = p.name, axis = p.axis, cosθ = p.cosθ, efficiency = p.efficiency
         )
     end
 end

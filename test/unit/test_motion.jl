@@ -249,9 +249,6 @@ end
         @test isapprox(second(kicks([1, im, 0])), [3 0 0; 0 3 0; 0 0 4] / 10; atol = 0.01)
         # Off-axis linear dipole (x̂ + ŷ)/√2: ⟨n_x n_y⟩ = −1/10.
         @test isapprox(second(kicks([1, 1, 0])), [3 -1 0; -1 3 0; 0 0 4] / 10; atol = 0.01)
-        # A dipole without λ has no kick to shape.
-        yb = Ytterbium174Atom(; levels = [g, e])
-        @test_throws ErrorException add_decay!(System(yb), yb, e => g, 1.0; dipole = [1, 0, 0])
     end
 end
 

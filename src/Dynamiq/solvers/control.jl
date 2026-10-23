@@ -60,6 +60,17 @@ function _jump_time!(out, plan, D, target::Float64, n2end::Float64, jumps)
     return τ
 end
 
+const _NO_DIRECTION = (NaN, NaN, NaN)     # a photon whose direction was not drawn
+
+# Whether `d` counts the photons of `fired`: a manifold decay has one jump per photon
+# polarisation, and all of them may belong to one detector.
+function _counts(d::PhotoDetector, fired)
+    for j in d.jumps
+        j === fired && return true
+    end
+    return false
+end
+
 """
     mcwf_advance!(psi, Heff, plan, D, h, jumps, photo_detectors, i, steps,
                   downsample, _prob, _q1, _q2, rng; rp = nothing) -> psi
@@ -83,8 +94,10 @@ post-jump state.
 
 With `rp` (semiclassical runs), the radiation impulse is integrated over each
 stretch between jumps and the jump draws its recoil ([`radiation_jump!`](@ref)).
-A fired jump writes a click to any `PhotoDetector` bound to it, in the downsampled
-bin containing raw step `i`.
+A fired jump emits a photon. Its direction is drawn once, from the jump's dipole
+pattern: it kicks the atom if the wavelength is known ([`recoil!`](@ref)), and a
+`PhotoDetector` bound to the jump counts the photon if it sees it ([`detects`](@ref)),
+in the downsampled bin containing raw step `i`.
 """
 function mcwf_advance!(psi::Vector{ComplexF64},
                        Heff::Vector{Tuple{Base.RefValue{ComplexF64},Op}},
@@ -107,16 +120,14 @@ function mcwf_advance!(psi::Vector{ComplexF64},
         _renormalise!(psi, sqrt(nτ2))
         fired = jump!(psi, jumps, _prob, _q1, _q2, rng)
         _renormalise!(psi, norm(psi))
+        ## Spontaneous emission carries momentum, when the photon wavelength is known
+        ## (`add_decay!(...; λ)`); without λ the decay is radiatively correct but
+        ## momentum-free, and the photon's direction is drawn only if a detector needs it.
+        n = haskey(fired.atom.lambda, fired.transition) ? recoil!(fired, rng) : _NO_DIRECTION
         @inbounds for d in photo_detectors
-            ## `any(===(fired), d.jumps)` rather than a single identity test: a
-            ## manifold decay has one jump per photon polarisation and all of them
-            ## belong to this detector.
-            for j in d.jumps
-                if j === fired
-                    write!(d, min(cld(i, downsample), length(d.vals)))
-                    break
-                end
-            end
+            _counts(d, fired) || continue
+            isnan(n[1]) && has_aperture(d) && (n = emission_direction(fired, rng))
+            detects(d, n, rng) && write!(d, min(cld(i, downsample), length(d.vals)))
         end
         radiation_jump!(rp, fired, psi, 1.0, rng)
         left -= τ

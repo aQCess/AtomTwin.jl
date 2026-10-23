@@ -27,7 +27,8 @@ add_decay!(sys, yb, e => g, Γ; λ = 556e-9, clicks = pd)
 
 The kick is isotropic unless `dipole` gives the transition dipole (a 3-vector in the
 lab frame, complex for circular polarisation; normalised internally). Kicks then
-follow its emission pattern `∝ 1 − |n̂·d̂|²`. This matters when one dipole dominates
+follow its emission pattern `∝ 1 − |n̂·d̂|²`, and so do the photons a detector with an
+aperture collects (`PhotoDetectorSpec(; aperture)`), with or without `λ`. This matters when one dipole dominates
 the scattering: a dipole along x̂ puts 1/5 of its recoil energy along x, against
 1/3 for isotropic emission.
 
@@ -46,26 +47,21 @@ end
 # recoil dipole to the axis a run uses: see `_set_photon_dipoles!`.
 function _add_decay!(system, atom::AbstractAtom, branches, Gamma;
                      active=true, clicks=nothing, λ=nothing, dipole=nothing, polarization=nothing)
-    dipole === nothing || λ !== nothing ||
-        error("add_decay!: `dipole` shapes the recoil kick, which needs the photon wavelength `λ`.")
     level = first(branches).first
     node = DecayNode(Gamma, atom, level; active=active, clicks=_clicks_name(clicks), branches=branches,
                      polarization=polarization)
     build_node!(node, system.basis)
     push!(system, node)
-    if λ !== nothing
-        # `recoil!` reads the photon wavelength from the atom, keyed by the
-        # first branch's level-index pair, the same key `Jump` carries.
-        e_idx = atom.level_indices[level.first]
-        g_idx = atom.level_indices[level.second]
-        atom.inner.lambda[e_idx => g_idx] = Float64(λ)
-        if dipole === nothing
-            delete!(atom.inner.dipole, e_idx => g_idx)
-        else
-            d = ComplexF64.(collect(dipole))
-            (length(d) == 3 && norm(d) > 0) || error("add_decay!: `dipole` must be a nonzero 3-vector.")
-            atom.inner.dipole[e_idx => g_idx] = Tuple(d ./ norm(d))
-        end
+    # The photon's wavelength (its recoil) and dipole (its direction) live on the atom,
+    # keyed by the first branch's level-index pair, the same key `Jump` carries.
+    key = atom.level_indices[level.first] => atom.level_indices[level.second]
+    λ === nothing || (atom.inner.lambda[key] = Float64(λ))
+    if dipole === nothing
+        delete!(atom.inner.dipole, key)
+    else
+        d = ComplexF64.(collect(dipole))
+        (length(d) == 3 && norm(d) > 0) || error("add_decay!: `dipole` must be a nonzero 3-vector.")
+        atom.inner.dipole[key] = Tuple(d ./ norm(d))
     end
     return node._field
 end
@@ -168,7 +164,7 @@ end
 """
     _set_photon_dipoles!(system, q_axis)
 
-Give every polarised decay with a recoil (`λ`) the dipole of its photon about `q_axis`:
+Give every polarised decay the dipole of its photon about `q_axis`:
 `ẑ′` for π, `(x̂′ ± iŷ′)/√2` for σ. Called for the axis a run uses (`compile`, and
 `recompile!` for a sampled axis), as the tensor light shift is.
 """
@@ -177,7 +173,6 @@ function _set_photon_dipoles!(system, q_axis)
     for n in system.nodes
         (n isa DecayNode && n.polarization !== nothing) || continue
         key = n.atom.level_indices[n.transition.first] => n.atom.level_indices[n.transition.second]
-        haskey(n.atom.inner.lambda, key) || continue
         q = n.polarization
         n.atom.inner.dipole[key] = Tuple(q == 0 ? ComplexF64.(ez) : (ex .+ q * im .* ey) ./ √2)
     end

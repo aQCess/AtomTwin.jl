@@ -36,21 +36,41 @@ mutable struct PhotoDetector{V,T} <: AbstractDetector
     tspan::T
     name::String
     jumps::Vector{Jump}
+    axis::NTuple{3,Float64}    # aperture: photons with n̂·axis ≥ cosθ are collected
+    cosθ::Float64              # −1: every direction
+    efficiency::Float64        # probability that a collected photon is counted
 
-    function PhotoDetector(tspan::Vector{Float64}; name::AbstractString = "")
-        new{Vector{Int},Vector{Float64}}(zeros(Int, length(tspan)), tspan, name, Jump[])
+    function PhotoDetector(tspan::Vector{Float64}; name::AbstractString = "",
+                           axis = (0.0, 0.0, 1.0), cosθ = -1.0, efficiency = 1.0)
+        new{Vector{Int},Vector{Float64}}(zeros(Int, length(tspan)), tspan, name, Jump[],
+                                         Tuple(axis), cosθ, efficiency)
     end
 
     function PhotoDetector(tspan::AbstractVector{Float64},
                            vals::AbstractVector{<:Integer};
-                           name::AbstractString = "")
+                           name::AbstractString = "",
+                           axis = (0.0, 0.0, 1.0), cosθ = -1.0, efficiency = 1.0)
         @assert length(tspan) == length(vals) "tspan and vals must have same length"
-        new{typeof(vals),typeof(tspan)}(vals, tspan, name, Jump[])
+        new{typeof(vals),typeof(tspan)}(vals, tspan, name, Jump[], Tuple(axis), cosθ, efficiency)
     end
 end
 
+has_aperture(d::PhotoDetector) = d.cosθ > -1
+
 """
-    PhotoDetectorSpec(; name = "", tspan = nothing) -> DetectorSpec
+    detects(d::PhotoDetector, n, rng) -> Bool
+
+Whether `d` counts a photon emitted along the unit vector `n` (not read by a detector
+without an aperture): inside its aperture, `n̂·axis ≥ cos θ`, and then with probability
+`efficiency`.
+"""
+function detects(d::PhotoDetector, n, rng)
+    has_aperture(d) && n[1] * d.axis[1] + n[2] * d.axis[2] + n[3] * d.axis[3] < d.cosθ && return false
+    return d.efficiency >= 1 || rand(rng) < d.efficiency
+end
+
+"""
+    PhotoDetectorSpec(; name = "", tspan = nothing, aperture = nothing, efficiency = 1.0) -> DetectorSpec
 
 Create a detector specification for a photon-counting detector. Attach it to a
 system with `add_detector!`, then bind it to a decay channel with `add_decay!`'s
@@ -74,17 +94,36 @@ Monte Carlo) solver — i.e. `play(...; density_matrix = false)`.
   `k` counts the clicks in `(tspan[k-1], tspan[k]]` (from `t = 0`), resolved to the
   output grid. Clicks after `tspan[end]` are dropped. `tspan = [t₁, t₂]` gives the
   counts of two exposure windows ending at `t₁` and `t₂`.
+- `aperture`: `(axis = [0, 0, 1], NA = 0.7)` collects only photons emitted into the
+  cone of half-angle `asin(NA)` about `axis` (from the atom towards the lens) — an
+  objective. The direction is the photon's own, drawn from its jump's dipole pattern
+  and shared with its recoil, so the polarization dependence of the collection follows
+  from the decay's physics. `nothing` (default): every direction.
+- `efficiency`: probability that a collected photon is counted (optics, detector).
+
+```julia
+cam = PhotoDetectorSpec(name = "camera", aperture = (axis = [0, 0, 1], NA = 0.7), efficiency = 0.7)
+```
 """
-PhotoDetectorSpec(; name::AbstractString = "",
-                    tspan::Union{Nothing,Vector{Float64}} = nothing) =
-    DetectorSpec{typeof(PhotoDetector)}(
+function PhotoDetectorSpec(; name::AbstractString = "",
+                             tspan::Union{Nothing,Vector{Float64}} = nothing,
+                             aperture = nothing, efficiency::Real = 1.0)
+    0 <= efficiency <= 1 || throw(ArgumentError("PhotoDetectorSpec: efficiency must lie in [0, 1]"))
+    axis, cosθ = (0.0, 0.0, 1.0), -1.0
+    if aperture !== nothing
+        0 < aperture.NA <= 1 || throw(ArgumentError("PhotoDetectorSpec: aperture NA must lie in (0, 1]"))
+        a = collect(Float64, aperture.axis)
+        axis, cosθ = Tuple(a ./ sqrt(sum(abs2, a))), sqrt(1 - aperture.NA^2)
+    end
+    return DetectorSpec{typeof(PhotoDetector)}(
         PhotoDetector,
         nothing,              # no resolvable target object; bound to a jump via add_decay!
-        (name = name,),
+        (name = name, axis = axis, cosθ = cosθ, efficiency = Float64(efficiency)),
         tspan,
         Int,
         1
     )
+end
 
 """
     write!(d::PhotoDetector, i)

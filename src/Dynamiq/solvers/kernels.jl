@@ -537,31 +537,48 @@ function radiation_commit!(rp::RadiationPressure)
 end
 radiation_commit!(::Nothing) = nothing
 
-"""
-    recoil!(J, rng)
-
-Apply a recoil kick of magnitude `ħk` to `J`'s atom, with
-`k = 2π / J.atom.lambda[J.transition]`. The direction is isotropic, or, if the
-transition has a dipole `d̂` (`add_decay!(...; dipole)`), drawn from its emission
-pattern `∝ 1 − |n̂·d̂|²`: sin²θ about a linear dipole, (1 + cos²θ)/2 about the axis
-of a circular one.
-"""
-Base.@inline function recoil!(J::Jump, rng::AbstractRNG)
+# A draw from the emission pattern of `J`'s photon, unnormalised: isotropic, or, if the
+# transition has a dipole `d̂`, by rejection with acceptance 1 − |n̂·d̂|² (2/3 on average).
+# Without a dipole no extra draw, so isotropic runs keep their RNG stream.
+Base.@inline function _emission_draw(J::Jump, rng::AbstractRNG)
     d = get(J.atom.dipole, J.transition, nothing)
     while true
-        _x, _y, _z = randn(rng), randn(rng), randn(rng)
-        _n2 = _x * _x + _y * _y + _z * _z
-        # Rejection from isotropic: accept with 1 − |n̂·d̂|² ≤ 1 (2/3 on average).
-        # Without a dipole no extra draw, so isotropic runs keep their RNG stream.
-        d === nothing || rand(rng) < 1 - abs2(_x * d[1] + _y * d[2] + _z * d[3]) / _n2 || continue
-
-        k = 2 * pi / J.atom.lambda[J.transition]
-        c = hbar * k / J.atom.m / sqrt(_n2)
-
-        J.atom.v[1] += c * _x
-        J.atom.v[2] += c * _y
-        J.atom.v[3] += c * _z
-        return
+        x, y, z = randn(rng), randn(rng), randn(rng)
+        n2 = x * x + y * y + z * z
+        d === nothing || rand(rng) < 1 - abs2(x * d[1] + y * d[2] + z * d[3]) / n2 || continue
+        return x, y, z, n2
     end
+end
+
+"""
+    emission_direction(J, rng) -> NTuple{3,Float64}
+
+The direction of the photon `J` emits: isotropic, or, if the transition has a dipole `d̂`
+(a polarised manifold decay, or `add_decay!(...; dipole)`), drawn from its emission
+pattern `∝ 1 − |n̂·d̂|²`: sin²θ about a linear dipole, (1 + cos²θ)/2 about the axis of a
+circular one.
+"""
+Base.@inline function emission_direction(J::Jump, rng::AbstractRNG)
+    x, y, z, n2 = _emission_draw(J, rng)
+    r = sqrt(n2)
+    return (-x / r, -y / r, -z / r)
+end
+
+"""
+    recoil!(J, rng) -> NTuple{3,Float64}
+
+Kick `J`'s atom by the recoil of the photon it emits, `ħk` with
+`k = 2π / J.atom.lambda[J.transition]`, and return the photon's direction (see
+[`emission_direction`](@ref)); the atom moves the opposite way.
+"""
+Base.@inline function recoil!(J::Jump, rng::AbstractRNG)
+    x, y, z, n2 = _emission_draw(J, rng)
+    k = 2 * pi / J.atom.lambda[J.transition]
+    c = hbar * k / J.atom.m / sqrt(n2)
+    J.atom.v[1] += c * x
+    J.atom.v[2] += c * y
+    J.atom.v[3] += c * z
+    r = sqrt(n2)
+    return (-x / r, -y / r, -z / r)
 end
 
