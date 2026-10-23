@@ -1250,3 +1250,28 @@ end
     zd = add_zeeman_detunings!(sys, yb, P32; B = 1e-4)
     @test eltype(zd) <: AtomTwin.Dynamiq.Detuning && length(zd) == length(P32)
 end
+
+@testset "a beam drives fine-structure manifolds as the I = 0 hyperfine ones" begin
+    # ¹⁷⁴Yb 556 nm with FineManifolds: the σ⁺ stretched line at I_sat has Ω = Γ/√2, and
+    # every form gives the Hamiltonian of the equivalent F = J hyperfine manifolds.
+    S0f, P1f = FineManifold(0; label = "1S0", term = l"1S0"), FineManifold(1; label = "3P1", term = l"3P1")
+    S0h = HyperfineManifold(0//1, 0; label = "1S0", term = l"1S0")
+    P1h = HyperfineManifold(1//1, 1; label = "3P1", term = l"3P1")
+    yb0 = Ytterbium174Atom()
+    Γ, ω = getdecayrates(yb0)["3P1" => "1S0"], 2π * getlinefrequencies(yb0)["3P1" => "1S0"]
+    Isat = AtomTwin.Units.hbar * ω^3 * Γ / (12π * AtomTwin.Units.c^2)
+    λ = 2π * AtomTwin.Units.c / ω
+    pw = PlanarBeam(λ, Isat, [0.0, 0, 1], [1.0, 1im, 0] / √2)
+    gb = GaussianBeam(λ, 20e-6, 1e-6; pol = [1.0, 0.3im, 0.2])
+    function H(S0, P1, beam, form)
+        yb = Ytterbium174Atom(; levels = [S0..., P1...]); s = System(yb)
+        form == :positional ? add_coupling!(s, yb, S0 => P1, beam) :
+                              add_coupling!(s, yb, S0 => P1; beam)
+        gethamiltonian(s), yb
+    end
+    Hf, yb = H(S0f, P1f, pw, :positional)
+    @test abs(Hf[yb.level_indices[P1f[1//1]], yb.level_indices[S0f[0//1]]]) ≈ Γ / (2√2) rtol = 1e-12
+    for beam in (pw, gb), form in (:positional, :keyword)
+        @test H(S0f, P1f, beam, form)[1] ≈ H(S0h, P1h, beam, form)[1] rtol = 1e-12
+    end
+end

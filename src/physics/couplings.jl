@@ -121,19 +121,23 @@ function Efield_spherical(beam, r::AbstractVector{<:Real};
     return E0, Eplus, Eminus
 end
 
+# Magnetic projection of a sublevel along the quantization axis.
+_mproj(l::HyperfineLevel) = l.mF
+_mproj(l::FineLevel) = l.mJ
+
 function rabi_frequency(
     atom::AbstractAtom,
-    g::HyperfineLevel,
-    e::HyperfineLevel,
+    g::L,
+    e::L,
     beam,
     r::AbstractVector{<:Real};
     q_axis = [0.0, 0.0, 1.0],      # quantization axis in lab frame
     d_red::Float64,                # ⟨J_g || er || J_e⟩_R in C·m
     norm::Bool = false
-)::ComplexF64
+)::ComplexF64 where {L<:Union{HyperfineLevel,FineLevel}}
 
     # selection rule
-    Δm = e.mF - g.mF
+    Δm = _mproj(e) - _mproj(g)
     if abs(Δm) > 1
         return 0.0
     end
@@ -257,13 +261,15 @@ Returns
 A real Float64 amplitude in Racah convention.
 Forbidden transitions return 0.0.
 """
-function dipole_matrix_element(atom::AbstractAtom, g::HyperfineLevel, e::HyperfineLevel; norm=false)
+dipole_matrix_element(atom::AbstractAtom, g::HyperfineLevel, e::HyperfineLevel; norm=false) =
+    _e1_angular(g.F, g.mF, g.J, e.F, e.mF, e.J, atom.I; norm)
 
-    F,m = g.F,g.mF
-    Fp,mp = e.F,e.mF
-    J,Jp = g.J, e.J
-    I = atom.I
+# A fine-structure level is the I = 0 case, F = J: the 6j reduces to the J-level
+# Wigner–Eckart factor.
+dipole_matrix_element(atom::AbstractAtom, g::FineLevel, e::FineLevel; norm=false) =
+    _e1_angular(g.J, g.mJ, g.J, e.J, e.mJ, e.J, 0//1; norm)
 
+function _e1_angular(F, m, J, Fp, mp, Jp, I; norm=false)
     q = mp - m
     abs(q) > 1 && return 0.0
 
@@ -527,12 +533,12 @@ end
 
 function add_coupling!(
     system, atom::AbstractAtom,
-    level::Pair{HyperfineManifold, HyperfineManifold},
+    level::Pair{M, M},
     beam;
     q_axis::AbstractVector{<:Real} = [0.0, 0.0, 1.0],
     d_red::Union{Float64, Nothing} = nothing,
     noise=nothing, active=true, tol=1e-10,
-)
+) where {M<:Union{HyperfineManifold, FineManifold}}
     ground, excited = level
     _check_e1_allowed(first(ground.levels), first(excited.levels))
     # A concrete beam: couplings that follow its field at the atom.
@@ -549,7 +555,7 @@ function add_coupling!(
     push!(system, beam_node)
 
     for g in ground.levels, e in excited.levels
-        Δm = e.mF - g.mF
+        Δm = _mproj(e) - _mproj(g)
         abs(Δm) > 1 && continue  # selection rule, independent of beam params
 
         Ω = BeamRabiFrequency(beam_node, atom, g, e, q_axis_vec, d_red)
@@ -567,7 +573,8 @@ end
                   beam=nothing, Ω_π=nothing, Ω_p=nothing, Ω_m=nothing,
                   d_red=nothing, q_axis=[0,0,1], active=true, tol=1e-10)
 
-Add electric-dipole couplings between hyperfine manifolds.
+Add electric-dipole couplings between hyperfine manifolds, or between fine-structure
+manifolds (`Pair{FineManifold,FineManifold}`, the `I = 0` case with `F = J`).
 
 - If only `beam` is given: Rabi frequencies are derived from the beam E-field
   via `d_red`, by default the species' value for the line ([`reduced_dipole`](@ref)).
@@ -596,7 +603,7 @@ number, `Parameter` or `ParametricExpression`.
 """
 function add_coupling!(
     system, atom::AbstractAtom,
-    level::Pair{HyperfineManifold, HyperfineManifold};
+    level::Pair{M, M};
     beam::Union{AbstractBeam, Nothing} = nothing,
     Ω_π = nothing,
     Ω_p  = nothing,
@@ -605,7 +612,7 @@ function add_coupling!(
     d_red::Union{Float64, Nothing} = nothing,
     active = true,
     tol = 1e-10,
-)
+) where {M<:Union{HyperfineManifold, FineManifold}}
     beam === nothing && Ω_π === nothing && Ω_p === nothing && Ω_m === nothing &&
         error("add_coupling!: provide at least one of `beam` or `Ω_π`/`Ω_p`/`Ω_m`")
 
@@ -615,7 +622,7 @@ function add_coupling!(
     couplings = Dynamiq.AbstractField[]
 
     for g in ground.levels, e in excited.levels
-        Δm = e.mF - g.mF
+        Δm = _mproj(e) - _mproj(g)
         abs(Δm) > 1 && continue
         override = override_map[Δm]
 
