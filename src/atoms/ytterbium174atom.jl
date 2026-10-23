@@ -56,6 +56,14 @@ E1 decay rates, shared with Yb-171: see [`YB171_DECAY_RATES`](@ref).
 const YB174_DECAY_RATES = YB171_DECAY_RATES
 
 """
+    YB174_LINE_FREQUENCIES
+
+Line frequencies, shared with Yb-171 (isotope shifts are ≲ 1 GHz): see
+[`YB171_LINE_FREQUENCIES`](@ref).
+"""
+const YB174_LINE_FREQUENCIES = YB171_LINE_FREQUENCIES
+
+"""
     YB174_POLARIZABILITY_1S0
 
 Ground-state model, shared with Yb-171 (the electronic structure is isotope
@@ -100,3 +108,5 @@ A Yb-174 atom: `I = 0`, so `F = J` and there is no hyperfine structure.
 const Ytterbium174Atom = AtomWrapper{:Ytterbium174}
 
 getpolarizabilitymodels(::Ytterbium174Atom) = YB174_POLARIZABILITY
+getdecayrates(::Ytterbium174Atom) = YB174_DECAY_RATES
+getlinefrequencies(::Ytterbium174Atom) = YB174_LINE_FREQUENCIES

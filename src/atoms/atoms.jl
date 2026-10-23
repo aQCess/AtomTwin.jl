@@ -118,6 +118,28 @@ atom's constructor (`polarizabilities = Dict(term => model)`) override these.
 getpolarizabilitymodels(::AtomWrapper) = Dict{String, PolarizabilityModel}()
 
 """
+    getdecayrates(atom) -> Dict{Pair{String,String}, Float64}
+
+The E1 line data a species ships, keyed `upper => lower` by term (`"3P1" => "1S0"`):
+Einstein A coefficients (s⁻¹) and line frequencies (Hz). Empty for a generic `Atom`.
+[`reduced_dipole`](@ref) combines the two.
+
+```julia
+yb = Ytterbium171Atom()
+Γ  = getdecayrates(yb)["3P1" => "1S0"]           # 2π × 182 kHz
+λ  = c / getlinefrequencies(yb)["3P1" => "1S0"]   # 556 nm
+```
+"""
+getdecayrates(::AtomWrapper) = Dict{Pair{String,String},Float64}()
+
+"""
+    getlinefrequencies(atom) -> Dict{Pair{String,String}, Float64}
+
+Line frequencies (Hz) of the species' E1 lines: see [`getdecayrates`](@ref).
+"""
+getlinefrequencies(::AtomWrapper) = Dict{Pair{String,String},Float64}()
+
+"""
     _polarizability_models(atom) -> Dict{String, PolarizabilityModel}
 
 The models `atom` actually uses: its species' ([`getpolarizabilitymodels`](@ref)),

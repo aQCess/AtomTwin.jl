@@ -152,6 +152,34 @@ function rabi_frequency(
 end
 
 """
+    reduced_dipole(atom, g, e) -> Float64
+
+The reduced dipole matrix element `|⟨J′‖er‖J⟩|` (C·m) of the E1 line between the terms
+of levels `g` and `e` (in either order), from the species' decay rate `A` and line
+frequency `ν` ([`getdecayrates`](@ref), [`getlinefrequencies`](@ref)):
+
+    |⟨J′‖er‖J⟩|² = 3π ε₀ ħ c³ (2J′ + 1) A / ω³,    ω = 2πν, J′ the upper level.
+
+It is the `d_red` that `add_coupling!` uses with a beam when none is given.
+
+```julia
+S0 = HyperfineManifold(1//2, 0; term = l"1S0")
+P1 = HyperfineManifold(3//2, 1; term = l"3P1")
+reduced_dipole(Ytterbium171Atom(), S0[1//2], P1[3//2])   # 556 nm line
+```
+"""
+function reduced_dipole(atom::AbstractAtom, g, e)
+    rates, freqs = getdecayrates(atom), getlinefrequencies(atom)
+    for (u, l) in ((e, g), (g, e))
+        key = u.term => l.term
+        (haskey(rates, key) && haskey(freqs, key)) || continue
+        ω = 2π * freqs[key]
+        return sqrt(3π * ε0 * hbar * c^3 * (2u.J + 1) * rates[key] / ω^3)
+    end
+    error("reduced_dipole: no line data for $(g.term) ↔ $(e.term) on this atom; pass `d_red`.")
+end
+
+"""
     rabi_frequencies(beam; q_axis=[0,0,1], r0=nothing, d_red::Float64)
 
 Polarization-resolved Rabi frequencies for an effective E1 operator,
@@ -502,11 +530,12 @@ function add_coupling!(
     level::Pair{HyperfineManifold, HyperfineManifold},
     beam;
     q_axis::AbstractVector{<:Real} = [0.0, 0.0, 1.0],
-    d_red::Float64,
+    d_red::Union{Float64, Nothing} = nothing,
     noise=nothing, active=true, tol=1e-10,
 )
     ground, excited = level
     _check_e1_allowed(first(ground.levels), first(excited.levels))
+    d_red = something(d_red, reduced_dipole(atom, first(ground.levels), first(excited.levels)))
     q_axis_vec = Vector{Float64}(q_axis)
     couplings = Dynamiq.AbstractField[]
 
@@ -537,7 +566,9 @@ end
 Add electric-dipole couplings between hyperfine manifolds.
 
 - If only `beam` is given: Rabi frequencies are derived from the beam E-field
-  at the atom's position via `d_red` (required in this case).
+  at the atom's position via `d_red`, by default the species' value for the line
+  ([`reduced_dipole`](@ref)). So `add_coupling!(sys, yb, S0 => P1; beam)` drives the
+  ¹⁷¹Yb 556 nm line with the beam's intensity and polarization.
 - If `Ω_π`/`Ω_p`/`Ω_m` are given without `beam`: uniform `GlobalCoupling`s
   are created with those amplitudes; a polarization left out is not driven.
 - If both `beam` and `Ω_π`/`Ω_p`/`Ω_m` are given: position-dependent
@@ -580,8 +611,8 @@ function add_coupling!(
 
         if override === nothing
             beam === nothing && continue            # this polarization is not driven
-            isnothing(d_red) && error("d_red is required when Ω_π/Ω_p/Ω_m are not provided (Δm=$Δm)")
             _check_e1_allowed(g, e)
+            d_red = something(d_red, reduced_dipole(atom, g, e))
             Ω = nothing
             Ω0 = rabi_frequency(atom, g, e, beam, atom.x; q_axis = q_axis_vec, d_red = d_red)
         else
