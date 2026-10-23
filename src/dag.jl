@@ -419,10 +419,12 @@ mutable struct DecayNode <: AbstractNode
     clicks::Union{Nothing, String}
     _field::Union{Nothing, Jump}
     branches::Vector{<:Pair{<:Pair, Float64}}
+    polarization::Union{Nothing, Int}   # photon q = m_g − m_e about the quantization axis
 end
 
-DecayNode(Gamma, atom, transition; active=true, clicks=nothing, branches=[transition => 1.0]) =
-    DecayNode(Gamma, atom, first(branches).first, active, clicks, nothing, branches)
+DecayNode(Gamma, atom, transition; active=true, clicks=nothing, branches=[transition => 1.0],
+          polarization=nothing) =
+    DecayNode(Gamma, atom, first(branches).first, active, clicks, nothing, branches, polarization)
 
 node_output(n::DecayNode) = n._field
 
