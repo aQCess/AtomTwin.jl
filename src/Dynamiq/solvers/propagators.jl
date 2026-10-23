@@ -20,7 +20,7 @@ Base.@inline stability_limit(order::Int) =
     order == 3 ? 1.732 : order == 4 ? 2.828 : order == 7 ? 1.764 : 3.395
 
 """
-    suggested_dt(terms, tol, order) -> Float64
+    suggested_dt(terms, tol[, order]; integrator = Chebyshev()) -> Float64
 
 Time step giving a local error of about `tol`, derived from the Hamiltonian
 rather than supplied by the user. Returns `Inf` when there is no Hamiltonian, so
@@ -28,10 +28,15 @@ the caller must fall back to the instruction duration.
 
 `dt = θ_max / ‖H‖`, with `θ_max` from [`propagator_theta`](@ref) for the given
 integrator and `‖H‖` a `gershgorin_bound` upper bound -- so the step is
-conservative and the true error at most the target.
+conservative and the true error at most the target. `order` defaults to the
+integrator's own, [`taylor_order`](@ref).
 """
+suggested_dt(terms::Vector{Tuple{Base.RefValue{ComplexF64},Op}}, tol::Float64;
+             integrator::AbstractIntegrator = Chebyshev()) =
+    suggested_dt(terms, tol, taylor_order(integrator); integrator = integrator)
+
 function suggested_dt(terms::Vector{Tuple{Base.RefValue{ComplexF64},Op}},
-                      tol::Float64, order::Int = 4;
+                      tol::Float64, order::Int;
                       integrator::AbstractIntegrator = Chebyshev())
     nrm = gershgorin_bound(terms; peak = true)
     nrm <= 0 && return Inf

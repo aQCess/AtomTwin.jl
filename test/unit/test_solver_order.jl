@@ -274,6 +274,18 @@ end
             @test abs(_rabi(() -> Sequence(; tol = 1e-9)) - ref) < 1e-8
         end
 
+        @testset "derived step follows the Taylor order" begin
+            D = AtomTwin.Dynamiq
+            atom = D.NLevelAtom(2); b = D.Basis([atom])
+            terms = [(Ref(ComplexF64(1.0)), D.Op(b, atom, 1 => 2, 2π * 1e6))]
+            for n in (3, 4, 7, 8)
+                @test D.suggested_dt(terms, 1e-6; integrator = D.Taylor(n)) ==
+                      D.suggested_dt(terms, 1e-6, n; integrator = D.Taylor(n))
+            end
+            @test D.suggested_dt(terms, 1e-6; integrator = D.Taylor(3)) <
+                  D.suggested_dt(terms, 1e-6; integrator = D.Taylor(8))
+        end
+
         @testset "derived step is the output resolution" begin
             # `_derive_dt` returns how often results are recorded: with no `dt`, one sample
             # per instruction (with no Hamiltonian there is no accuracy bound either).
