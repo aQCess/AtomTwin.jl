@@ -49,20 +49,21 @@ end
 
 Construct a `GaussianBeam` from wavelength, transverse waist, and power.
 
-- `λ::Float64`: Wavelength (m).
-- `w0::Float64`: Waist radius (m).
-- `P::Float64`: Optical power (W).
-- `r0::Vector{Float64}`: Beam center position (default `[0, 0, 0]`).
+- `λ`: Wavelength (m).
+- `w0`: Waist radius (m).
+- `P`: Optical power (W).
+- `r0`: Beam center position (default `[0, 0, 0]`).
 - `pol::Vector{Complex}`: Complex polarization vector in global coordinates
 
 `I0` and `w0z` are derived automatically from these parameters.
 """
-function GaussianBeam(λ::Float64, w0::Float64, P::Float64;
-                      r0 = [0.0, 0.0, 0.0],
+function GaussianBeam(λ::Real, w0::Real, P::Real;
+                      r0::AbstractVector{<:Real} = [0.0, 0.0, 0.0],
                       pol = ComplexF64[1.0, 0.0, 0.0])
+    λ, w0, P = Float64(λ), Float64(w0), Float64(P)
     I0  = 2 * P / (π * w0^2)
     w0z = sqrt(2) * π * w0^2 / λ  # effective axial "waist" from quadratic expansion
-    return GaussianBeam(λ, w0, P, I0, w0z, r0, _unit_pol(pol), Ref(ComplexF64(1.0)))
+    return GaussianBeam(λ, w0, P, I0, w0z, Vector{Float64}(r0), _unit_pol(pol), Ref(ComplexF64(1.0)))
 end
 
 """
@@ -71,15 +72,10 @@ end
 Keyword-only constructor for `GaussianBeam`. Parameters are the same
 as the positional constructor.
 """
-function GaussianBeam(; λ::Float64,
-                      w0::Float64,
-                      P::Float64,
-                      r0::Vector{Float64} = [0.0, 0.0, 0.0],
-                      pol = ComplexF64[1.0, 0.0, 0.0])
-    I0  = 2 * P / (π * w0^2)
-    w0z = sqrt(2) * π * w0^2 / λ
-    return GaussianBeam(λ, w0, P, I0, w0z, r0, _unit_pol(pol), Ref(ComplexF64(1.0)))
-end
+GaussianBeam(; λ::Real, w0::Real, P::Real,
+             r0::AbstractVector{<:Real} = [0.0, 0.0, 0.0],
+             pol = ComplexF64[1.0, 0.0, 0.0]) =
+    GaussianBeam(λ, w0, P; r0 = r0, pol = pol)
 
 """
     copy(b::GaussianBeam)
@@ -368,23 +364,24 @@ end
 
 Positional constructor for `GeneralGaussianBeam`.
 
-- `λ::Float64`: Wavelength (m).
-- `w0x::Float64`, `w0y::Float64`: Transverse waists along local x and y.
-- `P::Float64`: Optical power (W).
-- `k::Vector{Float64}`: Initial propagation direction (normalized internally).
+- `λ`: Wavelength (m).
+- `w0x`, `w0y`: Transverse waists along local x and y (m).
+- `P`: Optical power (W).
+- `k`: Initial propagation direction (normalized internally).
 - `pol::Vector{ComplexF64}`: Polarization vector in global coordinates
 - `r0::Vector{Float64}`: Waist center in global coordinates (default [0,0,0])
 
 The local axes `u` and `v` are constructed orthonormal to `k`.
 """
-function GeneralGaussianBeam(λ::Float64,
-                             w0x::Float64,
-                             w0y::Float64,
-                             P::Float64,
+function GeneralGaussianBeam(λ::Real,
+                             w0x::Real,
+                             w0y::Real,
+                             P::Real,
                              k::Vector{<:Real},
                              pol::Vector{<:Number};
-                             r0::Vector{<:Real} = [0.0, 0.0, 0.0]
+                             r0::AbstractVector{<:Real} = [0.0, 0.0, 0.0]
                              )
+    λ, w0x, w0y, P = Float64(λ), Float64(w0x), Float64(w0y), Float64(P)
 
     # normalize k
     k_norm = sqrt(sum(x -> x^2, k))
@@ -415,25 +412,21 @@ function GeneralGaussianBeam(λ::Float64,
     I0 = 2 * P / (π * w0x * w0y)
 
     return GeneralGaussianBeam(λ, w0x, w0y, P, I0,
-                               copy(r0), k̂, u, v, p, Ref(ComplexF64(1.0)))
+                               Vector{Float64}(r0), k̂, u, v, p, Ref(ComplexF64(1.0)))
 end
 
 
 """
-    GeneralGaussianBeam(; λ, w0x, w0y, P, r0 = [0,0,0], k = [0,0,1])
+    GeneralGaussianBeam(; λ, w0x, w0y, P, r0 = [0,0,0], k = [0,0,1], pol = [1,0,0])
 
 Keyword-only constructor for `GeneralGaussianBeam`. Parameters are the same
 as the positional constructor.
 """
-function GeneralGaussianBeam(; λ::Float64,
-                             w0x::Float64,
-                             w0y::Float64,
-                             P::Float64,
-                             r0::Vector{Float64} = [0.0, 0.0, 0.0],
-                             k::Vector{Float64} = [0.0, 0.0, 1.0],
-                             pol::Vector{ComplexF64} = ComplexF64[1.0+0im, 0.0+0im, 0.0+0im])
-    GeneralGaussianBeam(λ, w0x, w0y, P; r0 = r0, k = k, pol = pol)
-end
+GeneralGaussianBeam(; λ::Real, w0x::Real, w0y::Real, P::Real,
+                    r0::AbstractVector{<:Real} = [0.0, 0.0, 0.0],
+                    k::AbstractVector{<:Real} = [0.0, 0.0, 1.0],
+                    pol::AbstractVector{<:Number} = ComplexF64[1.0, 0.0, 0.0]) =
+    GeneralGaussianBeam(λ, w0x, w0y, P, collect(k), collect(pol); r0 = r0)
 
 
 """

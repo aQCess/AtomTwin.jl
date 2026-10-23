@@ -47,6 +47,15 @@ struct PlanarBeam <: AbstractBeam
 end
 
 """
+    PlanarBeam(; λ, I, direction = [0, 0, 1], polarization = [1, 0, 0])
+
+Keyword constructor for `PlanarBeam`: wavelength `λ` (m), intensity `I` (W/m²),
+propagation `direction` and Jones `polarization`, as the positional form.
+"""
+PlanarBeam(; λ::Real, I::Real, direction = [0.0, 0.0, 1.0], polarization = [1.0, 0.0, 0.0]) =
+    PlanarBeam(λ, I, direction, polarization)
+
+"""
     Efield(b::PlanarBeam, r::Vector{Float64}) -> Vector{ComplexF64}
 
 Cartesian electric field of the plane wave at position `r`.
