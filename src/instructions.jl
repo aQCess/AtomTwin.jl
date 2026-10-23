@@ -44,8 +44,8 @@ Construct a `Pulse` acting on multiple couplings simultaneously, all with the sa
 - `amplitudes`: optional vector of amplitudes defining the pulse shape. If empty, the pulse has constant amplitude `ampl` over `duration`. If non‑empty, the shape is resampled onto the simulation time grid using the method selected by `interp`.
 - `interp`: how the envelope is read between samples — `:cubic` (default), `:linear` or `:constant`.
 """
-function Pulse(couplings::Vector, duration::Float64; ampl=1.0, amplitudes=ComplexF64[], dt=nothing, downsample=nothing, interp=:cubic)
-    Pulse(couplings, duration, ampl, amplitudes, dt, downsample, interp)
+function Pulse(couplings::Vector, duration::Real; ampl=1.0, amplitudes=ComplexF64[], dt=nothing, downsample=nothing, interp=:cubic)
+    Pulse(couplings, Float64(duration), ampl, amplitudes, dt, downsample, interp)
 end
 
 """
@@ -53,7 +53,7 @@ end
 
 Convenience constructor for a single‑coupling pulse. Equivalent to `Pulse([coupling], duration; ampl, amplitudes, interp)`.
 """
-Pulse(coupling::Switchable, duration::Float64; ampl=1.0, amplitudes=ComplexF64[], dt=nothing, downsample=nothing, interp=:cubic) = Pulse([coupling], duration, ampl, amplitudes, dt, downsample, interp)
+Pulse(coupling::Switchable, duration::Real; ampl=1.0, amplitudes=ComplexF64[], dt=nothing, downsample=nothing, interp=:cubic) = Pulse([coupling], Float64(duration), ampl, amplitudes, dt, downsample, interp)
 
 """
     On(couplings)
@@ -69,11 +69,14 @@ struct On <: AbstractInstruction
 end
 
 """
-    On(coupling::Switchable)
+    On(coupling::Switchable; dt = nothing, downsample = nothing)
+    On(couplings::AbstractVector{<:Switchable}; dt = nothing, downsample = nothing)
 
-Convenience constructor for a single coupling. Equivalent to `On([coupling])`.
+Switch on one coupling or several, with optional per-instruction `dt` and `downsample`.
 """
 On(coupling::Switchable; dt=nothing, downsample=nothing) = On([coupling], dt, downsample)
+On(couplings::AbstractVector{<:Switchable}; dt=nothing, downsample=nothing) =
+    On(Switchable[couplings...], dt, downsample)
 
 """
     Off(couplings)
@@ -89,11 +92,14 @@ struct Off <: AbstractInstruction
 end
 
 """
-    Off(coupling::Switchable)
+    Off(coupling::Switchable; dt = nothing, downsample = nothing)
+    Off(couplings::AbstractVector{<:Switchable}; dt = nothing, downsample = nothing)
 
-Convenience constructor for a single coupling. Equivalent to `Off([coupling])`.
+Switch off one coupling or several, with optional per-instruction `dt` and `downsample`.
 """
 Off(coupling::Switchable; dt=nothing, downsample=nothing) = Off([coupling], dt, downsample)
+Off(couplings::AbstractVector{<:Switchable}; dt=nothing, downsample=nothing) =
+    Off(Switchable[couplings...], dt, downsample)
 
 """
     Wait(duration)
@@ -113,7 +119,7 @@ end
 
 Convenience constructor for Wait with optional per-instruction overrides.
 """
-Wait(duration::Float64; dt=nothing, downsample=nothing) = Wait(duration, dt, downsample)
+Wait(duration::Real; dt=nothing, downsample=nothing) = Wait(Float64(duration), dt, downsample)
 
 """
     MoveCol(tweezers, cols, delta, duration; sweep = :min_jerk)
@@ -137,13 +143,14 @@ mutable struct MoveCol <: AbstractInstruction
 end
 
 """
-    MoveCol(tweezers, col, delta, duration; sweep = :min_jerk)
+    MoveCol(tweezers, col, delta, duration; sweep = :min_jerk, dt = nothing, downsample = nothing)
 
-Convenience constructor for moving a single column. `col` can be an `Int`
-or a parametric expression; it is stored in the general `cols` field.
+Convenience constructor: `col` is one column index or a vector of them; `delta` may be a
+number, `Parameter` or `ParametricExpression`.
 """
-MoveCol(ta::TweezerArray, col, delta, duration; sweep=:min_jerk, dt=nothing, downsample=nothing) = MoveCol(
-    ta, col isa Int ? [col] : col, delta, duration, sweep, dt, downsample)
+MoveCol(ta::TweezerArray, col::Union{Integer, AbstractVector{<:Integer}}, delta, duration::Real;
+        sweep=:min_jerk, dt=nothing, downsample=nothing) =
+    MoveCol(ta, col isa Integer ? [Int(col)] : collect(Int, col), delta, Float64(duration), sweep, dt, downsample)
 
 """
     MoveRow(tweezers, rows, delta, duration; sweep = :min_jerk)
@@ -167,11 +174,14 @@ struct MoveRow <: AbstractInstruction
 end
 
 """
-    MoveRow(tweezers, row, delta, duration; sweep = :min_jerk)
+    MoveRow(tweezers, row, delta, duration; sweep = :min_jerk, dt = nothing, downsample = nothing)
 
-Convenience constructor for moving a single row. Wraps `row` into a vector.
+Convenience constructor: `row` is one row index or a vector of them; `delta` may be a
+number, `Parameter` or `ParametricExpression`, as for [`MoveCol`](@ref).
 """
-MoveRow(ta::TweezerArray, row::Int, delta::Float64, duration::Float64; sweep=:min_jerk, dt=nothing, downsample=nothing) = MoveRow(ta, [row], delta, duration, sweep, dt, downsample)
+MoveRow(ta::TweezerArray, row::Union{Integer, AbstractVector{<:Integer}}, delta, duration::Real;
+        sweep=:min_jerk, dt=nothing, downsample=nothing) =
+    MoveRow(ta, row isa Integer ? [Int(row)] : collect(Int, row), delta, Float64(duration), sweep, dt, downsample)
 
 """
     RampRow(tweezers, rows, final_amplitude, ramp_time)
@@ -192,12 +202,13 @@ struct RampRow <: AbstractInstruction
 end
 
 """
-    RampRow(tweezers, row, final_amplitude, ramp_time)
+    RampRow(tweezers, row, final_amplitude, ramp_time; dt = nothing, downsample = nothing)
 
-Convenience constructor for ramping a single row. Wraps `row` into a vector.
+Convenience constructor: `row` is one row index or a vector of them.
 """
-RampRow(ta::TweezerArray, row::Int, final_amplitude::Float64, ramp_time::Float64; dt=nothing, downsample=nothing) =
-    RampRow(ta, [row], final_amplitude, ramp_time, dt, downsample)
+RampRow(ta::TweezerArray, row::Union{Integer, AbstractVector{<:Integer}}, final_amplitude, ramp_time::Real;
+        dt=nothing, downsample=nothing) =
+    RampRow(ta, row isa Integer ? [Int(row)] : collect(Int, row), final_amplitude, Float64(ramp_time), dt, downsample)
 
 """
     RampCol(tweezers, cols, final_amplitude, ramp_time)
@@ -218,12 +229,13 @@ struct RampCol <: AbstractInstruction
 end
 
 """
-    RampCol(tweezers, col, final_amplitude, ramp_time)
+    RampCol(tweezers, col, final_amplitude, ramp_time; dt = nothing, downsample = nothing)
 
-Convenience constructor for ramping a single column. Wraps `col` into a vector.
+Convenience constructor: `col` is one column index or a vector of them.
 """
-RampCol(ta::TweezerArray, col::Int, final_amplitude::Float64, ramp_time::Float64; dt=nothing, downsample=nothing) =
-    RampCol(ta, [col], final_amplitude, ramp_time, dt, downsample)
+RampCol(ta::TweezerArray, col::Union{Integer, AbstractVector{<:Integer}}, final_amplitude, ramp_time::Real;
+        dt=nothing, downsample=nothing) =
+    RampCol(ta, col isa Integer ? [Int(col)] : collect(Int, col), final_amplitude, Float64(ramp_time), dt, downsample)
 
 """
     AmplCol(tweezers, col, ampl)
