@@ -24,9 +24,9 @@ Keyword arguments
 This converts `level` to its integer index via `atom.level_indices` and
 constructs a `Dynamiq.PopulationDetectorSpec` with that index.
 """
-function PopulationDetectorSpec(atom::AbstractAtom, level::AbstractLevel; name::String="", tspan=nothing)
+function PopulationDetectorSpec(atom::AbstractAtom, level::AbstractLevel; name::AbstractString="", tspan=nothing)
     level_idx = atom.level_indices[level]
-    return Dynamiq.PopulationDetectorSpec(atom; level=level_idx, name=name, tspan=tspan)
+    return Dynamiq.PopulationDetectorSpec(atom; level=level_idx, name=String(name), tspan=tspan)
 end
 
 """
@@ -46,13 +46,13 @@ Keyword arguments
 The levels are mapped to their integer indices via `atom.level_indices`
 and passed to `Dynamiq.CoherenceDetectorSpec`.
 """
-function CoherenceDetectorSpec(atom::AbstractAtom, levels::Pair{<:AbstractLevel, <:AbstractLevel}; name::String="", tspan=nothing)
+function CoherenceDetectorSpec(atom::AbstractAtom, levels::Pair{<:AbstractLevel, <:AbstractLevel}; name::AbstractString="", tspan=nothing)
     # Convert Level to integer index
     level1_idx = atom.level_indices[levels[1]]
     level2_idx = atom.level_indices[levels[2]]
     
     # Call Dynamiq's constructor with integer level
-    return Dynamiq.CoherenceDetectorSpec(atom; levels=level1_idx=>level2_idx, name=name, tspan=tspan)
+    return Dynamiq.CoherenceDetectorSpec(atom; levels=level1_idx=>level2_idx, name=String(name), tspan=tspan)
 end
 
 """
@@ -88,8 +88,8 @@ Keyword arguments
 
 Constructs and returns a `Dynamiq.FieldDetectorSpec(field; ...)`.
 """
-FieldDetectorSpec(field::AbstractField; name::String="", tspan=nothing) =
-    Dynamiq.FieldDetectorSpec(field; name=name, tspan=tspan)
+FieldDetectorSpec(field::AbstractField; name::AbstractString="", tspan=nothing) =
+    Dynamiq.FieldDetectorSpec(field; name=String(name), tspan=tspan)
 
 
 """

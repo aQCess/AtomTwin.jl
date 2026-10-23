@@ -340,3 +340,35 @@ end
     @test isempty(c)
     @test isempty(sys.nodes)
 end
+
+@testset "beam constructors take any real numbers, positionally or by keyword" begin
+    b1 = GaussianBeam(532e-9, 1e-6, 1)
+    b2 = GaussianBeam(; λ = 532e-9, w0 = 1e-6, P = 1, r0 = [0, 0, 0])
+    @test b1 isa GaussianBeam && b2 isa GaussianBeam && b1.I0 == b2.I0
+    g1 = GeneralGaussianBeam(532e-9, 1e-6, 2e-6, 1, [0, 0, 1], [1, 0, 0])
+    g2 = GeneralGaussianBeam(; λ = 532e-9, w0x = 1e-6, w0y = 2e-6, P = 1)
+    @test g1 isa GeneralGaussianBeam && g2 isa GeneralGaussianBeam && g1.I0 == g2.I0
+    @test GeneralGaussianBeam(532e-9, Parameter(:w, 1e-6), 2e-6, 1.0, [0, 0, 1], [1, 0, 0]) isa
+          AtomTwin.ParametricBeam
+    p1 = PlanarBeam(556e-9, 1.0, [0, 1, 0], [0, 0, 1])
+    p2 = PlanarBeam(; λ = 556e-9, I = 1, direction = [0, 1, 0], polarization = [0, 0, 1])
+    @test p1.k == p2.k && p1.pol == p2.pol && p1.I == p2.I
+end
+
+@testset "detector specs take the same keywords" begin
+    g, e = Level("g"), Level("e")
+    atom = Atom(; levels = [g, e]); sys = System(atom)
+    name = SubString("P_e", 1)
+    @test PopulationDetectorSpec(atom, e; name).params.name == "P_e"
+    @test CoherenceDetectorSpec(atom, g => e; name).params.name == "P_e"
+    d = ExpectationDetectorSpec(sys, atom, AtomTwin.projector(e); name, tspan = [1e-6])
+    @test d.tspan == [1e-6] && d.params.name == "P_e"
+end
+
+@testset "gethamiltonian rejects keywords it does not take" begin
+    g, e = Level("g"), Level("e")
+    atom = Atom(; levels = [g, e]); sys = System(atom)
+    add_coupling!(sys, atom, g => e, 2π * 1e6)
+    @test size(gethamiltonian(sys)) == (2, 2)
+    @test_throws MethodError gethamiltonian(sys; bogus = 1)
+end

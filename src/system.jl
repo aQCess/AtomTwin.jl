@@ -213,7 +213,7 @@ end
 
 Return the operator matrix for a field
 """
-function getmatrix(field::F; kwargs...) where F<:Dynamiq.AbstractField
+function getmatrix(field::F) where F<:Dynamiq.AbstractField
     if hasproperty(field, :H)
         return Matrix(field.H)
     else
@@ -231,12 +231,12 @@ Return the system Hamiltonian (rad/s). Couplings enter at full amplitude, and th
 light shifts of the trapping beams (those passed to `System`, scalar and tensor)
 at the beams' peak intensity, as for [`add_light_shift!`](@ref).
 """
-function gethamiltonian(sys::System; kwargs...)
+function gethamiltonian(sys::System)
     m = zeros(ComplexF64, sys.basis.dim, sys.basis.dim)
     for node in sys.nodes
         obj = node_output(node)
         obj === nothing && continue
-        M = getmatrix(obj; kwargs...)
+        M = getmatrix(obj)
         M === nothing && continue
         m .+= M
     end
