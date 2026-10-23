@@ -70,8 +70,10 @@ Monte Carlo) solver — i.e. `play(...; density_matrix = false)`.
 # Keywords
 
 - `name::AbstractString`: Optional detector name.
-- `tspan::Union{Nothing,Vector{Float64}}`: Optional time vector. If `nothing`,
-  the time grid is taken from the simulation.
+- `tspan::Union{Nothing,Vector{Float64}}`: Bin ends, in place of `out.times`: row
+  `k` counts the clicks in `(tspan[k-1], tspan[k]]` (from `t = 0`), resolved to the
+  output grid. Clicks after `tspan[end]` are dropped. `tspan = [t₁, t₂]` gives the
+  counts of two exposure windows ending at `t₁` and `t₂`.
 """
 PhotoDetectorSpec(; name::AbstractString = "",
                     tspan::Union{Nothing,Vector{Float64}} = nothing) =

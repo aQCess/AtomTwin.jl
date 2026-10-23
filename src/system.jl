@@ -227,7 +227,9 @@ getmatrix(::Any) = nothing
 """
     gethamiltonian(sys::System)
 
-Return the system Hamiltonian
+Return the system Hamiltonian (rad/s). Couplings enter at full amplitude, and the
+light shifts of the trapping beams (those passed to `System`, scalar and tensor)
+at the beams' peak intensity, as for [`add_light_shift!`](@ref).
 """
 function gethamiltonian(sys::System; kwargs...)
     m = zeros(ComplexF64, sys.basis.dim, sys.basis.dim)
@@ -237,6 +239,19 @@ function gethamiltonian(sys::System; kwargs...)
         M = getmatrix(obj; kwargs...)
         M === nothing && continue
         m .+= M
+    end
+    # `compile` adds the trapping beams' light shifts itself, so they have no node.
+    # Build them as it does. That refreshes the atoms' polarizabilities in place for
+    # the current quantization axis, as `compile` would; positions are left alone.
+    if !isempty(sys.beams)
+        beams = AbstractBeam[resolve(b, Dict{Symbol,Any}()) for b in sys.beams]
+        tensor_pairs = _tensor_may_vary(sys) ? :all : :fit
+        for a in sys.atoms
+            _init_species_data!(a, a.inner, beams; q_axis = getquantizationaxis(sys), tensor_pairs)
+        end
+        for f in _auto_light_shifts(sys, [a.inner for a in sys.atoms], beams)
+            m .+= f._coeff[] .* getmatrix(f)
+        end
     end
     return m
 end

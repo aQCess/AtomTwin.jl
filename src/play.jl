@@ -239,9 +239,11 @@ function _play_shots(job::SimulationJob, sys::System;
     n_detectors = length(job.detectors[1])
     det_names = [job.detectors[1][j].name for j in 1:n_detectors]
     
-    # Allocate output storage sized from the full detector_outputs (spans all instructions)
+    # Allocate output storage sized from the detector outputs (all instructions, or
+    # the detector's own `tspan`)
+    outputs = _detector_outputs(job)
     all_outputs_vec = [
-        let full_vals = job.detector_outputs[det_names[j]]
+        let full_vals = outputs[det_names[j]]
             ndims(full_vals) == 1 ?
                 zeros(eltype(full_vals), length(full_vals), shots) :
                 zeros(eltype(full_vals), size(full_vals, 1), size(full_vals, 2), shots)
@@ -407,7 +409,7 @@ function _play(job::SimulationJob;
     end
 
     final_state = savefinalstate ? copy(job.state) : nothing
-    return (detectors = job.detector_outputs, times = job.times, final_state = final_state)
+    return (detectors = _detector_outputs(job), times = job.times, final_state = final_state)
 end
 
 """
