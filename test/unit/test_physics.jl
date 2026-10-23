@@ -1235,3 +1235,18 @@ end
     @test abs(Ωp) ≈ 5e-34 * E0 / √2 / AtomTwin.Units.hbar rtol = 1e-9
     @test abs(Ωm) ≈ abs(Ωp) rtol = 1e-12
 end
+
+@testset "manifold decays and Zeeman detunings return what they add" begin
+    S0  = HyperfineManifold(1//2, 0; label = "1S0", term = l"1S0")
+    P32 = HyperfineManifold(3//2, 1; label = "3P1", term = l"3P1")
+    leak = Level("leak")
+    yb  = Ytterbium171Atom(; levels = [S0..., P32..., leak])
+    sys = System(yb)
+    js = add_decay!(sys, yb, P32 => S0, 2π * 1e5)
+    @test js isa Vector{Jump} && length(js) == 3            # one per polarisation
+    jl = add_decay!(sys, yb, P32 => leak, 2π * 1e4)
+    @test jl isa Vector{Jump} && length(jl) == length(P32)  # one per sublevel
+    @test add_dephasing!(sys, yb, S0, 2π * 1e3) isa Vector{Jump}
+    zd = add_zeeman_detunings!(sys, yb, P32; B = 1e-4)
+    @test eltype(zd) <: AtomTwin.Dynamiq.Detuning && length(zd) == length(P32)
+end

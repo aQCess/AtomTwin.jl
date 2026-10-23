@@ -69,7 +69,7 @@ Returns a vector of the created `Detuning` objects.
 """
 function add_zeeman_detunings!(system, atom::AbstractAtom, manifold::AbstractManifold;
                                B=0.0, delta=0.0, active=true, tol=1e-10)
-    detunings = []
+    detunings = Detuning[]
 
     for level in manifold
         if manifold isa HyperfineManifold
