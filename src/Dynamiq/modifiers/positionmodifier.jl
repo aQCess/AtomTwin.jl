@@ -90,3 +90,23 @@ end
                   (2y0 - 5y1 + 4y2 - y3) * f * f +
                   (-y0 + 3y1 - 3y2 + y3) * f * f * f)
 end
+
+"""
+    SetPositionModifier <: AbstractBoundaryModifier
+
+Sets components `dims` of a beam's position `r0` to `vals` at the start of an
+instruction (`begin_instruction!`): how `FreqRow`/`FreqCol` retune a tweezer in no
+time.
+"""
+struct SetPositionModifier <: AbstractBoundaryModifier
+    beam::AbstractBeam
+    vals::Vector{Float64}
+    dims::Vector{Int}
+end
+
+function begin_instruction!(m::SetPositionModifier)
+    @inbounds for (d, v) in zip(m.dims, m.vals)
+        m.beam.r0[d] = v
+    end
+    return nothing
+end

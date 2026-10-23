@@ -265,85 +265,67 @@ end
 """
     compile(atoms, inst::AmplCol, dt; resolve_target = identity)
 
-Lower an `AmplCol` instruction into single-step amplitude modifiers for
-all tweezers in the given column, enforcing row–column factorization.
+Lower an `AmplCol` instruction into boundary modifiers that set the amplitude of
+every tweezer in the column at the instruction's start, enforcing row–column
+factorization. Takes no time.
 """
 function compile(atoms, inst::AmplCol, dt; resolve_target = identity)
     ta = resolve_target(inst.tweezers)
     ta.col_amplitudes[inst.col] = inst.ampl
     col = inst.col
-    modifiers = AmplitudeModifier[]
-    for row in eachindex(ta.row_amplitudes)
-        beam = ta[row, col]
-        ampl = ta.row_amplitudes[row] * ta.col_amplitudes[col]
-        push!(modifiers, AmplitudeModifier(beam, ComplexF64[ampl, ampl], 1.0;
-                                           interp = :constant))
-    end
-    return modifiers, _NO_BMODS, 2
+    bmods = AbstractBoundaryModifier[
+        SetModifier(ta[row, col], ComplexF64(ta.row_amplitudes[row] * ta.col_amplitudes[col]))
+        for row in eachindex(ta.row_amplitudes)]
+    return AbstractModifier[], bmods, 0
 end
 
 """
     compile(atoms, inst::AmplRow, dt; resolve_target = identity)
 
-Lower an `AmplRow` instruction into single-step amplitude modifiers for
-all tweezers in the given row, enforcing row–column factorization.
+Lower an `AmplRow` instruction into boundary modifiers that set the amplitude of
+every tweezer in the row at the instruction's start, enforcing row–column
+factorization. Takes no time.
 """
 function compile(atoms, inst::AmplRow, dt; resolve_target = identity)
     ta = resolve_target(inst.tweezers)
     ta.row_amplitudes[inst.row] = inst.ampl
     row = inst.row
-    modifiers = AmplitudeModifier[]
-    for col in eachindex(ta.col_amplitudes)
-        beam = ta[row, col]
-        ampl = ta.row_amplitudes[row] * ta.col_amplitudes[col]
-        push!(modifiers, AmplitudeModifier(beam, ComplexF64[ampl, ampl], 1.0;
-                                           interp = :constant))
-    end
-    return modifiers, _NO_BMODS, 2
+    bmods = AbstractBoundaryModifier[
+        SetModifier(ta[row, col], ComplexF64(ta.row_amplitudes[row] * ta.col_amplitudes[col]))
+        for col in eachindex(ta.col_amplitudes)]
+    return AbstractModifier[], bmods, 0
 end
 
 """
     compile(atoms, inst::FreqCol, dt; resolve_target = identity)
 
-Lower a `FreqCol` instruction into position modifiers that update the
-effective position (e.g. optical frequency) of all beams in the given column.
+Lower a `FreqCol` instruction into boundary modifiers that set the position of
+every beam in the column from its new frequency, `r0 + dx·freq` along `x`. Takes
+no time.
 """
 function compile(atoms, inst::FreqCol, dt; resolve_target = identity)
     ta = resolve_target(inst.tweezers)
-    tweezers = tweezers_in_col(ta, inst.col)
-    modifiers = [
-        PositionModifier(
-            beam,
-            [[ta.dx * inst.freq, beam.r0[2], beam.r0[3]],
-             [ta.dx * inst.freq, beam.r0[2], beam.r0[3]]],
-            [0.0, dt];
-            dims = [1]
-        )
-        for beam in tweezers
-    ]
-    return modifiers, _NO_BMODS, 2
+    ta.col_freqs[inst.col] = inst.freq            # keep the array's bookkeeping current
+    x = ta.r0[1] + ta.dx * inst.freq
+    bmods = AbstractBoundaryModifier[SetPositionModifier(beam, [x], [1])
+                                     for beam in tweezers_in_col(ta, inst.col)]
+    return AbstractModifier[], bmods, 0
 end
 
 """
     compile(atoms, inst::FreqRow, dt; resolve_target = identity)
 
-Lower a `FreqRow` instruction into position modifiers that update the
-effective position (e.g. optical frequency) of all beams in the given row.
+Lower a `FreqRow` instruction into boundary modifiers that set the position of
+every beam in the row from its new frequency, `r0 + dy·freq` along `y`. Takes no
+time.
 """
 function compile(atoms, inst::FreqRow, dt; resolve_target = identity)
     ta = resolve_target(inst.tweezers)
-    tweezers = tweezers_in_row(ta, inst.row)
-    modifiers = [
-        PositionModifier(
-            beam,
-            [[beam.r0[1], ta.dy * inst.freq, beam.r0[3]],
-             [beam.r0[1], ta.dy * inst.freq, beam.r0[3]]],
-            [0.0, dt];
-            dims = [2]
-        )
-        for beam in tweezers
-    ]
-    return modifiers, _NO_BMODS, 2
+    ta.row_freqs[inst.row] = inst.freq            # keep the array's bookkeeping current
+    y = ta.r0[2] + ta.dy * inst.freq
+    bmods = AbstractBoundaryModifier[SetPositionModifier(beam, [y], [2])
+                                     for beam in tweezers_in_row(ta, inst.row)]
+    return AbstractModifier[], bmods, 0
 end
 
 #-----------------------------------------------------------------------------
@@ -436,39 +418,52 @@ end
 """
     compile(atoms, inst::On, dt; resolve_target = identity)
 
-Turn on couplings at instruction boundary (SetModifier). No inner-loop modifiers.
-Amplitude persists until explicitly turned off.
+Turn on couplings at the instruction boundary (SetModifier). No inner-loop
+modifiers and no steps: the switch takes no time. The amplitude persists until
+explicitly turned off.
 """
 function compile(atoms, inst::On, dt; resolve_target = identity)
     resolved_couplings = [resolve_target(c) for c in inst.couplings]
     bmods = AbstractBoundaryModifier[_set_modifier(c, 1.0) for c in resolved_couplings]
-    return AbstractModifier[], bmods, 2
+    return AbstractModifier[], bmods, 0
 end
 
 """
     compile(atoms, inst::Off, dt; resolve_target = identity)
 
-Zero coupling amplitudes at instruction boundary (ResetModifier). No inner-loop modifiers.
+Zero coupling amplitudes at the instruction boundary (ResetModifier). No
+inner-loop modifiers and no steps: the switch takes no time.
 """
 function compile(atoms, inst::Off, dt; resolve_target = identity)
     resolved_couplings = [resolve_target(c) for c in inst.couplings]
     bmods = AbstractBoundaryModifier[_reset_modifier(c) for c in resolved_couplings]
-    return AbstractModifier[], bmods, 2
+    return AbstractModifier[], bmods, 0
 end
 
 """
     compile(atoms, inst::Parallel, dt; resolve_target = identity)
 
 Compile several instructions to execute in parallel over a common time
-interval equal to the longest internal instruction. Updates that exceed
-`length(m.vals)` for modifier `m` are effectively ignored by the modifier.
+interval equal to the longest part. A move or ramp shorter than the whole holds
+its final value, as the beam physically would; a pulse (or an `Off`) shorter than
+the whole ends at its own duration: each envelope its `ResetModifier` would zero
+at the end of the instruction is gated off from that time ([`GateModifier`](@ref)).
 """
 function compile(atoms, inst::Parallel, dt; resolve_target = identity)
+    isempty(inst.parts) && return (AbstractModifier[], _NO_BMODS, 0)
     compiled = map(inst.parts) do subinst
         compile(atoms, subinst, dt; resolve_target = resolve_target)
     end
-    all_mods  = reduce(vcat, getindex.(compiled, 1))
-    all_bmods = reduce(vcat, getindex.(compiled, 2))
+    all_mods  = AbstractModifier[m for (mods, _, _) in compiled for m in mods]
+    all_bmods = AbstractBoundaryModifier[b for (_, bmods, _) in compiled for b in bmods]
     n_steps   = maximum(getindex.(compiled, 3))
+    T = instruction_duration(inst)
+    for (part, (_, bmods, _)) in zip(inst.parts, compiled)
+        d = instruction_duration(part)
+        d < T || continue
+        for b in bmods
+            b isa ResetModifier && push!(all_mods, GateModifier(b.field, d))
+        end
+    end
     return all_mods, all_bmods, n_steps
 end

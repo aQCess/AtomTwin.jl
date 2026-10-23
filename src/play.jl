@@ -378,14 +378,16 @@ function _play(job::SimulationJob;
     n_instructions = length(job.modifiers)
     if job.state === nothing
         # Classical evolution
+        # An instruction with no steps (`On`, `Off`, a retune) still switches:
+        # its boundary modifiers run, only the evolution is skipped.
         @inbounds for i in 1:n_instructions
-            isempty(job.local_tspans[i]) && continue
             for m in job.boundary_modifiers[i]; begin_instruction!(m); end
             for m in job.modifiers[i]; begin_instruction!(m); end
-            evolve!(job.atoms, job.local_tspans[i];
-                    beams=job.beams, modifiers=job.modifiers[i],
-                    detectors=job.detectors[i], rng=rng, frozen=false,
-                    downsample=job.downsamples[i], dt=job.inst_dts[i])
+            isempty(job.local_tspans[i]) ||
+                evolve!(job.atoms, job.local_tspans[i];
+                        beams=job.beams, modifiers=job.modifiers[i],
+                        detectors=job.detectors[i], rng=rng, frozen=false,
+                        downsample=job.downsamples[i], dt=job.inst_dts[i])
             for m in job.boundary_modifiers[i]; end_instruction!(m); end
         end
     else
@@ -394,16 +396,16 @@ function _play(job::SimulationJob;
         # same answer, less work (see `_is_static`).
         frozen = frozen || _is_static(job)
         @inbounds for i in 1:n_instructions
-            isempty(job.local_tspans[i]) && continue
             for m in job.boundary_modifiers[i]; begin_instruction!(m); end
             for m in job.modifiers[i]; begin_instruction!(m); end
-            evolve!((job.state, job.atoms), job.local_tspans[i];
-                    fields=job.fields, beams=job.beams, jumps=job.jumps,
-                    modifiers=job.modifiers[i], detectors=job.detectors[i],
-                    rng=rng, frozen=frozen, downsample=job.downsamples[i],
-                    dt=job.inst_dts[i],
-                    tol=_propagator_tol(job.tol), steptol=job.tol,
-                    integrator=job.integrator)
+            isempty(job.local_tspans[i]) ||
+                evolve!((job.state, job.atoms), job.local_tspans[i];
+                        fields=job.fields, beams=job.beams, jumps=job.jumps,
+                        modifiers=job.modifiers[i], detectors=job.detectors[i],
+                        rng=rng, frozen=frozen, downsample=job.downsamples[i],
+                        dt=job.inst_dts[i],
+                        tol=_propagator_tol(job.tol), steptol=job.tol,
+                        integrator=job.integrator)
             for m in job.boundary_modifiers[i]; end_instruction!(m); end
         end
     end

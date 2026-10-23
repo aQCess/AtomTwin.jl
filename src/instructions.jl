@@ -345,12 +345,10 @@ resulting `Parallel` segment:
 - Uses a common time span from the earliest start to the latest
   end time among all sub-instructions.
 - Concatenates all emitted modifiers from the sub-instructions.
-- Relies on each modifier's `update!` method being a no-op once the
-  modifier has exhausted its internal data, so shorter instructions
-  naturally hold their final value while longer ones continue.
-
-This effectively "pads" shorter instructions in time up to the longest
-instruction without modifying the modifiers themselves.
+- A move or ramp shorter than the whole holds its final value while longer
+  parts continue, as the beam physically would; a pulse shorter than the whole
+  ends at its own duration (its coupling is gated off from then on), and an
+  `Off` switches off at the start.
 """
 struct Parallel <: AbstractInstruction
     parts::Vector{AbstractInstruction}

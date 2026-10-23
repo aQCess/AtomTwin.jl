@@ -403,7 +403,10 @@ function compile(sys::System, seq::Sequence;
     # so this divides exactly. `cld` rather than `÷` regardless, so that any path
     # which bypasses that refinement still sizes the buffer for the final partial
     # group instead of silently dropping the endpoint.
-    ds_counts  = [max(1, cld(step_counts[i], inst_ds[i])) for i in 1:n_instructions]
+    # An instruction with no steps (`On`, `Off`, a retune, `Wait(0)`) has no sample:
+    # one would duplicate the previous instruction's final time.
+    ds_counts  = [step_counts[i] == 0 ? 0 : max(1, cld(step_counts[i], inst_ds[i]))
+                  for i in 1:n_instructions]
     ds_offsets = cumsum([0; ds_counts])
     ds_total   = ds_offsets[end]
 
@@ -429,7 +432,7 @@ function compile(sys::System, seq::Sequence;
         times[seg] .= range(abs_start + step, step=step, length=ds_counts[i])
         # The last sample is the instruction's final step, which is only a whole
         # `step` from the previous one when `ds_i` divides `step_counts[i]`.
-        times[ds_offsets[i+1]] = abs_start + step_counts[i] * dt_i
+        ds_counts[i] > 0 && (times[ds_offsets[i+1]] = abs_start + step_counts[i] * dt_i)
         abs_start += step_counts[i] * dt_i
     end
 
