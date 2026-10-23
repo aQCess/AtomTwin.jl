@@ -324,3 +324,19 @@ end
     @test abs(Hs[1, 1]) > 2π * 1e5                  # the ¹S₀ trap shift (≈ 560 kHz) is there
     @test any(abs(Hs[i, j]) > 0 for i in 3:6, j in 3:6 if i != j)    # tensor mixing in ³P₁
 end
+
+@testset "an unknown species needs its mass and nuclear spin" begin
+    @test_throws ArgumentError AtomTwin.AtomWrapper{:Cesium133}()
+    @test_throws ArgumentError AtomTwin.AtomWrapper{:Cesium133}(; mass = 133 * AtomTwin.Units.amu)
+    cs = AtomTwin.AtomWrapper{:Cesium133}(; mass = 133 * AtomTwin.Units.amu, I = 7//2)
+    @test cs.m ≈ 133 * AtomTwin.Units.amu
+    @test cs.I == 7//2
+end
+
+@testset "a coupling to a level the atom lacks warns and adds nothing" begin
+    g, e = Level("g"), Level("e")
+    atom = Atom(; levels = [g, e]); sys = System(atom)
+    c = @test_logs (:warn, r"not found") add_coupling!(sys, atom, g => Level("x"), 2π * 1e6)
+    @test isempty(c)
+    @test isempty(sys.nodes)
+end

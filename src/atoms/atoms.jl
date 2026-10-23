@@ -211,7 +211,7 @@ Construct a parametric atomic species wrapper of type `S`, e.g.
 `AtomWrapper{:Ytterbium171}()`.
 
 Defaults for `mass` and `I` are taken from `ATOM_DEFAULTS` if not provided
-explicitly. `polarizabilities` — a `Dict` from term (`"1P1"` or `l"1P1"`) to
+explicitly; a species with no entry there must be given both. `polarizabilities` — a `Dict` from term (`"1P1"` or `l"1P1"`) to
 [`PolarizabilityModel`](@ref) — adds models for states the species does not ship
 and overrides those it does, for this atom only; levels match them by term as
 usual.
@@ -220,8 +220,11 @@ function AtomWrapper{S}(; levels=nothing, x=zeros(3), v=zeros(3),
                          x_init=nothing, v_init=nothing,
                          mass=nothing, I=nothing, polarizabilities=nothing) where S
     
-    defaults = get(ATOM_DEFAULTS, S, (mass=87amu, I=1//2))
-    
+    defaults = get(ATOM_DEFAULTS, S, nothing)
+    defaults === nothing && (mass === nothing || I === nothing) &&
+        throw(ArgumentError("no species defaults for :$S; pass `mass` and `I`, or use " *
+                            "one of $(join(sort!(collect(keys(ATOM_DEFAULTS))), ", "))"))
+
     m = mass === nothing ? defaults.mass : mass
     I_used = I === nothing ? defaults.I : I
     
