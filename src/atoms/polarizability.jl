@@ -269,6 +269,15 @@ function _calc_scattering_rate(ω0::Float64, Γ::Float64, ωL::Float64)
            (Γ / (ω0 - ωL) + Γ / (ω0 + ωL))^2
 end
 
+# Laser angular frequency from a wavelength in nanometres. Beams take metres, so
+# a wavelength in metres (`759e-9`, or `759nm` with `AtomTwin.Units`) is the easy
+# mistake here, and it gives a finite, wrong α rather than an error.
+function _laser_omega(λ_nm::Real)
+    λ_nm >= 1 || throw(ArgumentError(
+        "λ_nm = $λ_nm: the wavelength is in nanometres here (759.0, not 759e-9 or 759nm)"))
+    return 2π * c / (λ_nm * 1e-9)
+end
+
 """
     _Gamma_sc_over_I(model::PolarizabilityModel, λ_nm::Real) -> Float64
 
@@ -281,7 +290,7 @@ which holds for a trap wavelength well away from all resonances. Returns
 (1/s)/(W/m²).
 """
 function _Gamma_sc_over_I(model::PolarizabilityModel, λ_nm::Real)
-    ωL = 2π * c / (λ_nm * 1e-9)
+    ωL = _laser_omega(λ_nm)
 
     Γsc_over_I = 0.0
     for t in model.transitions
@@ -316,7 +325,7 @@ as a constant background contribution in the same units.
 - Scalar polarizability in SI units.
 """
 function _alpha0_si(model, λ_nm)
-    ωL = 2π * c / (λ_nm * 1e-9)
+    ωL = _laser_omega(λ_nm)
     α0 = 0.0
     Ji = model.J
     for t in model.transitions
@@ -424,7 +433,7 @@ function _alpha2_si(model::PolarizabilityModel, λ_nm::Real;
     pre = _tensor_prefactor(F)
     pre == 0.0 && return 0.0
 
-    ωL = 2π * c / (λ_nm * 1e-9)
+    ωL = _laser_omega(λ_nm)
     α2 = 0.0
     for t in model.transitions
         J_f = t.J_f

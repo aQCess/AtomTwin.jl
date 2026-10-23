@@ -284,6 +284,14 @@ using AtomTwin.Units: c, hbar
         end
     end
 end
+
+@testset "polarizability wavelengths are in nanometres; metres are rejected" begin
+    yb = Ytterbium171Atom(; levels = [Level("1S0")])
+    for f in (light_shift_coeff_Hz_per_Wcm2, polarizability_au, scattering_rate_per_Wcm2)
+        @test_throws ArgumentError f(yb, "1S0", 759e-9)
+    end
+    @test_throws ArgumentError polarizability_si(AtomTwin.YB171_POLARIZABILITY_1S0, 759e-9)
+end
 # The models were refitted to these (Kroeze et al., arXiv:2509.04416, Table 7),
 # with the clock magic wavelength weighted at its experimental uncertainty and the
 # others at a 0.015 nm model floor.
