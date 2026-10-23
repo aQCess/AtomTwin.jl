@@ -72,7 +72,7 @@ function _add_coupling!(
 )
     if get(atom.level_indices, level[1], nothing) === nothing ||
        get(atom.level_indices, level[2], nothing) === nothing
-        @warn "Level not found in atom.level_indices" level_1=level[1], level_2=level[2], atom=atom
+        @warn "Level not found in the atom; no coupling added" level_1 = level[1] level_2 = level[2]
         return nothing
     end
 
