@@ -559,9 +559,11 @@ node_output(n::VdWInteractionNode) = n._field
 
 function _vdw_transitions(node::VdWInteractionNode)
     atom1, atom2 = node.atoms
-    from_tuple = node.transition.first
-    t1 = atom1.level_indices[from_tuple[1]] => atom1.level_indices[from_tuple[2]]
-    t2 = atom2.level_indices[from_tuple[1]] => atom2.level_indices[from_tuple[2]]
+    from_tuple, to_tuple = node.transition.first, node.transition.second
+    # `(from1, from2) => (to1, to2)`, read exactly as `_interaction_transitions`
+    # does, so the two interaction forms build the same operator.
+    t1 = atom1.level_indices[from_tuple[1]] => atom1.level_indices[to_tuple[1]]
+    t2 = atom2.level_indices[from_tuple[2]] => atom2.level_indices[to_tuple[2]]
     return t1, t2
 end
 

@@ -231,13 +231,20 @@ end
 """
     rescale!(op::Op, s) -> op
 
-Multiply every entry of `op` by `s`, in place. How a field's operator follows a
-new rate without being rebuilt.
+Multiply the operator's rate by `s`, in place: every `forward` entry by `s` and
+every `reverse` entry (the Hermitian-conjugate half, `conj(v)`) by `conj(s)`, so
+a Hamiltonian stays Hermitian under a complex `s`. How a field's operator follows
+a new rate without being rebuilt.
 """
 function rescale!(op::Op, s::Number)
-    for v in (op.forward, op.reverse), k in eachindex(v)
-        i, j, x = v[k]
-        v[k] = (i, j, x * s)
+    for k in eachindex(op.forward)
+        i, j, x = op.forward[k]
+        op.forward[k] = (i, j, x * s)
+    end
+    cs = conj(s)
+    for k in eachindex(op.reverse)
+        i, j, x = op.reverse[k]
+        op.reverse[k] = (i, j, x * cs)
     end
     return op
 end

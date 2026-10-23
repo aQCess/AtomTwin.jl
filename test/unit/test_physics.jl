@@ -1275,3 +1275,48 @@ end
         @test H(S0f, P1f, beam, form)[1] ≈ H(S0h, P1h, beam, form)[1] rtol = 1e-12
     end
 end
+
+@testset "a coupling rescaled by a complex rate stays Hermitian" begin
+    # A Gaussian-beam coupling is refreshed per shot at the atom's position, with the
+    # beam phase exp(ik·z): the rescale of its operator must conjugate the reverse half.
+    g, e = Level("g"), Level("e")
+    beam = GaussianBeam(556e-9, 5e-6, 1e-3)
+    a = Atom(; levels = [g, e], x_init = gaussian(0.0, 0.0, 100e-9))
+    s = System(a)
+    c = add_coupling!(s, a, g => e, 2π * 1e6; beam, active = false)
+    add_detector!(s, PopulationDetectorSpec(a, g; name = "Pg"))
+    add_detector!(s, PopulationDetectorSpec(a, e; name = "Pe"))
+    q = Sequence(1e-9)
+    @sequence q begin
+        Pulse(c, 2e-6)
+    end
+    o = play(s, q; initial_state = g, shots = 4, frozen = true, rng = MersenneTwister(1))
+    @test maximum(abs.(o.detectors["Pg"] .+ o.detectors["Pe"] .- 1)) < 1e-9
+    H = AtomTwin.Dynamiq.Op(s.basis, a.inner, 1 => 2, 2π * 1e6)
+    AtomTwin.Dynamiq.rescale!(H, cis(0.7))
+    M = Matrix(AtomTwin.Dynamiq.sparse(H))
+    @test M ≈ M'
+end
+
+@testset "add_vdwinteraction! reads `transition` as add_interaction! does" begin
+    g, r = Level("g"), Level("r")
+    a1 = Atom(; levels = [g, r], x_init = [0.0, 0, 0])
+    a2 = Atom(; levels = [g, r], x_init = [3e-6, 0, 0])
+    for tr in ((r, r) => (r, r), (g, r) => (g, r), (g, r) => (r, g))
+        s1 = System([a1, a2]); add_interaction!(s1, (a1, a2), tr, 1.0)
+        s2 = System([a1, a2]); f = add_vdwinteraction!(s2, (a1, a2), tr, 1.0; V_cap = Inf)
+        @test findall(!iszero, Matrix(gethamiltonian(s1))) ==
+              findall(!iszero, Matrix(AtomTwin.Dynamiq.sparse(f.H)))
+    end
+    ## different level objects on the two atoms
+    g1, r1, g2, r2 = Level("g1"), Level("r1"), Level("g2"), Level("r2")
+    b1 = Atom(; levels = [g1, r1], x_init = [0.0, 0, 0])
+    b2 = Atom(; levels = [g2, r2], x_init = [3e-6, 0, 0])
+    s = System([b1, b2])
+    @test add_interaction!(s, (b1, b2), (r1, r2) => (r1, r2), 1.0) isa AtomTwin.Dynamiq.AbstractField
+    @test add_vdwinteraction!(s, (b1, b2), (r1, r2) => (r1, r2), 1.0) isa AtomTwin.Dynamiq.AbstractField
+    ## a parametric C6 with the default cap
+    s3 = System([a1, a2])
+    @test add_vdwinteraction!(s3, (a1, a2), (r, r) => (r, r), Parameter(:C6, 2π * 1e6 * (4e-6)^6)) isa
+          AtomTwin.Dynamiq.AbstractField
+end
