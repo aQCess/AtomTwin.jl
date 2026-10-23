@@ -167,8 +167,14 @@ function build_node!(node::GaussianCouplingNode, basis::Basis)
     idx1 = node.atom.level_indices[node.transition[1]]
     idx2 = node.atom.level_indices[node.transition[2]]
     Ωref = node.Ω0_override === nothing ? nothing : _resolve_node_default(node.Ω0_override)
-    Ω0 = _gaussian_Ω0(node, node.atom.x, Ωref)
+    # Built at the beam's reference point (its focus), not where the atom happens
+    # to be before `compile` places it: the atom's `x_init` may be far from the
+    # origin, and a coupling built beyond the beam's cutoff would be zero for good.
+    # `compile`/`recompile!` then set Ω₀ and E₀ at the atom's position per shot.
+    x_ref = hasproperty(node.beam, :r0) ? Vector{Float64}(node.beam.r0) : node.atom.x
+    Ω0 = _gaussian_Ω0(node, x_ref, Ωref)
     c = GaussianCoupling(basis, node.atom.inner, idx1 => idx2, node.beam, Ω0)
+    c.E0 = ComplexF64(Dynamiq.efield_scalar(node.beam, x_ref))
     c._amplitude[] = node.active ? ComplexF64(1.0) : ComplexF64(0.0)
     node._field = c
     return c

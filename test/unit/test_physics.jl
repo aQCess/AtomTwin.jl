@@ -1320,3 +1320,75 @@ end
     @test add_vdwinteraction!(s3, (a1, a2), (r, r) => (r, r), Parameter(:C6, 2π * 1e6 * (4e-6)^6)) isa
           AtomTwin.Dynamiq.AbstractField
 end
+
+@testset "a Gaussian-beam coupling is built at the beam's focus and follows the atom per shot" begin
+    g, e = Level("g"), Level("e")
+    site = [10e-6, 0.0, 0.0]                        # 10 waists from the origin
+    beam = GaussianBeam(556e-9, 1e-6, 1e-3; r0 = site)
+    ## explicit Ω: an atom `x_init` places at the site sees the full Ω
+    a = Atom(; levels = [g, e], x_init = site); s = System(a)
+    c = add_coupling!(s, a, g => e, 2π * 1e6; beam, active = false)
+    add_detector!(s, PopulationDetectorSpec(a, e; name = "Pe"))
+    q = Sequence(1e-9)
+    @sequence q begin
+        Pulse(c, 0.5e-6)                              # a π pulse at the focus
+    end
+    @test play(s, q; initial_state = g, frozen = true).detectors["Pe"][end] ≈ 1 atol = 1e-6
+    ## beam-derived: the sublevel pairs are kept although the atom sits at the origin until compile
+    S0 = HyperfineManifold(1//2, 0; label = "1S0", term = l"1S0")
+    P1 = HyperfineManifold(3//2, 1; label = "3P1", term = l"3P1")
+    yb = Ytterbium171Atom(; levels = [S0..., P1...], x_init = site)
+    @test length(add_coupling!(System(yb), yb, S0 => P1; beam)) == 4
+    ## a shot beyond the beam's cutoff zeroes the operator; the next shot gets it back
+    node = only(n for n in s.nodes if n isa AtomTwin.GaussianCouplingNode)
+    f = node._field
+    AtomTwin._refresh_gaussian!(node, f, [0.0, 0, 0], Dict{Symbol,Any}(), Random.default_rng())
+    @test f.Ω0 == 0
+    AtomTwin._refresh_gaussian!(node, f, site, Dict{Symbol,Any}(), Random.default_rng())
+    @test abs(f.Ω0) ≈ 2π * 1e6 && abs(f.H.forward[1][3]) ≈ π * 1e6
+end
+
+@testset "build-time tol keeps a parametric Ω or rate whose default is zero" begin
+    S0 = HyperfineManifold(1//2, 0; label = "1S0", term = l"1S0")
+    P1 = HyperfineManifold(3//2, 1; label = "3P1", term = l"3P1")
+    yb = Ytterbium171Atom(; levels = [S0..., P1...]); s = System(yb)
+    cs = add_coupling!(s, yb, S0 => P1; Ω_p = Parameter(:Ω, 0.0), active = false)
+    @test length(cs) == 2
+    add_detector!(s, PopulationDetectorSpec(yb, P1[3//2]; name = "Pe"))
+    q = Sequence(1e-9)
+    @sequence q begin
+        Pulse(cs, 0.5e-6)
+    end
+    @test play(s, q; initial_state = S0[1//2], frozen = true, Ω = 2π * 1e6).detectors["Pe"][end] ≈ 1 atol = 1e-6
+    @test length(add_decay!(System(yb), yb, P1 => S0, Parameter(:Γ, 0.0))) == 3
+end
+
+@testset "a hyperfine → fine coupling adds its polarizations in quadrature" begin
+    g = HyperfineLevel(2//1, 1//2, 0//1)                 # |F = 2, m = 0⟩ of a J = 1/2 ground state
+    e = FineLevel(1//2, 1//2)
+    rb = Rubidium87Atom(; levels = [g, e])              # I = 3/2
+    Ωπ = AtomTwin.compute_coupling_strength(g, e, rb, 1.0, 0.0, 0.0)
+    Ωσ = AtomTwin.compute_coupling_strength(g, e, rb, 0.0, 1.0, 0.0)
+    both = AtomTwin.compute_coupling_strength(g, e, rb, 1.0, 1.0, 0.0)
+    @test both ≈ hypot(Ωπ, Ωσ)
+    @test both ≈ AtomTwin.compute_coupling_strength(g, e, rb, 1.0, -1.0, 0.0)   # the relative sign is unphysical
+    @test AtomTwin.compute_coupling_strength(g, e, rb, Parameter(:Ω, 1.0), 0.0, 0.0) isa ParametricExpression
+    @test_throws ArgumentError AtomTwin.compute_coupling_strength(g, e, rb, Parameter(:Ω, 1.0), 1.0, 0.0)
+end
+
+@testset "rabi_frequencies(atom, g, e, beam) reproduces the beam-derived Hamiltonian" begin
+    S0 = HyperfineManifold(1//2, 0; label = "1S0", term = l"1S0")
+    P1 = HyperfineManifold(3//2, 1; label = "3P1", term = l"3P1")
+    yb0 = Ytterbium171Atom()
+    Γ, ω = getdecayrates(yb0)["3P1" => "1S0"], 2π * getlinefrequencies(yb0)["3P1" => "1S0"]
+    Isat = AtomTwin.Units.hbar * ω^3 * Γ / (12π * AtomTwin.Units.c^2)
+    beam = PlanarBeam(2π * AtomTwin.Units.c / ω, Isat, [0.0, 0, 1], [1.0, 0.3im, 0.2])
+    H(f) = (yb = Ytterbium171Atom(; levels = [S0..., P1...]); s = System(yb); f(s, yb); gethamiltonian(s))
+    Hb = H((s, yb) -> add_coupling!(s, yb, S0 => P1, beam))
+    Hp = H((s, yb) -> add_coupling!(s, yb, S0 => P1, rabi_frequencies(yb, S0, P1, beam)...))
+    @test Hp ≈ Hb rtol = 1e-12
+    ## the bare form takes the stretched-transition element, √3 below the reduced one on this line
+    d = reduced_dipole(yb0, S0[1//2], P1[3//2])
+    Hr = H((s, yb) -> add_coupling!(s, yb, S0 => P1, rabi_frequencies(beam; d_red = d)...))
+    @test maximum(abs.(Hr)) ≈ √3 * maximum(abs.(Hb)) rtol = 1e-9
+end

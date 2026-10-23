@@ -239,7 +239,8 @@ both the commanded pulse amplitude and the atom's position scale the instantaneo
 Cost: one `efield_scalar` evaluation + one complex multiply + one divide — no alloc.
 """
 function update!(f::GaussianCoupling, ::Real)
-    g = efield_scalar(f.beam, f.atom.x) / f.E0
+    # E₀ = 0 when the shot placed the atom beyond the beam's cutoff: no field, no coupling.
+    g = iszero(f.E0) ? zero(ComplexF64) : efield_scalar(f.beam, f.atom.x) / f.E0
     f._geom[]  = g
     f._coeff[] = f._amplitude[] * g
     return nothing
