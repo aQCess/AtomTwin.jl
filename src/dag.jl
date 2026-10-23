@@ -61,15 +61,8 @@ SCALAR RESOLUTION HELPERS
 _resolve_node_default(x::Number)    = x
 _resolve_node_default(p::Parameter) = p.default
 _resolve_node_default(x)            = x  # fallback: vectors, arrays, etc.
-function _resolve_node_default(expr::ParametricExpression)
-    args = [_resolve_node_default(a) for a in expr.args]
-    expr.op == :* && return prod(args)
-    expr.op == :+ && return sum(args)
-    expr.op == :- && return length(args) == 1 ? -args[1] : args[1] - args[2]
-    expr.op == :inv && return inv(args[1])
-    error("Unsupported op in ParametricExpression at build time: $(expr.op). " *
-          "Supported ops: :+, :-, :*, :inv.")
-end
+_resolve_node_default(expr::ParametricExpression) =
+    _apply_op(expr.op, [_resolve_node_default(a) for a in expr.args])
 
 """Evaluate a node value at compile/recompile time (samples std if nonzero)."""
 _resolve_node_value(x::Number, _, _) = x
@@ -85,15 +78,8 @@ function _resolve_node_value(p::Parameter, param_values, rng)
     return std_val != 0.0 ? mean_val + randn(rng) * std_val : mean_val
 end
 
-function _resolve_node_value(expr::ParametricExpression, param_values, rng)
-    args = [_resolve_node_value(a, param_values, rng) for a in expr.args]
-    expr.op == :* && return prod(args)
-    expr.op == :+ && return sum(args)
-    expr.op == :- && return length(args) == 1 ? -args[1] : args[1] - args[2]
-    expr.op == :inv && return inv(args[1])
-    error("Unsupported op in ParametricExpression: $(expr.op). " *
-          "Supported ops: :+, :-, :*, :inv.")
-end
+_resolve_node_value(expr::ParametricExpression, param_values, rng) =
+    _apply_op(expr.op, [_resolve_node_value(a, param_values, rng) for a in expr.args])
 
 #=============================================================================
 COUPLING NODE  (GlobalCoupling)

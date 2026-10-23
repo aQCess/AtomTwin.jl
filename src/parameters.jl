@@ -91,6 +91,25 @@ Called by `compile` and `recompile!` for each registered parameter binding.
 """
 function update! end
 
+"""
+    _apply_op(op, args)
+
+Evaluate one `ParametricExpression` node on its resolved arguments. The single
+table of operations shared by every resolver (build time, compile time, beams
+and instructions), so an expression that builds also resolves.
+"""
+function _apply_op(op::Symbol, args)
+    op === :* && return prod(args)
+    op === :+ && return sum(args)
+    op === :- && return length(args) == 1 ? -args[1] : args[1] - args[2]
+    op === :inv && return inv(args[1])
+    op === :abs && return abs(args[1])
+    error("Unsupported op in ParametricExpression: $op. Supported ops: :+, :-, :*, :inv, :abs.")
+end
+
+Base.:-(p::Parameter)              = ParametricExpression(:-, (p,))
+Base.:-(expr::ParametricExpression) = ParametricExpression(:-, (expr,))
+
 Base.:*(p::Parameter, x::Number) = ParametricExpression(:*, (p, x))
 Base.:*(x::Number, p::Parameter) = ParametricExpression(:*, (x, p))
 Base.:*(p1::Parameter, p2::Parameter) = ParametricExpression(:*, (p1, p2))
@@ -125,6 +144,9 @@ Base.:/(x::Number, p::Parameter)              = ParametricExpression(:*, (x, inv
 Base.:/(expr::ParametricExpression, x::Number) = ParametricExpression(:*, (expr, 1/x))
 Base.:/(x::Number, expr::ParametricExpression) = ParametricExpression(:*, (x, inv(expr)))
 Base.:/(e1::ParametricExpression, e2::ParametricExpression) = ParametricExpression(:*, (e1, inv(e2)))
+Base.:/(p1::Parameter, p2::Parameter)             = ParametricExpression(:*, (p1, inv(p2)))
+Base.:/(p::Parameter, expr::ParametricExpression) = ParametricExpression(:*, (p, inv(expr)))
+Base.:/(expr::ParametricExpression, p::Parameter) = ParametricExpression(:*, (expr, inv(p)))
 
 Base.:inv(p::Parameter)              = ParametricExpression(:inv, (p,))
 Base.:inv(expr::ParametricExpression) = ParametricExpression(:inv, (expr,))

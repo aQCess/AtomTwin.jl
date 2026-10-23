@@ -249,7 +249,7 @@ function compile(sys::System, seq::Sequence;
     end
 
     # Collect all beams: trapping beams from sys.beams + coupling beams from BeamNodes
-    resolved_trapping = AbstractBeam[resolve(b, param_values; cache=cache) for b in sys.beams]
+    resolved_trapping = AbstractBeam[resolve(b, param_values; cache=cache, rng=rng) for b in sys.beams]
     resolved_coupling = AbstractBeam[n._compiled[] for n in sorted_nodes if n isa BeamNode]
     resolved_beams    = vcat(resolved_trapping, resolved_coupling)
 
@@ -304,7 +304,7 @@ function compile(sys::System, seq::Sequence;
 
     # Resolver function that uses the SAME cache for pointer sharing
     resolve_target = obj -> begin
-        resolved_obj = resolve(obj, param_values; cache=cache)
+        resolved_obj = resolve(obj, param_values; cache=cache, rng=rng)
         return update_noisy_field_time_refs!(resolved_obj, global_time_ref)
     end
 
@@ -334,7 +334,7 @@ function compile(sys::System, seq::Sequence;
 
     for (i, inst) in enumerate(seq)
         # Resolve instruction if it contains deferred objects (using same cache)
-        resolved_inst = resolve(inst, param_values; cache=cache)
+        resolved_inst = resolve(inst, param_values; cache=cache, rng=rng)
 
         # Per-instruction dt: instruction's own, else the sequence's, else derived.
         dt_i = something(resolved_inst.dt, seq.dt, derived_dt)
