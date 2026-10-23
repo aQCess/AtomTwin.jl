@@ -41,7 +41,7 @@ function evolve!(state::Tuple{Matrix{ComplexF64},Vector{<:NLevelAtom}},
                  fields::Vector{<:AbstractField} = AbstractField[],
                  jumps::Vector{Jump}              = Jump[],
                  beams::Vector{<:AbstractBeam}    = AbstractBeam[],
-                 frozen::Bool                     = true,
+                 frozen::Bool                     = false,
                  rng = nothing,                   # unused: the master equation
                  kwargs...)                       # is deterministic
     ρ, atoms = state
@@ -51,14 +51,14 @@ function evolve!(state::Tuple{Matrix{ComplexF64},Vector{<:NLevelAtom}},
         end
     end
 
-    refresh_fields!(fields)     # the stability check below reads the coefficients
+    refresh_fields!(fields)
     L = Tuple{Base.RefValue{ComplexF64},Op}[(d._coeff, d.H) for d in fields]
     J = Tuple{Base.RefValue{ComplexF64},Op,Vector{Float64}}[
         (j._coeff, j.J, j.LdagL_diag) for j in jumps
     ]
 
-    warn_if_step_too_large(L, length(tspan) > 1 ? tspan[2] - tspan[1] : 0.0,
-                           get(kwargs, :integrator, Chebyshev()))
+    # No step-size warning here: the density-matrix solvers never take one
+    # Taylor step of `dt`, they sub-divide it under `steptol` (`strang_substeps!`).
     # `play` freezes a run in which nothing can move (`_is_static`); a free atom
     # driven by plane waves has no beams yet still feels radiation pressure.
     if frozen
@@ -92,7 +92,9 @@ function evolve!(state::Tuple{Vector{ComplexF64},Vector{<:NLevelAtom}},
 
     psi, atoms = state
     refresh_fields!(fields)     # the stability check below reads the coefficients
-    _dt_probe = length(tspan) > 1 ? tspan[2] - tspan[1] : 0.0
+    _dt_kw = get(kwargs, :dt, nothing)
+    _dt_probe = _dt_kw !== nothing ? Float64(_dt_kw) :
+                length(tspan) > 1 ? tspan[2] - tspan[1] : 0.0
     H = Tuple{Base.RefValue{ComplexF64},Op}[(d._coeff, d.H) for d in fields]
     warn_if_step_too_large(H, _dt_probe, get(kwargs, :integrator, Chebyshev()))
 
@@ -204,12 +206,12 @@ function tdse(psi::Vector{ComplexF64},
     plan = plan_step(integrator, psi, dt, spec; tol = tol)
 
     has_modifiers = !isempty(modifiers)
-    has_fields    = !isempty(fields)
     has_detectors = !isempty(detectors)
+    refresh = !isempty(fields) && any(_moves_beam, modifiers)   # see `_moves_beam`
 
     @inbounds for i in 1:steps
         _resample!(modifiers, (i - 0.5) * dt, dt)
-        if has_fields
+        if refresh
             for f in fields
                 update!(f, i)
             end
@@ -277,6 +279,7 @@ function tdse_semiclassical(psi::Vector{ComplexF64},
     # Here the quantum step is inserted between the drift and kick, hence split velocity Verlet.
     @inbounds for i in 1:steps
         _drift_atoms!(atoms, psi, xbuf, beams, modifiers, i, dt, false)
+        radiation_drift!(rp, dt)           # the radiation force at t₀ drifts the atoms too
         # The quantum step is the exponential midpoint rule: beams AND atoms at t_mid.
         _resample!(modifiers, (i - 0.5) * dt, dt)
         has_fields && _update_fields_at_midpoint!(fields, atoms, xbuf, i)
@@ -443,63 +446,21 @@ function force(atom::A, beams::Vector{<:AbstractBeam}) where {A}
 end
 
 """
-    fclassical!(dt, atom, beams)
-
-One classical step of `atom` under the forces from `beams`, by velocity Verlet:
-
-    x ← x + v dt + (F_old/2m) dt²
-    F_new ← F(x)
-    v ← v + ((F_old + F_new)/2m) dt
-
-Second order at exactly ONE force evaluation per step -- the same cost as
-first-order symplectic Euler -- because `F_new` is cached on `atom._F` and reused
-as the next step's `F_old`. Measured against symplectic Euler in a Gaussian trap:
-order 1 → 2.000, position error ~1000x smaller, energy drift ~12000x smaller.
-
-`atom._Fvalid` guards the first step of an instruction, where no previous force
-exists; `reset_force!` clears it.
-"""
-function fclassical!(dt::Float64, atom::A, beams::Vector{<:AbstractBeam}) where {A}
-    inv_m  = 1.0 / atom.m
-    half   = 0.5 * dt * inv_m
-
-    @inbounds begin
-        # First step: F_old must correspond to the current x.
-        if !atom._Fvalid
-            f0x, f0y, f0z = force(atom, beams)
-            atom._F[1] = f0x; atom._F[2] = f0y; atom._F[3] = f0z
-            atom._Fvalid = true
-        end
-
-        # Drift: x ← x + v dt + (F_old / 2m) dt²
-        hdt2 = 0.5 * dt * dt * inv_m
-        atom.x[1] = muladd(atom.v[1], dt, muladd(atom._F[1], hdt2, atom.x[1]))
-        atom.x[2] = muladd(atom.v[2], dt, muladd(atom._F[2], hdt2, atom.x[2]))
-        atom.x[3] = muladd(atom.v[3], dt, muladd(atom._F[3], hdt2, atom.x[3]))
-
-        # One force evaluation at the NEW position.
-        Fx, Fy, Fz = force(atom, beams)
-
-        # Kick: v ← v + ((F_old + F_new) / 2m) dt
-        atom.v[1] = muladd(atom._F[1] + Fx, half, atom.v[1])
-        atom.v[2] = muladd(atom._F[2] + Fy, half, atom.v[2])
-        atom.v[3] = muladd(atom._F[3] + Fz, half, atom.v[3])
-
-        # Carry F_new forward as the next step's F_old.
-        atom._F[1] = Fx; atom._F[2] = Fy; atom._F[3] = Fz
-    end
-end
-
-"""
     fdrift!(dt, atom, beams)
 
-The drift half of [`fclassical!`](@ref): `x ← x + v dt + (F_old/2m) dt²`,
-priming `F_old` on the first step of an instruction.
+The drift half of a velocity-Verlet step, `x ← x + v dt + (F_old/2m) dt²`,
+priming `F_old` on the first step of an instruction. With [`fkick!`](@ref)
+(`F_new ← F(x)`, `v ← v + ((F_old + F_new)/2m) dt`, `F_new` cached as the next
+step's `F_old`) that is second order at exactly ONE force evaluation per step --
+the cost of first-order symplectic Euler. Measured against symplectic Euler in a
+Gaussian trap: order 1 → 2.000, position error ~1000x smaller, energy drift
+~12000x smaller.
 
 Split from [`fkick!`](@ref) so a semiclassical solver can run the quantum step
 between the two halves. The force weights each level's α by its population, so
 the kick's force at the step's end is computed from the populations after the
-quantum step.
+quantum step. `atom._Fvalid` guards the first step of an instruction, where no
+previous force exists; `reset_force!` clears it.
 """
 function fdrift!(dt::Float64, atom::A, beams::Vector{<:AbstractBeam}) where {A}
     @inbounds begin
@@ -604,15 +565,16 @@ end
 
 Invalidate the cached velocity-Verlet force. Call whenever `atom.x` moves outside
 the integrator -- a new instruction, a repositioned tweezer -- so the next
-[`fclassical!`](@ref) re-primes `F_old` at the current position.
+[`fdrift!`](@ref) re-primes `F_old` at the current position.
 """
 reset_force!(atom) = (atom._Fvalid = false; nothing)
 
 """
-    newton(atoms, tspan; beams, modifiers, detectors)
+    newton(atoms, tspan; beams, modifiers, detectors, downsample, dt)
 
 Purely classical motion of `atoms` over the equidistant grid `tspan`. The force
-sweep is parallelised with `@batch` when `length(atoms) > 2`.
+sweep is parallelised with `@batch` when `length(atoms) > 2`. `dt` is the step,
+as for the quantum solvers (`_step_of`): a one-sample `tspan` needs it.
 """
 function newton(atoms::Vector{A},
                 tspan::AbstractVector{Float64};
@@ -620,10 +582,11 @@ function newton(atoms::Vector{A},
                 modifiers::Vector{<:AbstractModifier} = AbstractModifier[],
                 detectors::Vector{<:AbstractDetector} = AbstractDetector[],
                 downsample::Int                   = 1,
+                dt                                = nothing,
                 kwargs...) where {A}
 
     steps = length(tspan)
-    dt    = steps > 1 ? tspan[2] - tspan[1] : 0.0
+    dt    = _step_of(tspan, dt)
 
     # Measured on the `fclassical!` sweep at 10 threads: @batch is 1.28x at N=4,
     # 2.8x at 16, 4.7x at 42, 5.9x at 256, and loses only at N=2 (0.80x). So the
@@ -693,22 +656,46 @@ function wfmc(psi::Vector{ComplexF64},
     Heff_terms = vcat(H, Hnh)
     refresh_fields!(fields)
     spec = spectral_spec(Heff_terms)
-    plan = plan_step(integrator, psi, dt, spec; tol = tol)
+    # Exact for a Hermitian H at any step, the expansion is not for H_eff: off the
+    # real axis its terms grow with the degree and past the bound of
+    # `propagator_theta` the truncated series diverges -- silently, as the jump
+    # test renormalises the state. So the output step is sub-divided to the step
+    # the bound allows (`suggested_dt`), as the density-matrix solver sub-divides
+    # to its tolerance; jump times stay exact, on each sub-step's dense output.
+    nsub = _nonhermitian_substeps(Heff_terms, dt, tol, integrator)
+    h    = dt / nsub
+    plan = plan_step(integrator, psi, h, spec; tol = tol)
     D    = ChebyshevDense(length(psi))
+    refresh = has_fields && any(_moves_beam, modifiers)   # frozen atoms: only a moved beam changes a field
 
     @inbounds for i in 1:steps
         _resample!(modifiers, (i - 0.5) * dt, dt)
-        if has_fields
+        if refresh
             for f in fields
                 update!(f, i)
             end
         end
         has_modifiers && track_spectrum!(plan, Heff_terms; recenter = false)
-        mcwf_advance!(psi, Heff_terms, plan, D, dt, jumps, photo_detectors, i, steps,
-                      downsample, _prob, _q1, _q2, rng)
+        for q in 1:nsub
+            mcwf_advance!(psi, Heff_terms, plan, D, h, jumps, photo_detectors, i, steps,
+                          downsample, _prob, _q1, _q2, rng)
+        end
         has_detectors && write_detectors!(state_detectors, i, steps, downsample)
     end
 end
+
+# Sub-steps per output step for the non-Hermitian MCWF propagation: the largest
+# step `propagator_theta` allows for the operator's anti-Hermitian radius, at the
+# drives' peak amplitude.
+function _nonhermitian_substeps(Heff, dt::Float64, tol::Float64, integrator)
+    hmax = suggested_dt(Heff, tol; integrator = integrator)
+    return max(1, ceil(Int, dt / hmax))
+end
+
+# Does the modifier move or re-amplify a beam? In a frozen run that is the only
+# way a position-dependent field changes within an instruction.
+_moves_beam(m) = m isa PositionModifier || m isa MoveModifier || m isa SetPositionModifier ||
+                 (hasproperty(m, :field) && getproperty(m, :field) isa AbstractBeam)
 
 # Exact jump times need the step's dense output, which only the Chebyshev
 # propagator provides.
@@ -780,7 +767,7 @@ updatepop!(::AbstractAtom, ::Nothing) = nothing
     wfmc_semiclassical(psi, atoms, H, Hnh, jumps, tspan; kwargs...)
 
 [`wfmc`](@ref) with semiclassical atomic motion: each step also advances the atoms
-under [`fclassical!`](@ref), and each sub-step applies the radiation pressure of the
+by velocity Verlet ([`fdrift!`](@ref), [`fkick!`](@ref)), and each sub-step applies the radiation pressure of the
 plane-wave drives ([`RadiationPressure`](@ref)).
 """
 function wfmc_semiclassical(psi::Vector{ComplexF64},
@@ -821,8 +808,10 @@ function wfmc_semiclassical(psi::Vector{ComplexF64},
     rp   = radiation_pressure(fields, atoms; conditional = true)   # `nothing` without planar drives
     # The radiation impulse is a trapezoid over each stretch of evolution, so a
     # coherent drive needs the same resolution as in `tdse_semiclassical`: 0.1 rad
-    # of the driven states' rotation. Jumps need none (see `mcwf_advance!`).
-    nsub = rp === nothing ? 1 : _radiation_substeps(rp, H, dt, modifiers)
+    # of the driven states' rotation. Jumps need none (see `mcwf_advance!`). The
+    # non-Hermitian expansion needs its own bound, as in `wfmc`.
+    nsub = max(rp === nothing ? 1 : _radiation_substeps(rp, H, dt, modifiers),
+               _nonhermitian_substeps(Heff_terms, dt, tol, integrator))
     h    = dt / nsub
     plan = plan_step(integrator, psi, h, spec; tol = tol)
     D    = ChebyshevDense(length(psi))
@@ -832,6 +821,7 @@ function wfmc_semiclassical(psi::Vector{ComplexF64},
     # Velocity Verlet split around the quantum step, as in `tdse_semiclassical`.
     @inbounds for i in 1:steps
         _drift_atoms!(atoms, psi, xbuf, beams, modifiers, i, dt, false)
+        radiation_drift!(rp, dt)           # the radiation force at t₀ drifts the atoms too
         _resample!(modifiers, (i - 0.5) * dt, dt)
         has_fields && _update_fields_at_midpoint!(fields, atoms, xbuf, i)
         # The atoms just moved, so the trap light shift moved with them. Hoisted
@@ -886,8 +876,8 @@ function qme(rho::Matrix{ComplexF64},
 
     steps = length(tspan)
     dt    = _step_of(tspan, dt)
-    has_fields     = !isempty(fields)
     has_detectors  = !isempty(detectors)
+    refresh = !isempty(fields) && any(_moves_beam, modifiers)   # see `_moves_beam`
 
     # The integration step adapts within `dt`; `dt` itself stays the control and
     # output grid, so modifiers and detectors fire exactly where compiled.
@@ -898,7 +888,7 @@ function qme(rho::Matrix{ComplexF64},
 
     @inbounds for i in 1:steps
         _resample!(modifiers, (i - 0.5) * dt, dt)
-        if has_fields
+        if refresh
             for f in fields
                 update!(f, i)
             end
@@ -956,6 +946,7 @@ function qme_semiclassical(rho::Matrix{ComplexF64},
     # the kick refreshes `_P` from ρ after the step, as `tdse`/`wfmc` do from ψ.
     @inbounds for i in 1:steps
         _drift_atoms!(atoms, rho, xbuf, beams, modifiers, i, dt, parallel)
+        radiation_drift!(rp, dt)           # the radiation force at t₀ drifts the atoms too
         _resample!(modifiers, (i - 0.5) * dt, dt)
         has_fields && _update_fields_at_midpoint!(fields, atoms, xbuf, i)
         radiation_begin!(rp, rho)

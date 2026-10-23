@@ -830,3 +830,66 @@ end
     @test run(true; dm = true) ≈ run(false; dm = true) rtol = 1e-10
     @test run(true; dm = false) == run(false; dm = false)
 end
+
+@testset "MCWF sub-divides a coarse output step for the non-Hermitian propagation" begin
+    # Chebyshev is exact for a Hermitian H at any step but not for H_eff; a weak
+    # drive on a decaying line with Γ·dt ≫ 10 used to give a renormalised,
+    # plausible, wrong population with no warning. Reference: the master equation.
+    g, e = Level("g"), Level("e")
+    Γ = 2π * 1e6
+    function pe(Ω, dt; shots, dm)
+        a = Atom(; levels = [g, e]); s = System(a)
+        add_coupling!(s, a, g => e, Ω)
+        add_decay!(s, a, e => g, Γ)
+        add_detector!(s, PopulationDetectorSpec(a, e; name = "Pe"))
+        q = dt === nothing ? Sequence(; tol = 1e-6) : Sequence(dt)
+        push!(q, Wait(20e-6))
+        p = play(s, q; initial_state = g, frozen = true, shots = shots, density_matrix = dm,
+                 rng = Xoshiro(3)).detectors["Pe"]
+        ndims(p) == 1 ? p[end] : vec(p[end, :])
+    end
+    for Ω in (0.1Γ, 0.3Γ, Γ), dt in (50 / Γ, 200 / Γ, nothing)
+        ref = pe(Ω, 1e-8; shots = 1, dm = true)
+        ps  = pe(Ω, dt; shots = 64, dm = false)
+        m   = sum(ps) / 64
+        σ   = sqrt(sum(abs2, ps .- m) / 63 / 64)
+        @test abs(m - ref) < 4σ + 0.01
+    end
+end
+
+@testset "a one-step classical instruction moves the atoms" begin
+    g = Level("1S0")
+    function xv(dt)
+        yb = Ytterbium174Atom(; levels = [g], x_init = [0.2e-6, 0, 0], v_init = zeros(3))
+        s = System(yb, GaussianBeam(759e-9, 1e-6, 20e-3))
+        add_detector!(s, MotionDetectorSpec(yb; dims = [1, 4], name = "x"))
+        q = Sequence(dt); push!(q, Wait(2e-6))
+        play(s, q).detectors["x"][end, :]
+    end
+    one, two = xv(2e-6), xv(1e-6)
+    @test abs(one[1] - 0.2e-6) > 1e-8          # not frozen at the start
+    @test one ≈ two rtol = 0.1
+end
+
+@testset "radiation pressure moves the position at second order in dt" begin
+    g, e = Level("g"), Level("e")
+    Γ, λ = 2π * 29e6, 399e-9
+    Isat = AtomTwin.Units.hbar * (2π * AtomTwin.Units.c / λ)^3 * Γ / (12π * AtomTwin.Units.c^2)
+    function x_end(dt)
+        a = Ytterbium174Atom(; levels = [g, e], x_init = zeros(3), v_init = zeros(3))
+        s = System(a)
+        b = PlanarBeam(λ, 40Isat, [1.0, 0, 0], [0.0, 1, 0])
+        add_coupling!(s, a, g => e, Γ * sqrt(20); beam = b)
+        add_decay!(s, a, e => g, Γ)
+        add_detector!(s, MotionDetectorSpec(a; dims = [1], name = "x"))
+        q = Sequence(dt; tol = 1e-10); push!(q, Wait(400e-9))
+        play(s, q; initial_state = g, density_matrix = true).detectors["x"][end]
+    end
+    ref = x_end(0.5e-9)
+    # The impulse once entered the velocity only, leaving the position an error of
+    # a·T·dt/2 = x·dt/T (4 % at 16 ns); with the force in the drift too it is well
+    # below that at every step (the rest is the controller's sub-stepping).
+    for dt in (16e-9, 4e-9)
+        @test abs(x_end(dt) - ref) < 0.2 * abs(ref) * dt / 400e-9
+    end
+end

@@ -558,7 +558,7 @@ Recompute the van der Waals coefficient from the current inter-atom separation:
     V = C6 / r⁶
 
 with its magnitude clamped to `|V_cap|` when finite. Called each solver
-timestep after `fclassical!` has updated positions.
+timestep after `fdrift!`/`fkick!` have updated positions.
 """
 function update!(d::VdWInteraction, ::Real)
     x1 = d.atom1.x;  x2 = d.atom2.x

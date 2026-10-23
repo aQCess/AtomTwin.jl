@@ -685,7 +685,7 @@ function initialize!(a::AtomWrapper, inner::NLevelAtom;
                      param_values = Dict{Symbol,Any}(),
                      q_axis       = [0.0, 0.0, 1.0],
                      tensor_pairs = :keep)
-    # 0. Drop any force cached by a previous shot. `fclassical!` (velocity Verlet)
+    # 0. Drop any force cached by a previous shot. `fdrift!`/`fkick!` (velocity Verlet)
     #    reuses the last step's force as this step's F_old, so a stale value from
     #    another shot — or from the position this atom had before re-initialising
     #    below — would corrupt the first step of the trajectory.
