@@ -121,14 +121,18 @@ add_detector!(sys, CoherenceDetectorSpec(atom, g=>e; name="rho_ge"))
 # Monitor atomic trajectory
 add_detector!(sys, MotionDetectorSpec(atom; dims=[1,2,3], name="position"))
 
-# Monitor Rabi field strength
-add_detector!(sys, FieldDetectorSpec(rabi_beam; name="Omega"))
-function add_detector!(sys::System, spec::Dynamiq.DetectorSpec)
-    push!(sys.detector_specs, spec)
-    return sys
-end
+# Monitor a coupling's envelope (the dimensionless pulse amplitude × spatial factor,
+# 1 during a full-amplitude Pulse; Ω(t) = Ω₀ × this)
+add_detector!(sys, FieldDetectorSpec(coupling; name="envelope"))
+```
 """
 function add_detector!(sys::System, spec::Dynamiq.DetectorSpec)
+    # Outputs are keyed by name; a second detector with the same name (two left
+    # at the default `""`, say) would silently replace the first.
+    name = spec.params.name
+    any(s -> s.params.name == name, sys.detector_specs) && throw(ArgumentError(
+        "add_detector!: a detector named \"$name\" is already registered; give each " *
+        "detector its own `name`"))
     push!(sys.detector_specs, spec)
     return sys
 end

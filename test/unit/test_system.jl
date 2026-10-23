@@ -424,3 +424,54 @@ end
     pb = GaussianBeam(556e-9, Parameter(:w0, 1e-6), 1e-3)
     @test_throws ArgumentError add_coupling!(System(a), a, g => e, 2π * 1e6; beam = pb)
 end
+
+@testset "GeneralGaussianBeam waists lie along the lab axes; the bare field vector" begin
+    D = AtomTwin.Dynamiq
+    b = GeneralGaussianBeam(532e-9, 1e-6, 2e-6, 1e-3, [0, 0, 1], [1, 0, 0])
+    I0 = D.intensity(b, [0.0, 0, 0])
+    @test D.intensity(b, [1e-6, 0, 0]) / I0 ≈ exp(-2)          # w0x = 1 µm along lab x
+    @test D.intensity(b, [0, 1e-6, 0]) / I0 ≈ exp(-0.5)        # w0y = 2 µm along lab y
+    @test b.u ≈ [1, 0, 0] && b.v ≈ [0, 1, 0]
+    bx = GeneralGaussianBeam(532e-9, 1e-6, 2e-6, 1e-3, [1, 0, 0], [0, 1, 0])
+    @test bx.u ≈ [0, 1, 0] && bx.v ≈ [0, 0, 1]
+    r = [0.3e-6, 0.2e-6, 1e-6]
+    b._coeff[] = 0.5
+    @test D.efield_vector(b, r) ≈ D.Efield(b, r) ./ 0.5          # efield_vector excludes _coeff
+    @test D.efield_scalar(b, r) ≈ 0.5 * D._efield_bare(b, r)
+    b._coeff[] = 1.0
+    ## the force evaluation allocates nothing
+    a = Ytterbium171Atom(; levels = [Level("1S0")], x = [0.2e-6, 0.1e-6, 0.3e-6])
+    bs = [b]
+    AtomTwin._init_species_data!(a, a.inner, bs)
+    a.inner._P[1] = 1.0
+    measure(at, beams) = (AtomTwin.Dynamiq.force(at, beams); @allocated AtomTwin.Dynamiq.force(at, beams))
+    @test measure(a.inner, bs) == 0
+end
+
+@testset "same-wavelength beams interfere according to their polarizations" begin
+    D = AtomTwin.Dynamiq
+    λ = 759e-9
+    b1 = GeneralGaussianBeam(λ, 5e-6, 5e-6, 10e-3, [0, 0, 1], [0, 1, 0])      # k ∥ z, pol ŷ
+    b2 = GeneralGaussianBeam(λ, 5e-6, 5e-6, 10e-3, [1, 0, 0], [0, 1, 0])      # k ∥ x, pol ŷ: interferes
+    b3 = GeneralGaussianBeam(λ, 5e-6, 5e-6, 10e-3, [1, 0, 0], [0, 0, 1])      # k ∥ x, pol ẑ: does not
+    r = [λ / 8, 0.0, λ / 8]
+    force(beams) = (a = Ytterbium171Atom(; levels = [Level("1S0")], x = r);
+                    AtomTwin._init_species_data!(a, a.inner, beams; q_axis = [1.0, 0, 0]);
+                    a.inner._P[1] = 1.0;                               # the level is occupied
+                    collect(D.force(a.inner, beams)))
+    single = force([b1]) .+ force([b3])
+    @test force([b1, b3]) ≈ single rtol = 1e-9
+    @test !isapprox(force([b1, b2]), force([b1]) .+ force([b2]); rtol = 0.1)
+end
+
+@testset "detector names are unique; a plane wave is not a trap" begin
+    g, e = Level("g"), Level("e")
+    a = Atom(; levels = [g, e]); s = System(a)
+    add_detector!(s, PopulationDetectorSpec(a, g))
+    @test_throws ArgumentError add_detector!(s, PopulationDetectorSpec(a, e))
+    add_detector!(s, PopulationDetectorSpec(a, e; name = "Pe"))
+    @test length(s.detector_specs) == 2
+    pw = PlanarBeam(759e-9, 1e9, [0.0, 0, 1], [1.0, 0, 0])
+    @test_throws ArgumentError System(a, pw)
+    @test_throws ArgumentError MotionDetectorSpec(pw; dims = [1])
+end

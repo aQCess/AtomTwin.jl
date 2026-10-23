@@ -49,50 +49,9 @@ end
 # Lasers
 #####################################################################################
 
-"""
-    BasisPolarization(unit_k, polarization)
-
-Convert a Jones vector `polarization` into the spherical (q-basis) polarization
-components for a beam with propagation direction `unit_k`.
-
-- `unit_k`: 3D unit vector along the beam propagation direction.
-- `polarization`: transverse Jones vector in the lab frame.
-
-Returns a 3-component complex vector corresponding to \\(\\sigma^+\\), \\(\\pi\\),
-and \\(\\sigma^-\\) components in the quantization basis aligned with `unit_k`.
-"""
-function BasisPolarization(unit_k, polarization)
-    new_pol = polarization / norm(polarization)
-    theta = acos(unit_k[3])
-
-    if theta != 0
-        phi = acos(unit_k[1] / sin(theta))
-
-        ex = Vector{ComplexF64}([
-            cos(theta) * exp(im * phi) / sqrt(2),
-            -sin(theta),
-            -cos(theta) * exp(-im * phi) / sqrt(2),
-        ])
-        ey = Vector{ComplexF64}([
-            im * exp(im * phi) / sqrt(2),
-            0,
-            im * exp(-im * phi) / sqrt(2),
-        ])
-    else
-        phi = 0
-
-        ex = Vector{ComplexF64}([
-            1 / sqrt(2),
-            0,
-            -1 / sqrt(2),
-        ])
-        ey = Vector{ComplexF64}([
-            im / sqrt(2),
-            0,
-            im / sqrt(2),
-        ])
-    end
-
-    polarization_q = new_pol[1] * ex + new_pol[2] * ey
-    return polarization_q
+# (`BasisPolarization`, a lab-to-q-basis Jones conversion that lost the sign of
+# k_y and had no caller, was removed; `Efield_spherical` in physics/couplings.jl
+# does this against the quantization axis.)
+function _removed_basis_polarization()
+    return nothing
 end

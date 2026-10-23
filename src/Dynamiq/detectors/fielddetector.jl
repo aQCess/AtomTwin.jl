@@ -1,10 +1,13 @@
 """
     FieldDetector{A} <: AbstractDetector{A}
 
-Detector that records the complex amplitude of a field `obj::A` over time.
+Detector that records the complex envelope of a field `obj::A` over time.
 
-Typical use is to monitor the scalar coefficient `_coeff[]` of an
-`AbstractField` (e.g. a coupling or detuning) during a simulation.
+The value is the field's dimensionless coefficient `_coeff[]`: the pulse
+amplitude (1 during a full-amplitude `Pulse`, 0 when off) times, for a
+position-dependent coupling, the spatial factor at the atom. The rate baked
+into the operator is not included: a coupling's Rabi frequency is `Ω₀ × value`,
+a detuning's shift `δ × value`.
 
 # Fields
 

@@ -366,10 +366,12 @@ _modifier_term(f) = hasproperty(f, :_coeff) ? (f._coeff, ComplexF64(1)) : (nothi
 
 Total optical dipole force on `atom` at `atom.x`, as `(Fx, Fy, Fz)`.
 
-Beams of the SAME wavelength are summed coherently in the complex field, so
-interference is included; different wavelengths add incoherently. Per wavelength
+Beams of the SAME wavelength are summed coherently in the complex vector field,
+so interference is included and governed by the polarizations (two orthogonally
+polarized beams do not interfere); different wavelengths add incoherently. Per
+wavelength
 
-    F = ½ (Σᵢ α[λ][i]·P[i]) Re(E* ∇E)
+    F = ½ (Σᵢ α[λ][i]·P[i]) Re(Σ_k E_k* ∇E_k)
 
 with `α[λ][i]` the level-`i` polarizability at `λ` (standard convention,
 U = −α|E|²/4 = −α I/(2c ε₀)), `P` the level populations and `E` the total complex
@@ -404,17 +406,21 @@ function force(atom::A, beams::Vector{<:AbstractBeam}) where {A}
         nseen += 1
         seen[nseen] = λ
 
-        Etot = 0.0 + 0.0im
-        dEdr_x = 0.0 + 0.0im
-        dEdr_y = 0.0 + 0.0im
-        dEdr_z = 0.0 + 0.0im
+        # The vector field E_k and its gradient G[j,k] = ∂_j E_k, summed over the
+        # beams at λ with their polarizations: what interferes is decided here.
+        E1 = E2 = E3 = 0.0 + 0.0im
+        G11 = G12 = G13 = 0.0 + 0.0im
+        G21 = G22 = G23 = 0.0 + 0.0im
+        G31 = G32 = G33 = 0.0 + 0.0im
         for b in beams
             if getwavelength(b) == λ
-                Etot += efield_scalar(b, x_pos)
+                e  = efield_scalar(b, x_pos)
                 dE = dEdr(b, x_pos)
-                dEdr_x += dE[1]
-                dEdr_y += dE[2]
-                dEdr_z += dE[3]
+                p1, p2, p3 = _pol3(b)
+                E1 += e * p1; E2 += e * p2; E3 += e * p3
+                G11 += dE[1] * p1; G12 += dE[1] * p2; G13 += dE[1] * p3
+                G21 += dE[2] * p1; G22 += dE[2] * p2; G23 += dE[2] * p3
+                G31 += dE[3] * p1; G32 += dE[3] * p2; G33 += dE[3] * p3
             end
         end
 
@@ -434,15 +440,24 @@ function force(atom::A, beams::Vector{<:AbstractBeam}) where {A}
                 end
             end
         end
-        c *= 0.5                                   # F = −∇(−α|E|²/4) = ½α Re(E*∇E)
+        c *= 0.5                                   # F = −∇(−α|E|²/4) = ½α Re(Σ_k E_k*∇E_k)
         c == 0.0 && continue
 
-        Etot_conj = conj(Etot)
-        Fx += c * real(Etot_conj * dEdr_x)
-        Fy += c * real(Etot_conj * dEdr_y)
-        Fz += c * real(Etot_conj * dEdr_z)
+        c1, c2, c3 = conj(E1), conj(E2), conj(E3)
+        Fx += c * real(c1 * G11 + c2 * G12 + c3 * G13)
+        Fy += c * real(c1 * G21 + c2 * G22 + c3 * G23)
+        Fz += c * real(c1 * G31 + c2 * G32 + c3 * G33)
     end
     return Fx, Fy, Fz
+end
+
+# A beam's unit polarization as three scalars; x̂ for a beam type without one.
+@inline function _pol3(b)
+    if hasproperty(b, :pol)
+        p = getproperty(b, :pol)
+        return @inbounds (ComplexF64(p[1]), ComplexF64(p[2]), ComplexF64(p[3]))
+    end
+    return (1.0 + 0.0im, 0.0 + 0.0im, 0.0 + 0.0im)
 end
 
 """

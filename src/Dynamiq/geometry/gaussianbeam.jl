@@ -188,7 +188,7 @@ Gaussian beam at position `r`.
 The envelope is a 3D Gaussian,
 
 \\[
-E(r) = \\sqrt{I_0} \\exp\\bigl[-(x^2 + y^2)/w_0^2 - z^2/w_{0z}^2\\bigr]
+E(r) = \\sqrt{2 I_0 / (c\\,\\varepsilon_0)} \\exp\\bigl[-(x^2 + y^2)/w_0^2 - z^2/w_{0z}^2\\bigr]
       \\exp(i k z)\\, c,
 \\]
 
@@ -277,20 +277,6 @@ for the same 3D Gaussian model used in `Efield`.
     end
 end
 
-"""
-    update!(gb::GaussianBeam, i)
-
-Update the internal coefficient `_coeff` of a `GaussianBeam` via any attached
-modifiers at time step `i`.
-
-This assumes that external code has associated modifiers with the beam and
-defined `update!(beam, modifier, i)` methods.
-"""
-function update!(gb::GaussianBeam, i)
-    for m in gb.modifiers
-        update!(gb, m, i)
-    end
-end
 
 """
     getwavelength(gb::GaussianBeam) -> Float64
@@ -376,7 +362,9 @@ Positional constructor for `GeneralGaussianBeam`.
 - `pol::Vector{ComplexF64}`: Polarization vector in global coordinates
 - `r0::Vector{Float64}`: Waist center in global coordinates (default [0,0,0])
 
-The local axes `u` and `v` are constructed orthonormal to `k`.
+The local axes: `u` (local x) is the lab x axis projected transverse to `k` --
+the lab y axis when `k` is within ~8° of x -- and `v = k × u`. So for a beam
+along z, `w0x` is the waist along lab x and `w0y` along lab y.
 """
 function GeneralGaussianBeam(λ::Real,
                              w0x::Real,
@@ -407,9 +395,12 @@ function GeneralGaussianBeam(λ::Real,
     p_norm2 == 0 && error("polarization must be orthogonal to k vector")
     p ./= p_norm2
 
-    # existing u,v construction
+    # Local x is the lab x axis projected transverse to k̂ (lab y when k̂ ∥ x̂), so
+    # `w0x` is the waist along lab x for a z-propagating beam; v = k̂ × u completes
+    # a right-handed frame. (A cross product k̂ × x̂ put local x along lab ŷ and
+    # swapped the waists.)
     ref = abs(k̂[1]) < 0.99 ? [1.0, 0.0, 0.0] : [0.0, 1.0, 0.0]
-    u = cross(k̂, ref)
+    u = ref .- sum(ref .* k̂) .* k̂
     u_norm = sqrt(sum(x -> x^2, u))
     u = [x / u_norm for x in u]
     v = cross(k̂, u)
@@ -480,9 +471,11 @@ in the frame defined by a `GeneralGaussianBeam`.
 The local z coordinate \\(z'\\) is the projection along `b.k`.
 """
 @inline function local_coords(r::Vector{Float64}, b::GeneralGaussianBeam)
-    Δ = [r[i] - b.r0[i] for i in 1:3]
-    x′ = sum(Δ[i] * b.u[i] for i in 1:3)
-    y′ = sum(Δ[i] * b.v[i] for i in 1:3)
+    @inbounds begin
+        d1 = r[1] - b.r0[1]; d2 = r[2] - b.r0[2]; d3 = r[3] - b.r0[3]
+        x′ = d1 * b.u[1] + d2 * b.u[2] + d3 * b.u[3]
+        y′ = d1 * b.v[1] + d2 * b.v[2] + d3 * b.v[3]
+    end
     return x′, y′
 end
 
@@ -553,17 +546,6 @@ Returns a tuple of three real numbers.
             dI_dx′ * b.u[3] + dI_dy′ * b.v[3] + dI_dz′ * b.k[3])
 end
 
-"""
-    update!(gb::GeneralGaussianBeam, i)
-
-Update the internal coefficient `_coeff` of a `GeneralGaussianBeam` via any
-attached modifiers at time step `i`.
-"""
-function update!(gb::GeneralGaussianBeam, i)
-    for m in gb.modifiers
-        update!(gb, m, i)
-    end
-end
 
 """
     getwavelength(gb::GeneralGaussianBeam) -> Float64
@@ -651,15 +633,22 @@ Returns zero if the point lies outside the 8-waist cutoff ellipse.
                       scalar * b.pol[3]]
 end
 
+# The field vector without the amplitude coefficient, as `efield_vector` promises
+# for every beam type (`Efield` carries `_coeff[]`).
+efield_vector(b::GeneralGaussianBeam, r::Vector{Float64}) = _efield_bare(b, r) .* b.pol
+
 """
     efield_scalar(b::GeneralGaussianBeam, r) -> ComplexF64
 
 Scalar complex field amplitude at position `r`, without constructing the
 polarization vector. Used by `force` to avoid a temporary allocation.
 """
-@inline function efield_scalar(b::GeneralGaussianBeam, r::Vector{Float64})
+@inline efield_scalar(b::GeneralGaussianBeam, r::Vector{Float64}) = _efield_bare(b, r) * b._coeff[]
+
+# The scalar field without the amplitude coefficient `_coeff[]`.
+@inline function _efield_bare(b::GeneralGaussianBeam, r::Vector{Float64})
     x′, y′ = local_coords(r, b)
-    z′ = sum((r[i] - b.r0[i]) * b.k[i] for i in 1:3)
+    @inbounds z′ = (r[1] - b.r0[1]) * b.k[1] + (r[2] - b.r0[2]) * b.k[2] + (r[3] - b.r0[3]) * b.k[3]
 
     λ = b.λ
     w0x, w0y = b.w0x, b.w0y
@@ -685,7 +674,7 @@ polarization vector. Used by `force` to avoid a temporary allocation.
     G   = exp(-(x′^2 / wx2 + y′^2 / wy2))
     φ   = k * z′ + k * (x′^2 / (2 * Rx) + y′^2 / (2 * Ry)) - (ζx + ζy) / 2
 
-    return amp * G * cis(φ) * b._coeff[]
+    return amp * G * cis(φ)
 end
 
 """

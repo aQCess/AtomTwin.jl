@@ -79,6 +79,8 @@ function MotionDetectorSpec(obj;
     nmax = obj isa AbstractBeam ? 3 : 6          # a beam has a position, no velocity
     all(d -> 1 <= d <= nmax, dims) ||
         throw(ArgumentError("MotionDetectorSpec: dims must lie in 1:$nmax, got $(collect(dims))"))
+    obj isa AbstractBeam && !hasproperty(obj, :r0) &&
+        throw(ArgumentError("MotionDetectorSpec: a $(nameof(typeof(obj))) has no position to record"))
     return DetectorSpec{typeof(MotionDetector)}(
         MotionDetector,
         obj,

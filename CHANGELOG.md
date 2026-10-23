@@ -92,6 +92,35 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   `add_dephasing!` states its rate convention (`L = √γ|l⟩⟨l|`: a coherence decays
   at γ/2); manifold `add_decay!` states that `rate` is the partial rate into that
   ground manifold.
+- **MCWF step.** Chebyshev is exact for a Hermitian `H` at any step but not for the
+  MCWF effective Hamiltonian: with a weak drive on a decaying line and `Γ·dt ≳ 20`
+  the series diverged and the jump test renormalised it into a plausible wrong
+  population (`P_e = 0.99` for 0.01); `Sequence(; tol)` was no safer. `wfmc` and
+  `wfmc_semiclassical` now divide the output step into steps the non-Hermitian part
+  allows (of order `10/Γ`), jump times staying exact. A coarse-`dt` MCWF run on a
+  decaying line changes.
+- **Radiation pressure.** The impulse entered the velocity only, so the position
+  lagged by `a·T·dt/2` in all three semiclassical solvers; the force at the start
+  of a step now drifts the position as the dipole force does. `newton` swallowed
+  its `dt`, so a one-step classical instruction did not move the atoms. Frozen
+  solvers refresh position-dependent fields only when a modifier moves a beam.
+- **Crossed beams.** `force` summed same-wavelength beams as scalars, so two
+  orthogonally polarized beams interfered (a σ⁺/σ⁻ or lin⊥lin lattice had the
+  wrong landscape, and a twin crossed-beam trap the wrong depth); the vector
+  field is summed with each beam's polarization, as `intensity` already did.
+- **`GeneralGaussianBeam` frame.** The local x axis was `k̂ × x̂` (the lab **y**
+  axis for a beam along z), so `w0x` and `w0y` were swapped against the lab axes
+  and the documentation. Local x is now the lab x axis projected transverse to
+  `k̂`; every elliptical `GeneralGaussianBeam` changes. `efield_vector` returns
+  the bare field for it as for `GaussianBeam` (it carried the pulse coefficient);
+  the field helpers allocate nothing in `force`.
+- **Detectors and beams.** `add_detector!` refuses a second detector with the same
+  `name` (the output replaced the first silently); `MotionDetectorSpec` rejects a
+  beam without a position; a `PlanarBeam` is refused as a trapping beam of a
+  `System` (it has no profile to trap with, and the trap machinery threw later);
+  `TweezerArray` documents that its row/column weights are relative powers and
+  that spot `(i, j)` has linear index `(i − 1)·ncol + j`; the coherence detector
+  documents `ρ_ji` as the recorded convention.
 
 ### Added
 
