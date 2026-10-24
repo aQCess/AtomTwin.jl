@@ -24,13 +24,18 @@ pulse_duration = 10e-6         # Total pulse duration (s)
 
 dt             = 1e-9          # Time step (s)
 shots          = 100           # Number of quantum trajectories
+````
 
+The PSD is one-sided in Hz²/Hz, as laser frequency noise is specified: a servo
+bump of 10⁴ Hz²/Hz at 1 MHz over a white floor of 1.25 × 10³ Hz²/Hz (a Lorentzian
+linewidth π h₀ ≈ 4 kHz), a stabilised diode laser.
 
+````julia
 noise_model = LaserPhaseNoiseModel(
-    bump_ampl      = 2.0e5,
+    bump_ampl      = 1.0e4,
     bump_center    = 1.0e6,
     bump_width     = 2e5,
-    powerlaw_ampl  = 0.25e5,
+    powerlaw_ampl  = 1.25e3,
 )
 
 noise_spectrum = Plots.plot(noise_model; fmin = 0.05e6, fmax = 4e6)
