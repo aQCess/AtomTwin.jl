@@ -10,6 +10,7 @@ AtomTwin.Dynamiq
 ```@docs
 AtomTwin.Dynamiq.AbstractAtom
 AtomTwin.Dynamiq.AbstractBeam
+AtomTwin.Dynamiq.build_detector
 AtomTwin.Dynamiq.Op
 AtomTwin.Dynamiq.productstate
 AtomTwin.Dynamiq.base_atom
@@ -28,6 +29,8 @@ AtomTwin.Dynamiq.SetModifier
 AtomTwin.Dynamiq.ResetModifier
 AtomTwin.Dynamiq.MoveModifier
 AtomTwin.Dynamiq.PositionModifier
+AtomTwin.Dynamiq.SetPositionModifier
+AtomTwin.Dynamiq.GateModifier
 ```
 
 ## Atom-light couplings

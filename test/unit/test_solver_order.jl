@@ -286,6 +286,34 @@ end
                   D.suggested_dt(terms, 1e-6; integrator = D.Taylor(8))
         end
 
+        @testset "Taylor through compile and play" begin
+            # `Sequence(; tol)` with `integrator = Taylor(n)`: the derived step follows
+            # the order (more samples for a lower order) and every order meets `tol`.
+            g, e = Level("g"), Level("e")
+            a = Atom(; levels = [g, e])
+            sys = System(a)
+            c = add_coupling!(sys, a, g => e, 2π * 1e6; active = false)
+            add_detuning!(sys, a, e, 2π * 20e6)
+            add_detector!(sys, PopulationDetectorSpec(a, e; name = "Pe"))
+            seq = Sequence(; tol = 1e-6)
+            @sequence seq begin
+                Pulse(c, 1e-6)
+            end
+            function run_with(integrator)
+                job = compile(sys, seq; initial_state = [g], integrator)
+                return play(job, sys).detectors["Pe"][end], length(job.times)
+            end
+            p_cheb, n_cheb = run_with(AtomTwin.Dynamiq.Chebyshev())
+            @test n_cheb <= 2                       # exact at any step: the output grid alone
+            ns = Int[]
+            for order in (3, 4, 8)
+                p, n = run_with(AtomTwin.Dynamiq.Taylor(order))
+                @test abs(p - p_cheb) < 1e-5
+                push!(ns, n)
+            end
+            @test ns[1] > ns[2] > ns[3] > n_cheb
+        end
+
         @testset "derived step is the output resolution" begin
             # `_derive_dt` returns how often results are recorded: with no `dt`, one sample
             # per instruction (with no Hamiltonian there is no accuracy bound either).
@@ -312,7 +340,14 @@ end
             end
             p = play(sys, seq; initial_state = [g, g], shots = 1).detectors["Pr"][end]
             @test !isnan(p)
-            @test isapprox(p, 0.4645530578, atol = 1e-6)
+            # The exact answer: H is constant over the pulse, so ψ(T) = exp(−iHT)ψ₀.
+            job = compile(sys, seq; initial_state = [g, g])
+            H = sum(AtomTwin.getmatrix(f) for f in job.fields)
+            ψT = exp(-im * H * 1e-6) * getqstate(job.system, [g, g])
+            ir = a1.level_indices[r]
+            p_exact = sum(abs2(ψT[k]) for (k, el) in enumerate(sys.basis.elements) if el[1] == ir)
+            @test isapprox(p, p_exact, atol = 1e-5)
+            @test isapprox(p, 0.4645530578, atol = 1e-6)        # and unchanged
         end
     end
 
@@ -595,15 +630,27 @@ end
         @test ctl.probe isa AtomTwin.Dynamiq.NoProbe
 
         ctl.probe = CountProbe(0, 0)
-        out = runit()
-        fired, kmax = ctl.probe.n, ctl.probe.kmax
-        ctl.probe = AtomTwin.Dynamiq.NoProbe()     # leave the cache clean
+        local out, fired, kmax
+        try
+            out = runit()
+            fired, kmax = ctl.probe.n, ctl.probe.kmax
+        finally
+            ctl.probe = AtomTwin.Dynamiq.NoProbe() # leave the cache clean, whatever happened
+        end
 
         @test fired > 0                            # the hook is reachable
         @test kmax >= 1                            # and carries the controller state
-        # Instrumenting must not change the answer: this is the converged value
-        # the same system gives uninstrumented (see bench/bench1_small.jl).
-        @test abs(out.detectors["P"][end] - 0.4220190) < 1e-6
+        # Instrumenting must not change the answer: ρ(T) = exp(𝓛T) ρ₀ exactly, for
+        # H = Ω/2 σx and L = √Γ |g⟩⟨e| (g = 1, e = 2 in the basis).
+        Ω, Γ, T = 2π * 1e6, 2π * 1e5, 4e-6
+        H = ComplexF64[0 Ω/2; Ω/2 0]
+        M = ComplexF64[0 1; 0 0]
+        Id = Matrix{ComplexF64}(I, 2, 2)
+        𝓛 = -im * (kron(Id, H) - kron(transpose(H), Id)) +
+            Γ * (kron(conj(M), M) - 0.5 * (kron(Id, M'M) + kron(transpose(M'M), Id)))
+        ρT = reshape(exp(𝓛 * T) * vec(ComplexF64[1 0; 0 0]), 2, 2)
+        @test abs(out.detectors["P"][end] - real(ρT[2, 2])) < 1e-6
+        @test abs(out.detectors["P"][end] - 0.4220190) < 1e-6        # and unchanged
     end
 end
 

@@ -70,8 +70,11 @@ out = play(system, seq; initial_state = g, shots = shots)
 
 # ## Plot results
 #
-# We can compare against an analytical model for the damping rate from
-# X. Jiang et al., PRA 107, 042611 (2023)
+# We can compare against an analytical model for the damping rate (X. Jiang et
+# al., PRA 107, 042611 (2023)): the frequency noise at the Rabi frequency drives
+# transitions between the dressed states, and the oscillation's envelope decays
+# at `Γ = π² S_ν(Ω/2π) / 2` for a one-sided `S_ν` in Hz²/Hz (the second Gaussian
+# term, at −Ω, is negligible).
 tlist      = out.times                 # Time grid (s)
 t_us       = tlist .* 1e6              # Convert to microseconds
 P_excited  = out.detectors["P_e"]      # Trajectory-resolved populations
@@ -83,7 +86,7 @@ sigma = noise_model.bump_width
 
 Omega_eff = Ω
 
-Gamma = 0.5 * (
+Gamma = π^2 / 2 * (
     h0 +
     hg * exp(-(Ω/2π - fg)^2 / (2 * sigma^2)) +
     hg * exp(-(Ω/2π + fg)^2 / (2 * sigma^2))

@@ -34,7 +34,7 @@ Public = false
 ## Sequences, compilation and simulation
 ```@autodocs
 Modules = [AtomTwin]
-Pages = ["instructions.jl", "interp.jl", "job.jl", "compile.jl", "play.jl"]
+Pages = ["instructions.jl", "job.jl", "compile.jl", "play.jl"]
 Public = false
 ```
 

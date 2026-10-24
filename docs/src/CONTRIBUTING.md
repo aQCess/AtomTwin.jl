@@ -17,8 +17,8 @@ For now, contributors should be reasonably experienced with Julia and Git and co
 - **AtomTwin**: High-level, stable user-facing API, orchestration, and examples.  
 - **Dynamiq**: Low-level, performance-oriented engine code, organized as a Julia submodule (e.g. under `src/Dynamiq/`), optimized with benchmarks and targeted tests.  
 - **Examples and docs**:
-  - Example scripts in `examples/` are intended to demonstrate AtomTwin functionality and serve as regression tests.  
-  - Ground truth files live in `test/examples_src`, generated via `Documenter.jl` and `Literate.jl`.  
+  - Example scripts are written once, in `test/examples_src/` (Literate.jl source); `make.jl` renders them into `docs/` and `examples/`.
+  - The test suite runs them (`ATOMTWIN_RUN_EXAMPLES=true`) as smoke tests: an example fails only through an error or one of its own `@assert`s, and the checksums it prints are not compared to stored values. Pin a physical result with an `@assert` (tagged `#src`) when you add one.  
 
 If in doubt, put user-facing features in AtomTwin and performance-critical internals in Dynamiq.
 
@@ -211,11 +211,10 @@ Workflow:
 
 - **Examples**:
   - Multiple example scripts are included with AtomTwin and serve as primary demonstrations of functionality.
-- **Ground truth in `test/examples_src`**:
-  - These files represent the expected outputs used by both example scripts and documentation.
-  - They are generated via the documentation tooling and should be updated only when behavior intentionally changes.
+- **Source in `test/examples_src`**:
+  - These files are the source of the example scripts and the documentation pages; `make.jl` generates both.
 - **Tests**:
-  - AtomTwin’s tests include checks against these ground truth files to keep examples and documentation consistent with actual behavior.
+  - The suite runs every example (`ATOMTWIN_RUN_EXAMPLES=true`) and reports its runtime and a checksum; a physical check belongs in the example itself as an `@assert` line tagged `#src`.
 
 When modifying public behavior:
 

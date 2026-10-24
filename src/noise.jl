@@ -32,10 +32,11 @@ The PSD model combines a Gaussian “servo bump” and a power-law background:
 
 Fields:
 
-- `bump_ampl::Float64`: Servo bump amplitude (Hz²).
+- `bump_ampl::Float64`: Servo bump amplitude (Hz²/Hz).
 - `bump_center::Float64`: Center frequency of the servo bump (Hz).
 - `bump_width::Float64`: Gaussian width σ of the bump (Hz).
-- `powerlaw_ampl::Float64`: Amplitude of the power-law background.
+- `powerlaw_ampl::Float64`: Amplitude of the power-law background (Hz²/Hz at 1 Hz;
+  for `powerlaw_exp = 0` the white floor `h₀`, a Lorentzian linewidth `π h₀`).
 - `powerlaw_exp::Float64`: Exponent `d` of the power law.
 - `n_freqs::Int`: Number of frequency components used when synthesizing noise.
 """
@@ -305,7 +306,7 @@ generation uses a shared `global_time_ref`.
   - the wrapped coupling mapped through `base_resolve_target`.
 - If `obj` is not a `NoisyField`, returns it unchanged.
 
-This is called during parameter resolution inside `play`/`play!` to ensure
+This is called during parameter resolution inside `play` to ensure
 time-correlated noise across segments.
 """
 function update_noisy_field_time_refs!(obj, global_time_ref, base_resolve_target = identity)

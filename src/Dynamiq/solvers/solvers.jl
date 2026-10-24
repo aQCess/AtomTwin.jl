@@ -495,7 +495,7 @@ end
 """
     fkick!(dt, atom, beams)
 
-The kick half of [`fclassical!`](@ref): one force evaluation `F_new` at the
+The kick half of a velocity-Verlet step (see [`fdrift!`](@ref)): one force evaluation `F_new` at the
 current `x`, beams and populations, then `v ← v + ((F_old + F_new)/2m) dt`, and
 `F_new` is carried forward as the next step's `F_old`. See [`fdrift!`](@ref).
 """

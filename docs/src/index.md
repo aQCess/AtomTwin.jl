@@ -18,7 +18,7 @@ Neutral‑atom quantum computers use arrays of individually trapped atoms, manip
 - **Error-controlled engines for coupled quantum and classical dynamics** at the pulse level: Schrödinger, wavefunction Monte Carlo and master-equation solvers, each with semiclassical atomic motion (see [Solvers and accuracy](solvers.md)).
 - **Firmware‑like instruction sequences** to mimic execution on real neutral‑atom processors.
 - **Light–matter physics from atomic data**: trap light shifts with full tensor polarizability, state-dependent potentials, radiation pressure and photon recoil for laser cooling and fluorescence imaging.
-- Ready‑to‑use species (Yb‑171, Yb‑174, Sr‑88, Rb‑87, K‑39) with polarizability models, easily extended to new level schemes.
+- Ready‑to‑use species (Yb‑171, Yb‑174, Sr‑88, Rb‑87 with polarizability models and line data; K‑39 levels and mass only), easily extended to new level schemes.
 - Visualization hooks for atomic trajectories and quantum state evolution for debugging and teaching.
 - Worked examples covering gates, noise, state preparation, transport, spectroscopy and laser cooling.
 - Suitable for independent research, device and instruction‑set design, and structured teaching (courses, labs, workshops).

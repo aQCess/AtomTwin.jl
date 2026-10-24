@@ -5,7 +5,7 @@
     c_v  = 2.997_924_58e8        # m/s
     ε0_v = 8.854_187_812_8e-12   # F/m
     amu  = 1.660_539_066_60e-27  # kg
-    m    = 171 * amu             # Yb-171 mass
+    m    = AtomTwin.ATOM_DEFAULTS[:Ytterbium171].mass   # the species' isotope mass
 
     # Tweezer parameters
     λ_nm = 759.0
@@ -167,7 +167,7 @@ end
     let
         g = Level("g"; term = l"1S0")
         e = Level("e"; term = l"3P1")
-        m    = 174 * AtomTwin.Units.amu
+        m    = AtomTwin.ATOM_DEFAULTS[:Ytterbium174].mass
         vrec = AtomTwin.Units.hbar * (2π / 556e-9) / m
 
         function run(; λ = nothing, shots = 60, seed = 20260917)
@@ -219,7 +219,7 @@ end
         # For the pattern 1 − |n̂·d̂|², ⟨n_i n_j⟩ = (2δ_ij − Re d_i d_j*)/5.
         g = Level("g"; term = l"1S0")
         e = Level("e"; term = l"3P1")
-        vrec = AtomTwin.Units.hbar * (2π / 556e-9) / (174 * AtomTwin.Units.amu)
+        vrec = AtomTwin.Units.hbar * (2π / 556e-9) / AtomTwin.ATOM_DEFAULTS[:Ytterbium174].mass
 
         function kicks(dipole; n = 20_000, seed = 20261003)
             yb  = Ytterbium174Atom(; levels = [g, e])
@@ -293,7 +293,7 @@ end
     # with one photon's momentum per MCWF emission cycle.
     g = Level("g"; term = l"1S0")
     e = Level("e"; term = l"3P1")
-    m = 174 * AtomTwin.Units.amu
+    m = AtomTwin.ATOM_DEFAULTS[:Ytterbium174].mass
     vrec(λ) = AtomTwin.Units.hbar * (2π / λ) / m
 
     function drive(; Ω, Γ, λ, pulses, shots, dm = false, decay = true, seed = 20260927)
@@ -544,7 +544,7 @@ end
 # k_B T_x = ħΓ (1 + 2/5)(1 + (2δ/Γ)²) / (8|2δ/Γ|), 0.7 ħΓ/2k_B at δ = −Γ/2.
 # Measured from rest, after 11 cooling times.
 @testset "1D Doppler cooling reaches the Doppler limit" begin
-    Γ = 2π * 182.4e3; λc = 556e-9; m = 174 * AtomTwin.Units.amu
+    Γ = 2π * 182.4e3; λc = 556e-9; m = AtomTwin.ATOM_DEFAULTS[:Ytterbium174].mass
     kB = 1.380649e-23; ħ = AtomTwin.Units.hbar
     δ = -Γ / 2; s = 0.02; T = 6e-3; dt = 0.5e-6
     gm = HyperfineManifold(0//1, 0; label = "1S0", term = l"1S0", g_F = 0.0)

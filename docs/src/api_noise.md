@@ -45,10 +45,10 @@ Gaussian servo bump with a power-law background.
 
 ```julia
 noise_model = LaserPhaseNoiseModel(
-    bump_ampl   = 2.0e5,    # Hz²
+    bump_ampl   = 2.0e5,    # Hz²/Hz, the one-sided frequency-noise PSD S_ν(f)
     bump_center = 1.0e6,    # Hz — servo resonance at 1 MHz
     bump_width  = 2.0e5,    # Hz — Gaussian σ
-    powerlaw_ampl = 0.25e5, # Hz² — white noise floor
+    powerlaw_ampl = 0.25e5, # Hz²/Hz — white noise floor h₀ (linewidth π h₀)
 )
 
 coupling = add_coupling!(system, atom, g => e, Ω; noise = noise_model)
@@ -75,16 +75,15 @@ laser_phase_psd
 
 ## Gate tomography
 
-`process_tomography` runs a complete set of input states through a compiled
-sequence and returns the Choi matrix of the resulting quantum channel. This
-is useful for computing gate fidelities and diagnosing error mechanisms.
+`process_tomography` runs a complete set of input states of one atom's
+computational levels through a sequence and returns the input and output states,
+the Choi matrix and the Pauli transfer matrix of the resulting quantum channel.
+This is useful for computing gate fidelities and diagnosing error mechanisms.
 
 ```julia
-choi = process_tomography(system, seq)
+res = process_tomography(system, seq, atom, [g, e]; shots = 256)
+res.choi_matrix, res.ptm_matrix
 ```
-
-The returned matrix is in the standard column-vectorisation convention and
-can be used with any quantum-information library that accepts Choi matrices.
 
 ```@docs
 process_tomography
