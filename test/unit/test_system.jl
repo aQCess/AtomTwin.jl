@@ -448,19 +448,23 @@ end
     @test measure(a.inner, bs) == 0
 end
 
-@testset "force over a Vector{AbstractBeam} allocates nothing" begin
+@testset "force over a Vector{AbstractBeam} allocates nothing per beam" begin
     # The job's beam list is abstractly typed; the polarization lookup must stay
     # concrete there or every accumulation boxes (a 60× slower sorting example).
-    D = AtomTwin.Dynamiq
+    # Julia 1.11 keeps a fixed 112 B per call (1.12: 0 B); what must not happen is
+    # an allocation that grows with the number of beams.
     a = Ytterbium171Atom(; levels = [Level("1S0")], x = [0.2e-6, 0.1e-6, 0.3e-6])
-    bs = AbstractBeam[GaussianBeam(759e-9, 1e-6, 1e-3; r0 = [1e-6 * k, 0, 0]) for k in 0:3]
-    push!(bs, GeneralGaussianBeam(759e-9, 1e-6, 2e-6, 1e-3, [0, 0, 1], [0, 1, 0]))
-    AtomTwin._init_species_data!(a, a.inner, bs)
+    beams(n) = (bs = AbstractBeam[GaussianBeam(759e-9, 1e-6, 1e-3; r0 = [1e-6 * k, 0, 0]) for k in 0:n-2];
+                push!(bs, GeneralGaussianBeam(759e-9, 1e-6, 2e-6, 1e-3, [0, 0, 1], [0, 1, 0])); bs)
+    f(atom, bs) = AtomTwin.Dynamiq.force(atom, bs)   # qualified: a captured local would box
+    bs5, bs20 = beams(5), beams(20)
+    AtomTwin._init_species_data!(a, a.inner, bs20)
     a.inner._P[1] = 1.0
-    f(atom, beams) = AtomTwin.Dynamiq.force(atom, beams)   # qualified: a captured local would box
-    f(a.inner, bs)
-    @test (@allocated f(a.inner, bs)) == 0
-    @test sum(abs, f(a.inner, bs)) > 0
+    f(a.inner, bs5); f(a.inner, bs20)
+    a5, a20 = (@allocated f(a.inner, bs5)), (@allocated f(a.inner, bs20))
+    @test a20 == a5
+    @test a5 <= 128
+    @test sum(abs, f(a.inner, bs5)) > 0
 end
 
 @testset "same-wavelength beams interfere according to their polarizations" begin

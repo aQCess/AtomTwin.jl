@@ -14,6 +14,9 @@ jobs:
   test:
     name: Julia ${{ matrix.version }} - ${{ matrix.os }} - ${{ github.event_name }}
     runs-on: ${{ matrix.os }}
+    # nightly is advisory: it has segfaulted in LLVM ORC on and off since 2026-10-23
+    # (an upstream instability), and must not mark a green release red.
+    continue-on-error: ${{ matrix.version == 'nightly' }}
     strategy:
       fail-fast: false
       matrix:
