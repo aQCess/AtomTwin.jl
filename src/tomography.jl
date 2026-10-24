@@ -79,11 +79,9 @@ function simulate_process(sys, seq, input_states; density_matrix=nothing, shots=
     end
 
     for (idx, stvec) in enumerate(input_states)
-        recompile!(job, sys; rng=sim_rng, kwargs...)
-
-        # The input goes to `play`, which starts every shot from it. Setting only
-        # `sys.state[]` here -- which the solvers never read -- ran every input
-        # from the first.
+        # The input goes to `play`, which re-resolves the job and starts every
+        # shot from it. Setting only `sys.state[]` here -- which the solvers never
+        # read -- ran every input from the first.
         result = play(job, sys; initial_state=[stvec], savefinalstate=true,
                       shots=shots, rng=sim_rng, kwargs...)
         states = result.final_states

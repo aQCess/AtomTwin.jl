@@ -150,54 +150,91 @@ function per_atom_indices(atom::AbstractAtom, s::Superposition)
 end
 
 """
-    getqstate(system::System, state::Vector; density_matrix = false)
+    getqstate(system::System, state::AbstractVector; density_matrix = false)
 
 Construct a many-body quantum state for `system` from a per-atom
 specification `state`.
 
 Each entry of `state` is either an `AbstractLevel` or a `Superposition`
-for the corresponding atom. The function expands these into all product
-basis components using `productstate(system.basis, ...)`, normalizes
-the resulting statevector, and returns either:
+for the corresponding atom; a single entry is taken for every atom. The
+amplitude of every basis element is the product of the per-atom amplitudes
+(one pass over the basis, so an all-atoms superposition costs the size of the
+state, not its square), the statevector is normalized, and the result is either:
 
 - the normalized statevector (default, `density_matrix = false`), or
 - the corresponding pure-state density matrix (`density_matrix = true`).
 
+A numeric `state` is taken as given: a vector of length `basis.dim` is a
+statevector (normalized), a `dim × dim` matrix a density matrix (needs
+`density_matrix = true`).
+
 This is typically used to prepare initial states for simulations and
 analysis routines such as tomography.
 """
-function getqstate(system::System, state::Vector; density_matrix=false, kwargs...)
-    state === nothing && return nothing
+function getqstate(system::System, state::AbstractVector; density_matrix=false, kwargs...)
     atoms = system.atoms
     N = length(atoms)
-    # For each atom, collect all possible (idx, coeff) pairs
-    idx_coeff_lists = [
-        per_atom_indices(atoms[i], state[i])
-        for i in 1:N
-    ]
-    # Enumerate all tuples
-    psi = zeros(ComplexF64, system.basis.dim)
-    for idx_coeff_tuple in Iterators.product(idx_coeff_lists...)
-        idx_tuple = ntuple(i -> idx_coeff_tuple[i][1], N)
-        coeff = prod(idx_coeff_tuple[i][2] for i in 1:N)
-        psi += coeff * productstate(system.basis, idx_tuple...; rho=false)
-    end
+    b = system.basis
+    length(state) == 1 && N > 1 && (state = fill(state[1], N))   # one level for every atom
+    length(state) == N || throw(ArgumentError(
+        "initial_state has $(length(state)) entries for $N atoms"))
+    # Each atom's amplitude on each of its levels; a basis element's amplitude is
+    # their product. One pass over the basis, O(dim · N), no temporaries.
+    amps = [_level_amplitudes(atoms[i], state[i]) for i in 1:N]
+    psi = _product_amplitudes(b, amps)
+    n = norm(psi)
+    n == 0 && throw(ArgumentError(
+        "initial_state has no weight in the basis (its product states were removed by `maxoccupations`?)"))
+    psi ./= n
+    return density_matrix ? psi * psi' : psi
+end
 
-    psi /= sqrt(psi'*psi)
-    if density_matrix
-        return psi * psi'
-    else
-        return psi
+# A function barrier: `sys.basis` is `Union{Nothing, Basis}`, and the loop must
+# know the element tuples' type to run without allocating.
+function _product_amplitudes(b::Basis{N}, amps::Vector{Vector{ComplexF64}}) where {N}
+    psi = zeros(ComplexF64, b.dim)
+    @inbounds for (k, el) in enumerate(b.elements)
+        c = one(ComplexF64)
+        for i in 1:N
+            c *= amps[i][el[i]]
+            c == 0 && break
+        end
+        psi[k] = c
     end
+    return psi
+end
+
+function _level_amplitudes(atom, s)
+    v = zeros(ComplexF64, length(atom.levels))
+    for (i, c) in per_atom_indices(atom, s)
+        v[i] += c
+    end
+    return v
 end
 getqstate(system::System, state::S; kwargs...) where {S<:AbstractLevel} = getqstate(system, [state]; kwargs...)
+
+function getqstate(system::System, ψ::AbstractVector{<:Number}; density_matrix=false, kwargs...)
+    length(ψ) == system.basis.dim || throw(ArgumentError(
+        "initial_state: a statevector of length $(length(ψ)) for a basis of dimension $(system.basis.dim)"))
+    psi = ComplexF64.(ψ) ./ norm(ψ)
+    return density_matrix ? psi * psi' : psi
+end
+
+function getqstate(system::System, ρ::AbstractMatrix{<:Number}; density_matrix=false, kwargs...)
+    d = system.basis.dim
+    size(ρ) == (d, d) || throw(ArgumentError(
+        "initial_state: a density matrix of size $(size(ρ)) for a basis of dimension $d"))
+    density_matrix || throw(ArgumentError(
+        "initial_state is a density matrix; pass `density_matrix = true`"))
+    return ComplexF64.(ρ)
+end
 
 """
     getqstate(sys::System)
 
 Return the current quantum state stored in `sys`.
 
-The state is populated by `play` / `play!`. If the system has not been
+The state is populated by `play`. If the system has not been
 simulated yet (i.e. `sys.state[]` is `nothing`), an error is thrown to
 signal that no state is available.
 """
@@ -254,6 +291,20 @@ function gethamiltonian(sys::System)
             n._field === nothing || recompile_node!(n, n._field, nothing, Dict{Symbol,Any}())
         end
     end
+    # A beam-derived coupling follows the system's axis; built before the axis was
+    # set, its default operator still has ẑ. Refresh it at the parameter defaults.
+    _bind_quantization_axis!(sys)
+    for n in sys.nodes
+        f = node_output(n)
+        f === nothing && continue
+        if n isa GaussianCouplingNode
+            Ωref = n.Ω0_override === nothing ? nothing : _resolve_node_default(n.Ω0_override)
+            x_ref = hasproperty(n.beam, :r0) ? Vector{Float64}(n.beam.r0) : n.atom.x
+            update!(f, Val(:_), _gaussian_Ω0(n, x_ref, Ωref))
+        elseif n isa Union{CouplingNode, PlanarCouplingNode} && n.Ω isa BeamRabiFrequency
+            update!(f, Val(:_), ComplexF64(_resolve_node_default(n.Ω)))
+        end
+    end
     for node in sys.nodes
         obj = node_output(node)
         obj === nothing && continue
@@ -306,12 +357,10 @@ is_quantum(sys::System) = any(n -> node_output(n) isa Dynamiq.AbstractField, sys
 """
     is_classical(sys::System) -> Bool
 
-Return `true` if `sys` has no explicit initial quantum state.
-
-A classical system is characterized here by `initial_state === nothing`,
-indicating that only classical degrees of freedom are relevant.
+Return `true` if `sys` has no initial quantum state (`initial_state` empty), so
+that `play` without one simulates the atomic motion only.
 """
-is_classical(sys::System) = sys.initial_state === nothing
+is_classical(sys::System) = isempty(sys.initial_state)
 
 """
     has_beams(sys::System) -> Bool
@@ -334,24 +383,12 @@ is_semiclassical(sys::System) = is_quantum(sys) && has_beams(sys)
 """
     Base.copy(sys::System) -> System
 
-Create a shallow copy of `sys` with copied atoms, beams, basis,
-nodes, and detector specifications.
-
-Atoms and beams are duplicated via `copy` per element; `basis`,
-`nodes`, and `detector_specs` are copied container-wise; and the
-state reference is copied if present. Nodes are shared (they hold
-compiled field references), so this is safe for concurrent reads
-but not for concurrent writes to node state.
+An independent copy of `sys`: its atoms, beams, nodes (with their compiled
+fields), basis, state and detector specifications are all copied, so the two
+systems can be built on and played separately. (The former shallow copy shared the
+nodes and always threw.)
 """
-function Base.copy(sys::System)
-    atoms_copy = [copy(a) for a in sys.atoms]
-    beams_copy = [copy(b) for b in sys.beams]
-    state_copy = sys.state === nothing ? nothing : copy(sys.state)
-    basis_copy = sys.basis === nothing ? nothing : copy(sys.basis)
-    nodes_copy = copy(sys.nodes)  # shallow — nodes are shared (they hold compiled refs)
-    detector_specs_copy = copy(sys.detector_specs)
-    System(atoms_copy, beams_copy, sys.initial_state, state_copy, basis_copy, nodes_copy, detector_specs_copy)
-end
+Base.copy(sys::System) = deepcopy(sys)
 
 Base.show(io::IO, sys::System) = print(io, "AtomTwin.System($(length(sys.atoms)) atom(s))")
 

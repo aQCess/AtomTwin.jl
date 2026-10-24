@@ -234,11 +234,15 @@ function AtomWrapper{S}(; levels=nothing, x=zeros(3), v=zeros(3),
         allunique(levels) || throw(ArgumentError(
             "levels must be distinct: give manifolds with the same quantum numbers " *
             "different `label`s or `term`s"))
-        for l in levels
-            l isa HyperfineLevel || continue
-            abs(l.J - I_used) <= l.F <= l.J + I_used || throw(ArgumentError(
-                "level $(l.label): F = $(l.F) is outside |J − I| … J + I for J = $(l.J) " *
-                "and I = $I_used ($S); the manifold was declared for another isotope"))
+        # A generic `Atom` given no `I` has no nuclear spin to check against (its
+        # default is a placeholder); a species, or an explicit `I`, has.
+        if I !== nothing || S !== :Generic
+            for l in levels
+                l isa HyperfineLevel || continue
+                abs(l.J - I_used) <= l.F <= l.J + I_used || throw(ArgumentError(
+                    "level $(l.label): F = $(l.F) is outside |J − I| … J + I for J = $(l.J) " *
+                    "and I = $I_used ($S); the manifold was declared for another isotope"))
+            end
         end
     end
 

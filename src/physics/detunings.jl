@@ -112,8 +112,11 @@ polarized trap at the magic angle `acos(1/√3) ≈ 54.74°` produces no tensor 
 at all. Each beam's `pol` is projected onto the axis automatically — no angle is
 passed by hand.
 
-`axis` may be a `Parameter` or `ParametricExpression`, so a magic-angle scan or a
-shot-to-shot field misalignment is a `play` keyword rather than a rebuilt system.
+`axis` may be a `Parameter` or `ParametricExpression`, or a vector with such
+components (`[θ, 0, 1 - θ]`), so a magic-angle scan or a shot-to-shot field
+misalignment (`Parameter(:B, [0, 0, 1.0]; std = 0.02)`, one draw per component) is
+a `play` keyword rather than a rebuilt system. Beam-derived couplings
+(`add_coupling!(…; beam)`) decompose their polarization about this axis too.
 
 Only one axis may be set per system.
 
@@ -142,17 +145,6 @@ function getquantizationaxis(system)
             ax = node_output(n)
             ax === nothing || return ax
         end
-    end
-    return [0.0, 0.0, 1.0]
-end
-
-# The axis for one shot of `recompile!`: resolved afresh, so a sampled axis is
-# resampled per shot, but NOT written back to the node. `sys` is shared by every
-# thread of a multi-shot run; `recompile!` must only mutate its own job.
-function _shot_quantization_axis(system, rng, param_values)
-    for n in system.nodes
-        n isa QuantizationAxisNode &&
-            return _unit_axis(_resolve_node_value(n.axis, param_values, rng))
     end
     return [0.0, 0.0, 1.0]
 end

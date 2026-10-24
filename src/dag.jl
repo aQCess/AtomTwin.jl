@@ -60,13 +60,18 @@ SCALAR RESOLUTION HELPERS
 """Evaluate a node value at build time using parameter defaults."""
 _resolve_node_default(x::Number)    = x
 _resolve_node_default(p::Parameter) = p.default
-_resolve_node_default(x)            = x  # fallback: vectors, arrays, etc.
+_resolve_node_default(x)            = x  # fallback: operators, strings, etc.
+# A vector resolves element-wise, so a quantization axis `[θ, 0, 1 - θ]` with a
+# `Parameter` component is a `play` keyword like a scalar knob.
+_resolve_node_default(v::AbstractVector) = [_resolve_node_default(x) for x in v]
 _resolve_node_default(expr::ParametricExpression) =
     _apply_op(expr.op, [_resolve_node_default(a) for a in expr.args])
 
 """Evaluate a node value at compile/recompile time (samples std if nonzero)."""
 _resolve_node_value(x::Number, _, _) = x
-_resolve_node_value(x, _, _)         = x  # fallback: vectors, arrays, etc.
+_resolve_node_value(x, _, _)         = x  # fallback: operators, strings, etc.
+_resolve_node_value(v::AbstractVector, param_values, rng) =
+    [_resolve_node_value(x, param_values, rng) for x in v]
 
 function _resolve_node_value(p::Parameter, param_values, rng)
     if haskey(param_values, p.name)
@@ -75,8 +80,14 @@ function _resolve_node_value(p::Parameter, param_values, rng)
     else
         mean_val, std_val = p.default, p.std
     end
-    return std_val != 0.0 ? mean_val + randn(rng) * std_val : mean_val
+    return _draw(mean_val, std_val, rng)
 end
+
+# `mean + std·N(0,1)`; an array-valued Parameter (a field vector) draws one
+# deviate per component.
+_draw(mean_val, std_val, rng) = std_val != 0.0 ? mean_val + randn(rng) * std_val : mean_val
+_draw(mean_val::AbstractArray, std_val, rng) =
+    std_val != 0.0 ? mean_val .+ randn(rng, size(mean_val)) .* std_val : mean_val
 
 _resolve_node_value(expr::ParametricExpression, param_values, rng) =
     _apply_op(expr.op, [_resolve_node_value(a, param_values, rng) for a in expr.args])
@@ -134,7 +145,7 @@ mutable struct GaussianCouplingNode <: AbstractNode
     atom::AbstractAtom
     transition::Pair{<:AbstractLevel, <:AbstractLevel}
     beam::AbstractBeam
-    q_axis::Vector{Float64}
+    q_axis::Any             # see `_axis_of`: nothing (the system's axis), a vector, or the axis node
     d_red::Float64
     g::Any
     e::Any
@@ -155,7 +166,7 @@ node_output(n::GaussianCouplingNode) = n._field
 function _gaussian_Ω0(node::GaussianCouplingNode, x, Ωref)
     Ωref === nothing &&
         return ComplexF64(rabi_frequency(node.atom, node.g, node.e, node.beam, x;
-                                         q_axis = node.q_axis, d_red = node.d_red))
+                                         q_axis = _axis_of(node.q_axis), d_red = node.d_red))
     r_ref = hasproperty(node.beam, :r0) ? Vector{Float64}(node.beam.r0) : zeros(3)
     E_ref = Dynamiq.efield_scalar(node.beam, r_ref)
     iszero(E_ref) && return ComplexF64(Ωref)
@@ -444,12 +455,16 @@ function compile_node!(node::DecayNode, basis::Basis, rng, param_values)
 end
 
 # A no-op unless the rate changed (a sampled rate): `update!` then clears the
-# cached L†L, which `evolve!` rebuilds.
-function recompile_node!(node::DecayNode, j::Jump, rng, param_values)
+# cached L†L, which `evolve!` rebuilds. A jump at rate 0 has zero entries, which
+# no rescaling revives: it is rebuilt from the node's branches on `basis`.
+function recompile_node!(node::DecayNode, j::Jump, rng, param_values; basis = nothing)
     Gamma_val = _resolve_node_value(node.Gamma, param_values, rng)
-    if j._rate == 0 && Gamma_val != 0
-        copy!(j.J.forward, node._field.J.forward)
-        j._rate = node._field._rate
+    if j._rate == 0 && Gamma_val != 0 && basis !== nothing
+        fresh = _jump(node, basis, Gamma_val)
+        copy!(j.J.forward, fresh.J.forward)
+        j._rate = Gamma_val
+        j.Hnh = nothing
+        j.LdagL_diag = nothing
     end
     update!(j, Val(:_), Gamma_val)
     return j
@@ -521,20 +536,17 @@ function compile_node!(node::RatedNode, basis::Basis, rng, param_values)
     if f === nothing
         f = node._field = _new_field(node, basis, rate)
         _reset_activity!(node, f)
-    elseif f.rate == 0 && rate != 0
-        # A zero-rate operator has zero entries and cannot be rescaled: rebuild.
-        fresh = _new_field(node, basis, rate)
-        copy!(f.H.forward, fresh.H.forward)
-        copy!(f.H.reverse, fresh.H.reverse)
-        f.rate = rate
     else
         update!(f, Val(:_), rate)
     end
     return f
 end
 
+# Sets the JOB's field `f` (its own copy; see `compile`) to the shot's rate. The
+# entries are written from the rate itself, not rescaled from the previous shot's,
+# so a run's numbers do not depend on which thread ran which shot.
 recompile_node!(node::RatedNode, f, rng, param_values) =
-    _set_rate!(f, node._field, ComplexF64(_resolve_node_value(_rate_value(node), param_values, rng)))
+    update!(f, Val(:_), ComplexF64(_resolve_node_value(_rate_value(node), param_values, rng)))
 
 #=============================================================================
 VdW INTERACTION NODE  (distance-dependent C6/r^6 interaction)
@@ -750,6 +762,34 @@ compile_node!(node::QuantizationAxisNode, basis, rng, param_values) =
 
 recompile_node!(node::QuantizationAxisNode, ::Any, rng, param_values) =
     compile_node!(node, nothing, rng, param_values)
+
+# The axis a beam-derived coupling decomposes its polarization about. `nothing`
+# is "the system's axis", bound to the `QuantizationAxisNode` by `compile` (ẑ if
+# the system has none); an explicit vector is the `q_axis` keyword.
+_axis_of(::Nothing) = [0.0, 0.0, 1.0]
+_axis_of(q::QuantizationAxisNode) = something(q._compiled[], [0.0, 0.0, 1.0])
+_axis_of(q) = Vector{Float64}(q)
+
+# Point every beam-derived coupling that follows the system's axis at the axis
+# node, so a sampled or swept axis reaches the couplings as it reaches the Zeeman
+# and light shifts. Done on the job's private copy of the system by `compile`, and
+# on the system itself by `gethamiltonian`; a system without an axis node keeps ẑ.
+function _bind_quantization_axis!(sys)
+    axis = nothing
+    for n in sys.nodes
+        n isa QuantizationAxisNode && (axis = n)
+    end
+    axis === nothing && return nothing
+    for n in sys.nodes
+        if n isa GaussianCouplingNode
+            n.q_axis === nothing && (n.q_axis = axis)
+        elseif n isa Union{CouplingNode, PlanarCouplingNode, NoisyCouplingNode}
+            n.Ω = _bound_to_axis(n.Ω, axis)
+        end
+    end
+    return nothing
+end
+_bound_to_axis(Ω, axis) = Ω     # `BeamRabiFrequency`'s method is in physics/couplings.jl
 
 #=============================================================================
 FALLBACK RECOMPILE (non-parametric nodes need no update)

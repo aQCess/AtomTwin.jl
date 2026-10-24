@@ -63,6 +63,12 @@ function _resolve(b::AbstractBeam, param_values, cache::IdDict, rng)
     end
 end
 
+# A field, jump or atom is a handle on a compiled object; `compile` seeds the
+# cache with the job's copy of each, which is what an instruction must act on.
+_resolve(f::Dynamiq.AbstractField, param_values, cache::IdDict, rng) = get(cache, f, f)
+_resolve(j::Jump, param_values, cache::IdDict, rng) = get(cache, j, j)
+_resolve(a::Union{AbstractAtom, NLevelAtom}, param_values, cache::IdDict, rng) = get(cache, a, a)
+
 """
     _resolve(ta::TweezerArray, param_values, cache::IdDict, rng)
 

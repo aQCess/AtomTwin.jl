@@ -38,7 +38,10 @@ end
         Pulse(coupling, T_total)
     end
     out = play(sys, seq; initial_state = g)
-    @test maximum(out.detectors["P_e"]) < 0.6
+    P, t = out.detectors["P_e"], out.times
+    @test maximum(P) ≈ 0.5 atol = 0.01                             # Ω²/Ω_eff²
+    @test P[argmin(abs.(t .- π / (√2 * Ω)))] ≈ 0.5 atol = 0.01      # the first maximum...
+    @test P[argmin(abs.(t .- 2π / (√2 * Ω)))] ≈ 0.0 atol = 0.01     # ...and return, at Ω_eff = √2 Ω
 end
 
 # ── B. Lindblad dissipation ───────────────────────────────────────────────────
@@ -91,6 +94,28 @@ end
     @test all(isapprox.(out.detectors["P_g"], 0.5; atol = 1e-9))
     # Coherence damps at γ/2 (standard L=√γ|e⟩⟨e| convention), not γ
     @test isapprox(abs(out.detectors["coh"][end]), 0.5 * exp(-γ * 1e-6 / 2); rtol = 1e-2)
+end
+
+@testset "Lindblad: pure dephasing in MCWF agrees with the master equation" begin
+    # The trajectory realisation of L = √γ|e⟩⟨e| (a no-jump decay of the |e⟩
+    # amplitude at γ/2 and projective jumps) must average to the same γ/2 coherence
+    # decay with the populations untouched.
+    g, e = Level("g"), Level("e")
+    atom = Atom(; levels = [g, e])
+    sys  = System(atom)
+    γ = 2π * 1e6
+    add_dephasing!(sys, atom, e, γ)
+    add_detector!(sys, PopulationDetectorSpec(atom, e; name = "P_e"))
+    add_detector!(sys, CoherenceDetectorSpec(atom, g => e; name = "coh"))
+    seq = Sequence(1e-9; downsample = 1000)
+    @sequence seq begin
+        Wait(1e-6)
+    end
+    N = 4000
+    out = play(sys, seq; initial_state = (1/√2)*g + (1/√2)*e, shots = N, rng = MersenneTwister(5))
+    σ = 0.5 / sqrt(N)
+    @test abs(mean(out.detectors["coh"][end, :])) ≈ 0.5 * exp(-γ * 1e-6 / 2) atol = 4σ
+    @test mean(out.detectors["P_e"][end, :]) ≈ 0.5 atol = 4σ
 end
 
 # ── C. Selection rules ────────────────────────────────────────────────────────
@@ -214,7 +239,7 @@ end
     rng = Xoshiro(2)
     kb_v = 1.380_649e-23
     amu  = 1.660_539_066_60e-27
-    m    = 171 * amu
+    m    = AtomTwin.ATOM_DEFAULTS[:Ytterbium171].mass
     T    = 10e-6   # 10 µK
     σ_v  = sqrt(kb_v * T / m)   # expected per-axis velocity std
 
@@ -930,7 +955,9 @@ end
             Pulse(cp, 1e-4)
         end
         out = play(sys, seq; initial_state = g[0], shots = shots, frozen = true)
-        dip = Dict(yb.level_indices[e[m]] => yb.inner.dipole[yb.level_indices[e[m]] => yb.level_indices[g[0]]]
+        ## the run's atom (the job's private copy) carries the photon dipoles about the axis
+        a = compile(sys, seq; initial_state = [g[0]]).atoms[1]
+        dip = Dict(yb.level_indices[e[m]] => a.dipole[yb.level_indices[e[m]] => yb.level_indices[g[0]]]
                    for m in (-1, 0, 1))
         sum(out.detectors["pi"]), sum(out.detectors["sigma"]), dip, yb
     end
@@ -1334,11 +1361,12 @@ end
         Pulse(c, 0.5e-6)                              # a π pulse at the focus
     end
     @test play(s, q; initial_state = g, frozen = true).detectors["Pe"][end] ≈ 1 atol = 1e-6
-    ## beam-derived: the sublevel pairs are kept although the atom sits at the origin until compile
+    ## beam-derived: every |Δm| ≤ 1 pair is kept (the axis may still change its strength),
+    ## although the atom sits at the origin until compile
     S0 = HyperfineManifold(1//2, 0; label = "1S0", term = l"1S0")
     P1 = HyperfineManifold(3//2, 1; label = "3P1", term = l"3P1")
     yb = Ytterbium171Atom(; levels = [S0..., P1...], x_init = site)
-    @test length(add_coupling!(System(yb), yb, S0 => P1; beam)) == 4
+    @test length(add_coupling!(System(yb), yb, S0 => P1; beam)) == 6
     ## a shot beyond the beam's cutoff zeroes the operator; the next shot gets it back
     node = only(n for n in s.nodes if n isa AtomTwin.GaussianCouplingNode)
     f = node._field
@@ -1414,9 +1442,12 @@ end
     pw = PlanarBeam(600e-9, 1.0, [0.0, 0, 1], [1.0, 0, 0])
     gb = GaussianBeam(600e-9, 10e-6, 1e-3)
     pb = GaussianBeam(600e-9, 10e-6, Parameter(:P, 1e-3))
-    @test length(add_coupling!(System(a), a, S => P; beam = pw, d_red = 1e-29)) == 2
-    @test length(add_coupling!(System(a), a, S => P, gb; d_red = 1e-29)) == 2
-    @test length(add_coupling!(System(a), a, S => P, pb; d_red = 1e-29)) == 3   # every |Δm| ≤ 1 pair, resolved per shot
+    ## every |Δm| ≤ 1 pair, resolved at compile about the system's axis; an explicit
+    ## `q_axis` fixes the strengths, and `tol` then drops the π pair of x̂ light
+    @test length(add_coupling!(System(a), a, S => P; beam = pw, d_red = 1e-29)) == 3
+    @test length(add_coupling!(System(a), a, S => P, gb; d_red = 1e-29)) == 3
+    @test length(add_coupling!(System(a), a, S => P, pb; d_red = 1e-29)) == 3
+    @test length(add_coupling!(System(a), a, S => P; beam = pw, d_red = 1e-29, q_axis = [0, 0, 1.0])) == 2
     @test_throws ErrorException add_coupling!(System(a), a, S => P; beam = pw)          # no line data, no d_red
     @test_throws ArgumentError add_coupling!(System(a), a, S => D; beam = pw, d_red = 1e-29)   # |ΔJ| = 2
     ## noise is not silently dropped with a beam
@@ -1459,8 +1490,12 @@ end
 end
 
 @testset "species masses are isotope masses" begin
-    @test Ytterbium174Atom().m / AtomTwin.Units.amu ≈ 173.93887
-    @test Rubidium87Atom().m / AtomTwin.Units.amu ≈ 86.90918
+    # AME2020 (Wang et al., Chin. Phys. C 45, 030003): ¹⁷⁴Yb 173.938 866 4 u,
+    # ⁸⁷Rb 86.909 180 5 u, ¹⁷¹Yb 170.936 330 2 u, ⁸⁸Sr 87.905 612 2 u.
+    @test Ytterbium174Atom().m / AtomTwin.Units.amu ≈ 173.9388664 rtol = 1e-7
+    @test Rubidium87Atom().m / AtomTwin.Units.amu ≈ 86.9091805 rtol = 1e-7
+    @test Ytterbium171Atom().m / AtomTwin.Units.amu ≈ 170.9363302 rtol = 1e-7
+    @test Strontium88Atom().m / AtomTwin.Units.amu ≈ 87.9056122 rtol = 1e-7
 end
 
 @testset "gethamiltonian refreshes explicit light shifts for the current axis; elliptical trap light warns" begin
@@ -1506,6 +1541,32 @@ end
     f = exp.(range(log(1e4), log(1e8); length = 20000))
     @test v2 ≈ sum(AtomTwin.laser_phase_psd(f, nf2.noise) .* f .* log(f[2] / f[1])) rtol = 0.15
     @test AtomTwin.laser_phase_psd(fg, nf2.noise) ≈ hg / fg^2        # S_φ = S_ν/f²
+end
+
+@testset "laser phase noise damps a Rabi oscillation at π² S_ν(Ω/2π)/2" begin
+    # A white frequency-noise floor h₀ (one-sided, Hz²/Hz) on a resonant drive: the
+    # noise at the Rabi frequency drives transitions between the dressed states and
+    # the oscillation's envelope decays at Γ = π² h₀ / 2 (half the Ramsey dephasing
+    # rate π² h₀), so P_e(t) = ½(1 − cos(Ωt) e^{−Γt}). Checked through the whole
+    # path: model → NoisyField → per-shot synthesis → solver.
+    g, e = Level("g"), Level("e")
+    atom = Atom(; levels = [g, e])
+    sys  = System(atom)
+    Ω, h0 = 2π * 1e6, 4e4
+    Γ = π^2 * h0 / 2
+    noise = LaserPhaseNoiseModel(bump_ampl = 0.0, powerlaw_ampl = h0, powerlaw_exp = 0.0)
+    c = add_coupling!(sys, atom, g => e, Ω; noise, active = false)
+    add_detector!(sys, PopulationDetectorSpec(atom, e; name = "P_e"))
+    T = 9.5e-6                                     # cos(ΩT) = −1
+    seq = Sequence(2π / (20Ω); tol = 1e-4)
+    @sequence seq begin
+        Pulse(c, T)
+    end
+    N = 600
+    out = play(sys, seq; initial_state = g, shots = N, rng = MersenneTwister(11))
+    Pe = mean(out.detectors["P_e"][end, :])
+    @test Pe ≈ 0.5 * (1 + exp(-Γ * T)) atol = 4 * 0.5 / sqrt(N)   # 0.58; the old synthesis gave 0.9
+    @test Pe < 0.75
 end
 
 @testset "a symbolic operator materialises as the low-level operator does" begin

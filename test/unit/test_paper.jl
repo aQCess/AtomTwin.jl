@@ -130,14 +130,13 @@ end
     job = compile(system, seq; initial_state = [g])
 
     Δ_range = [0.0, 2π * 0.5e6]    # resonant and off-resonant
-    # Extract the scalar immediately: play(job,sys) returns job.detector_outputs by
-    # reference, so storing the NamedTuple and inspecting it after a second play call
-    # would see the overwritten (second-run) values in both entries.
+    # `recompile!` sets the job's Δ and the job remembers it; `play(job, sys)` then runs
+    # at that value (`play(job, sys; Δ = Δ_val)` is the same step in one call).
     pe_vals = map(Δ_range) do Δ_val
         recompile!(job, system; Δ = Δ_val)
         out = play(job, system; shots = 1)
         @test haskey(out.detectors, "P_e")
-        out.detectors["P_e"][end]   # extract value before next recompile! overwrites buffer
+        out.detectors["P_e"][end]
     end
 
     @test length(pe_vals) == 2

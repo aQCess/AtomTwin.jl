@@ -6,45 +6,36 @@ and Clebsch–Gordan factors to obtain the correct matrix elements.
 """
     update!(c::GlobalCoupling, ::Val, val)
 
-Update the Rabi rate of a `GlobalCoupling` by rescaling its operator entries.
-Called by `compile`/`recompile!` for parameter bindings.
+Set the Rabi rate of a `GlobalCoupling` (`PlanarCoupling`, `Interaction`): every
+operator entry is written from the new rate. Called by `compile`/`recompile!` for
+parameter bindings.
+
+The entries are set, not rescaled from the previous value: a single-transition
+operator has one value on every entry (`rate/2`, or `V` for an interaction, as
+built), so this is exact, revives an operator left at rate 0, and leaves a
+sampled rate with no memory of the shots that ran before it (serial and threaded
+runs of one seed agree bit for bit).
 """
 function update!(c::Union{GlobalCoupling, PlanarCoupling, Interaction}, ::Val, val::Number)
     new_rate = ComplexF64(val)
-    c.rate != 0 && Dynamiq.rescale!(c.H, new_rate / c.rate)
+    _set_entries!(c.H, new_rate * _entry_scale(c))
     c.rate = new_rate
 end
 
-# Set a JOB's field to a newly sampled rate. It is rescaled from its own `rate`,
-# never from state on the (shared) node: each thread of a multi-shot run holds a
-# deep copy of the job, and shots must not compound. A field at rate 0 has zero
-# entries and cannot be rescaled, so it takes its structure from the node's
-# field first.
-function _set_rate!(c, node_field, new_rate::ComplexF64)
-    if c.rate == 0 && new_rate != 0
-        copy!(c.H.forward, node_field.H.forward)
-        copy!(c.H.reverse, node_field.H.reverse)
-        c.rate = node_field.rate
-    end
-    update!(c, Val(:_), new_rate)
-end
+_entry_scale(::Union{GlobalCoupling, PlanarCoupling}) = 0.5     # H = Ω/2 (|e⟩⟨g| + h.c.)
+_entry_scale(::Interaction) = 1.0                                # H = V |..⟩⟨..| (+ h.c.)
 
 """
     update!(c::GaussianCoupling, ::Val, new_Ω0)
 
-Rescale the operator entries of `c.H` to reflect a new peak Rabi frequency `new_Ω0`.
-Called by `compile_node!` when the atom's position (and hence Ω₀) has changed between shots.
+Set the operator entries of `c.H` to a new peak Rabi frequency `new_Ω0` (one value,
+`Ω₀/2`, on every entry). Called by `compile_node!` when the atom's position (and
+hence Ω₀) has changed between shots; a shot that put the atom beyond the beam's
+cutoff (Ω₀ = 0) does not kill the next one.
 """
 function update!(c::GaussianCoupling, ::Val, new_Ω0::Number)
     new_Ω0 = ComplexF64(new_Ω0)
-    if c.Ω0 != 0
-        Dynamiq.rescale!(c.H, new_Ω0 / c.Ω0)
-    else
-        # Zero entries cannot be rescaled, but a single-transition operator has one
-        # value on every entry (Ω₀/2, as built), so they can be set again: a shot
-        # that put the atom beyond the beam's cutoff must not kill the next one.
-        _set_entries!(c.H, new_Ω0 / 2)
-    end
+    _set_entries!(c.H, new_Ω0 / 2)
     c.Ω0 = new_Ω0
 end
 
@@ -569,21 +560,24 @@ struct BeamRabiFrequency
     atom::AbstractAtom
     g::AbstractLevel
     e::AbstractLevel
-    q_axis::Vector{Float64}
+    q_axis::Any                          # see `_axis_of`
     d_red::Float64
+    x0::Union{Nothing, Vector{Float64}}  # where the field is read: the atom's position, or a fixed point
 end
+
+BeamRabiFrequency(beam_node, atom, g, e, q_axis, d_red) =
+    BeamRabiFrequency(beam_node, atom, g, e, q_axis, d_red, nothing)
 
 _extract_beam_node_deps(f::BeamRabiFrequency) = AbstractNode[f.beam_node]
+# Bound to the system's axis node by `compile` (see `_bind_quantization_axis!`).
+_bound_to_axis(f::BeamRabiFrequency, axis) = f.q_axis === nothing ?
+    BeamRabiFrequency(f.beam_node, f.atom, f.g, f.e, axis, f.d_red, f.x0) : f
 
-function _resolve_node_default(f::BeamRabiFrequency)
-    ComplexF64(rabi_frequency(f.atom, f.g, f.e, f.beam_node._compiled[], f.atom.x;
-                              q_axis=f.q_axis, d_red=f.d_red))
-end
+_resolve_node_default(f::BeamRabiFrequency) =
+    ComplexF64(rabi_frequency(f.atom, f.g, f.e, f.beam_node._compiled[], something(f.x0, f.atom.x);
+                              q_axis = _axis_of(f.q_axis), d_red = f.d_red))
 
-function _resolve_node_value(f::BeamRabiFrequency, param_values, rng)
-    ComplexF64(rabi_frequency(f.atom, f.g, f.e, f.beam_node._compiled[], f.atom.x;
-                              q_axis=f.q_axis, d_red=f.d_red))
-end
+_resolve_node_value(f::BeamRabiFrequency, param_values, rng) = _resolve_node_default(f)
 
 ############## PUBLIC USER API (DISPATCHES) ##############
 
@@ -616,7 +610,7 @@ function add_coupling!(
     system, atom::AbstractAtom,
     level::Pair{M, M},
     beam;
-    q_axis::AbstractVector{<:Real} = [0.0, 0.0, 1.0],
+    q_axis::Union{Nothing, AbstractVector{<:Real}} = nothing,
     d_red::Union{Float64, Nothing} = nothing,
     noise=nothing, active=true, tol=1e-10,
 ) where {M<:Union{HyperfineManifold, FineManifold}}
@@ -631,7 +625,7 @@ function add_coupling!(
     # atom's initial position. (`@something`: the species' line data is looked up only
     # when no `d_red` is given.)
     d_red = @something d_red reduced_dipole(atom, first(ground.levels), first(excited.levels))
-    q_axis_vec = Vector{Float64}(q_axis)
+    q_axis_vec = q_axis === nothing ? nothing : Vector{Float64}(q_axis)
     couplings = Dynamiq.AbstractField[]
 
     # Create a single BeamNode for this beam (shared across all sublevel pairs)
@@ -656,7 +650,7 @@ end
 """
     add_coupling!(system, atom, level::Pair{HyperfineManifold,HyperfineManifold};
                   beam=nothing, Ω_π=nothing, Ω_p=nothing, Ω_m=nothing,
-                  d_red=nothing, q_axis=[0,0,1], active=true, tol=1e-10)
+                  d_red=nothing, q_axis = nothing, active=true, tol=1e-10)
 
 Add electric-dipole couplings between hyperfine manifolds, or between fine-structure
 manifolds (`Pair{FineManifold,FineManifold}`, the `I = 0` case with `F = J`). A mixed
@@ -679,6 +673,11 @@ beam-derived form: give it explicit `Ω_π, Ω_σ⁺, Ω_σ⁻`.
   profile and phase at the atom.
 - If neither `beam` nor any Ω is provided: an error is raised.
 
+The beam's polarization is decomposed into π and σ± about the system's quantization
+axis ([`add_quantization_axis!`](@ref), ẑ if none; it may be set after the coupling
+and may be a `Parameter`), the axis the Zeeman and tensor light shifts use. `q_axis`
+fixes a different axis for this coupling alone.
+
 With a beam the couplings follow the field at the atom: a `PlanarBeam` gives
 `PlanarCoupling`s (phase `exp(ik·x)`, and the radiation pressure and recoil of the
 semiclassical motion), any other beam `GaussianCoupling`s (its profile and phase).
@@ -695,7 +694,7 @@ function add_coupling!(
     Ω_π = nothing,
     Ω_p  = nothing,
     Ω_m  = nothing,
-    q_axis::AbstractVector{<:Real} = [0.0, 0.0, 1.0],
+    q_axis::Union{Nothing, AbstractVector{<:Real}} = nothing,
     d_red::Union{Float64, Nothing} = nothing,
     active = true,
     tol = 1e-10,
@@ -704,9 +703,13 @@ function add_coupling!(
         error("add_coupling!: provide at least one of `beam` or `Ω_π`/`Ω_p`/`Ω_m`")
 
     ground, excited = level
-    q_axis_vec = Vector{Float64}(q_axis)
+    q_axis_vec = q_axis === nothing ? nothing : Vector{Float64}(q_axis)
     override_map = Dict{Int,Any}(0 => Ω_π, 1 => Ω_p, -1 => Ω_m)
     couplings = Dynamiq.AbstractField[]
+    # A plane wave's couplings read the field at the origin (`PlanarCoupling` adds
+    # exp(ik·x)); one node resolves it, shared by every sublevel pair.
+    beam_node = beam isa PlanarBeam ? BeamNode(beam) : nothing
+    beam_node === nothing || (build_node!(beam_node); push!(system, beam_node))
 
     for g in ground.levels, e in excited.levels
         Δm = _mproj(e) - _mproj(g)
@@ -719,20 +722,24 @@ function add_coupling!(
             d_red = @something d_red reduced_dipole(atom, g, e)
             Ω = nothing
             ## the Rabi frequency at the beam's reference point: the origin for a plane
-            ## wave (`PlanarCoupling` adds exp(ik·x)), the focus for a Gaussian beam
-            ## (the coupling follows the profile at the atom, wherever `compile` puts it)
+            ## wave, the focus for a Gaussian beam (the coupling follows the profile at
+            ## the atom, wherever `compile` puts it)
             x0 = beam isa PlanarBeam ? zeros(3) : Vector{Float64}(beam.r0)
-            Ω0 = rabi_frequency(atom, g, e, beam, x0; q_axis = q_axis_vec, d_red = d_red)
+            Ω0 = rabi_frequency(atom, g, e, beam, x0; q_axis = _axis_of(q_axis_vec), d_red = d_red)
         else
             Ω  = compute_coupling_strength(g, e, atom, override, override, override)
             Ω0 = _resolve_node_default(Ω)
         end
         # `tol` drops a pair the polarization or selection rules make negligible, never
-        # a parametric Ω whose default happens to be 0: that is a knob `play` sets later.
-        (override === nothing || override isa Number) && abs(Ω0) < tol && continue
+        # a parametric Ω whose default happens to be 0, nor a pair whose strength
+        # depends on an axis the system may still set or sample: those are knobs
+        # `compile` and `play` set later.
+        fixed = override === nothing ? q_axis_vec !== nothing : override isa Number
+        fixed && abs(Ω0) < tol && continue
 
         if beam isa PlanarBeam
-            push!(couplings, _add_coupling!(system, atom, g => e, something(Ω, Ω0); beam, active))
+            Ωp = Ω === nothing ? BeamRabiFrequency(beam_node, atom, g, e, q_axis_vec, d_red, zeros(3)) : Ω
+            push!(couplings, _add_coupling!(system, atom, g => e, Ωp; beam, active))
         elseif beam !== nothing
             node = GaussianCouplingNode(atom, g => e, beam, q_axis_vec,
                                         something(d_red, 0.0), g, e;

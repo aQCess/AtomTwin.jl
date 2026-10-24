@@ -69,7 +69,8 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 - **`d_red`** was never used where it is needed: the species lookup ran first and
   threw for a line without line data. `|ΔJ| > 1`, `|ΔF| > 1` and `noise` with a
   beam are refused instead of silently giving nothing.
-- **Atom model.** Duplicate levels and an F outside `|J−I| … J+I` are errors; a
+- **Atom model.** Duplicate levels and an F outside `|J−I| … J+I` are errors (for a
+  species or an explicit `I`; a generic `Atom` has no nuclear spin to check); a
   level's J is checked against its polarizability model; a species with no models
   warns once in a beam, as does elliptical trap light (vector shift not modelled);
   a `FineLevel` takes the I = 0 tensor shift on any isotope, as its couplings do;
@@ -122,10 +123,85 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   that spot `(i, j)` has linear index `(i − 1)·ncol + j`; the coherence detector
   documents `ρ_ji` as the recorded convention.
 
+- **A job is a snapshot.** `compile` works on a private copy of the `System`: its
+  fields and atoms were the system's own, so compiling or playing one job retuned
+  every other job from that system (`job1 = compile(sys, seq; Ω = A); job2 =
+  compile(sys, seq; Ω = B)` ran `job1` at `B`), and a serial multi-shot run left
+  the last shot's random draw in the user's system (`gethamiltonian(sys)` after a
+  sampled run returned a random Hamiltonian). The system is as declared before and
+  after `play`; `copy(sys)` is an independent copy (it always threw).
+- **Replaying a job.** `play(job, sys; name = value)` applied the override from
+  shot 2 on (`shots = 1` ignored it), and shot 1 of a replay kept the previous run's
+  last draw, so a loop of replays was not an ensemble. Every shot of a replay is
+  re-resolved: a fresh draw of every sampled quantity, at the parameter values the
+  job was last given (`compile`, `recompile!` or `play` keywords; the job remembers
+  them, so `recompile!(job; Δ = x); play(job, sys)` sweeps as documented). The single-shot path returned the job's own buffers, so a
+  later replay overwrote earlier results in place; it returns copies.
+- **Unknown keywords.** A `play`/`compile` keyword that names no `Parameter` of the
+  system or sequence (`Omeg = …`, `delta` for `δ`, `seed = 1`) ran silently at the
+  default; it is an `ArgumentError`. `play(job, …; density_matrix = …)` disagreeing
+  with the job is an error (it ran the other solver silently); an empty sequence is
+  an error at `compile`, not a 20-argument `MethodError`.
+- **Beam-derived couplings follow the quantization axis.** `add_coupling!(…; beam)`
+  decomposed the polarization about ẑ whatever `add_quantization_axis!` set, so a
+  beam polarized along an x̂ bias field drove `Δm = ±1` while the Zeeman and light
+  shifts of the same sublevels were computed about x̂, and a sampled axis never
+  reached the couplings. They now follow the system's axis (set before or after the
+  coupling, sampled per shot); `q_axis` fixes an axis for one coupling. Pairs are no
+  longer dropped at `add_coupling!` by a strength the axis may still change.
+- **Parametric axis.** `Parameter(:B, [0, 0, 1.0]; std = 0.02)` and `[θ, 0, 1 − θ]`
+  threw at `compile`/`add_quantization_axis!`; a vector resolves per component and
+  an array-valued Parameter draws one deviate per component.
+- **Initial states.** `getqstate`/`initial_state` built an N-atom product state by
+  summing full-dimension vectors, O(terms × dim): 825 MB for 12 atoms in `g + e`,
+  out of memory at 16. One pass over the basis now. A single level is taken for
+  every atom (as documented), a numeric statevector or density matrix is accepted,
+  and a wrong number of entries is an error (it was silently truncated).
+- **Sampled rates** were rescaled from the previous shot's operator, so a run's
+  numbers depended on which thread ran which shot (serial ≠ threaded at 1e-14).
+  Coupling and interaction entries are set from the rate itself; serial and
+  threaded runs of one seed agree bit for bit. (A jump's entries are still
+  rescaled, by `√(Γ′/Γ)`.)
+- **Sanitation.** `is_classical` was always `false`; the `recompile!` docstring
+  claimed the system may be shared across threads; `getqstate` and `noise.jl`
+  referred to a `play!` that does not exist; `compile` documented a wrong
+  `initial_state` default.
+- **Tests and docs.** `test_motion.jl` normalised a one-photon momentum balance by
+  a mass-number recoil velocity (failing at 1e-6 after the isotope masses); the
+  `rabi_with_noise` example's "analytical" damping rate was `S_ν/2` for
+  `π² S_ν(Ω/2π)/2` (the old factor matched the old, too-weak noise); `api_noise.md`
+  called `process_tomography` with two arguments and labelled PSD amplitudes Hz²
+  (Hz²/Hz); `solvers.md` gave the order-4 Taylor bound for every order; four
+  exported Dynamiq names rendered on no page; `internals.md` listed the deleted
+  `interp.jl`; README and index promised K-39 polarizability models (levels and
+  mass only). CONTRIBUTING described ground-truth files that do not exist. New
+  tests: laser phase noise end to end (Rabi envelope `π² h₀/2`), MCWF dephasing
+  against the master equation, `Taylor(n)` through `compile`/`play`, exact
+  `exp(−iHT)` and `exp(𝓛T)` references for two pinned numbers, the off-resonance
+  Rabi value and period, AME2020 masses.
+
 ### Added
 
 - Beam-derived couplings between fine-structure manifolds (`FineManifold => FineManifold`,
   e.g. Yb-174 556 nm), with the `I = 0`, `F = J` angular factor.
+- `SimulationJob.system`: a job's private copy of the system it was compiled from.
+- `getqstate(sys, ψ::AbstractVector{<:Number})` / `(sys, ρ::AbstractMatrix)`: numeric
+  initial states.
+- Since 0.2.1, before this review (unrecorded until now): the Yb E1 decay-rate table
+  and the `3P2` term (`getdecayrates`); line frequencies and reduced dipoles
+  (`getlinefrequencies`, `reduced_dipole`), so a beam drives a line without `d_red`;
+  Landé g-factors from species `g_J`, `g_I` (`getgfactors`, `lande_gF`, `zeeman_g`;
+  g-factors default from species data); manifold decays recoil along each photon's
+  dipole pattern and count σ and π apart (`clicks = (π = …, σ = …)`);
+  `PhotoDetectorSpec(; aperture, efficiency)`, a camera that sees each photon by its
+  direction; a detector's `tspan` is honoured and `MotionDetectorSpec` records the
+  velocity (`dims = 4:6`; the output gains columns).
+
+### Changed
+
+- Since 0.2.1, before this review: the Zeeman shift uses `μ_B` from the unit
+  constants (numbers change in the last digits); `gethamiltonian` includes the
+  trapping beams' light shifts.
 
 ---
 
