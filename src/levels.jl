@@ -175,7 +175,7 @@ Represents a specific hyperfine level with quantum numbers F, mF and Landé g-fa
 
 # Fields
 - `F::Rational{Int}`: Total angular momentum quantum number
-- `J::Rational{Int}`: Orbital angular momentum quantum number
+- `J::Rational{Int}`: Total electronic angular momentum quantum number
 - `mF::Rational{Int}`: Magnetic quantum number
 - `g_F::Union{Float64, Nothing}`: Landé g-factor, or `nothing` for the species' value
   from the Landé formula (see [`zeeman_g`](@ref))
@@ -365,7 +365,7 @@ Container for all magnetic sublevels of a hyperfine manifold with quantum number
 
 # Fields
 - `F::Rational{Int}`: Total angular momentum quantum number
-- `J::Rational{Int}`: Orbital angular momentum quantum number
+- `J::Rational{Int}`: Total electronic angular momentum quantum number
 - `label::String`: Manifold label (e.g., "³P₀", "³D₁")
 - `g_F::Union{Float64, Nothing}`: Landé g-factor (common for all levels in manifold).
   Left out, it is the species' value for the term, from the Landé formula with the

@@ -31,7 +31,7 @@ diagonal energy shift; a complex amplitude would make the term non-Hermitian and
 is rejected at compile time). `Pulse`'s `amplitudes` keyword reads as an
 amplitude envelope; for a detuning it is really a frequency-vs-time *sweep*.
 """
-function add_detuning!(system, atom::AbstractAtom, level::AbstractLevel, delta; active=true, tol=1e-10)
+function add_detuning!(system, atom::AbstractAtom, level::AbstractLevel, delta; active=true)
     node = DetuningNode(delta, atom, level; active=active)
     build_node!(node, system.basis)
     push!(system, node)
@@ -68,8 +68,8 @@ in units of Tesla.
 Returns a vector of the created `Detuning` objects.
 """
 function add_zeeman_detunings!(system, atom::AbstractAtom, manifold::AbstractManifold;
-                               B=0.0, delta=0.0, active=true, tol=1e-10)
-    detunings = []
+                               B=0.0, delta=0.0, active=true)
+    detunings = Detuning[]
 
     for level in manifold
         if manifold isa HyperfineManifold
@@ -77,7 +77,7 @@ function add_zeeman_detunings!(system, atom::AbstractAtom, manifold::AbstractMan
         elseif manifold isa FineManifold
             zeeman_coeff = Float64(level.mJ) * zeeman_g(atom, level) * BOHR_MAGNETON_RAD_S_TESLA
         else
-            zeeman_coeff = 0.0
+            error("add_zeeman_detunings!: no Zeeman term is defined for a $(typeof(manifold))")
         end
 
         # Physical detuning for this level: delta - zeeman_coeff * B
@@ -112,8 +112,11 @@ polarized trap at the magic angle `acos(1/√3) ≈ 54.74°` produces no tensor 
 at all. Each beam's `pol` is projected onto the axis automatically — no angle is
 passed by hand.
 
-`axis` may be a `Parameter` or `ParametricExpression`, so a magic-angle scan or a
-shot-to-shot field misalignment is a `play` keyword rather than a rebuilt system.
+`axis` may be a `Parameter` or `ParametricExpression`, or a vector with such
+components (`[θ, 0, 1 - θ]`), so a magic-angle scan or a shot-to-shot field
+misalignment (`Parameter(:B, [0, 0, 1.0]; std = 0.02)`, one draw per component) is
+a `play` keyword rather than a rebuilt system. Beam-derived couplings
+(`add_coupling!(…; beam)`) decompose their polarization about this axis too.
 
 Only one axis may be set per system.
 
@@ -142,17 +145,6 @@ function getquantizationaxis(system)
             ax = node_output(n)
             ax === nothing || return ax
         end
-    end
-    return [0.0, 0.0, 1.0]
-end
-
-# The axis for one shot of `recompile!`: resolved afresh, so a sampled axis is
-# resampled per shot, but NOT written back to the node. `sys` is shared by every
-# thread of a multi-shot run; `recompile!` must only mutate its own job.
-function _shot_quantization_axis(system, rng, param_values)
-    for n in system.nodes
-        n isa QuantizationAxisNode &&
-            return _unit_axis(_resolve_node_value(n.axis, param_values, rng))
     end
     return [0.0, 0.0, 1.0]
 end

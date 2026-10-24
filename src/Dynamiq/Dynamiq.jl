@@ -87,6 +87,8 @@ export AmplitudeModifier
 export AbstractBoundaryModifier
 export SetModifier
 export ResetModifier
+export GateModifier
+export SetPositionModifier
 export begin_instruction!
 export end_instruction!
 

@@ -89,12 +89,18 @@ function update!(j::Jump, ::Val, val::Number)
     j._rate = new_rate
     j.Hnh = nothing
     j.LdagL_diag = nothing
+    return j
 end
 
 """
     add_dephasing!(system, atom, level, gamma; active = true)
 
-Add a pure dephasing jump operator for a single level.
+Add the pure-dephasing jump operator `L = √gamma |level⟩⟨level|`.
+
+`gamma` (rad/s) is the jump rate. A coherence between `level` and any other level
+then decays at `gamma/2`, and a coherence between two levels that each carry such
+a jump at `gamma`; populations are untouched. To reproduce a measured coherence
+decay rate `1/T₂` on one level, pass `gamma = 2/T₂`.
 """
 function add_dephasing!(system, atom::AbstractAtom, level::L, gamma; active=true) where {L<:AbstractLevel}
     node = DecayNode(gamma, atom, level => level; active=active)
@@ -106,10 +112,12 @@ end
 """
     add_dephasing!(system, atom, manifold, gamma; active = true)
 
-Add pure dephasing jump operators for all levels in a manifold.
+Add one pure-dephasing jump `√gamma |l⟩⟨l|` for every level of the manifold. Returns
+the `Jump`s. A coherence between two sublevels of the manifold decays at `gamma`
+(each end contributes `gamma/2`); a coherence to a level outside it at `gamma/2`.
 """
 function add_dephasing!(system, atom::AbstractAtom, manifold::M, gamma; active=true) where {M<:AbstractManifold}
-    [add_dephasing!(system, atom, level, gamma; active=active) for level in manifold]
+    Jump[add_dephasing!(system, atom, level, gamma; active=active) for level in manifold]
 end
 
 """
@@ -120,7 +128,13 @@ with branching ratios set by Clebsch-Gordan coefficients.
 
 There is one jump per photon polarisation q, `L_q = √rate Σₘ c_q(m) |g_{m+q}⟩⟨e_m|`,
 so a superposition of excited sublevels decays into the matching superposition of
-ground sublevels (coherence transfer).
+ground sublevels (coherence transfer). Returns the `Jump`s, one per polarisation present.
+
+`rate` is the total decay rate of each excited sublevel into *this* ground manifold:
+the Clebsch–Gordan weights are normalised over the sublevels of `ground`, and the
+`F′ → F` branching between ground manifolds is not computed here. An excited manifold
+that decays to several ground manifolds takes one call per ground manifold, each
+with its partial rate `Γ × (2F+1)(2J′+1) {J′ F′ I; F J 1}²`.
 
 With `λ`, each jump's recoil kick follows the emission pattern of its polarisation
 about the quantization axis: π photons `∝ sin²θ`, σ photons `∝ (1 + cos²θ)/2`. `clicks` is one `PhotoDetectorSpec` for every
@@ -150,15 +164,18 @@ function _add_polarized_decays!(system, atom, branches, rate; tol, clicks, kwarg
     for (e, gs) in branches
         total_strength = sum(abs2(c) for (_, c, _) in gs)
         for (g, c, q) in gs
-            rate * abs2(c) / total_strength > tol &&
+            # `tol` on the dimensionless branching weight, so a parametric rate is kept
+            abs2(c) / total_strength > tol &&
                 push!(byq[Int(q)], (e => g) => Float64(c / sqrt(total_strength)))
         end
     end
+    jumps = Jump[]
     for q in -1:1
-        isempty(byq[q]) || _add_decay!(system, atom, identity.(byq[q]), rate;
-                                       clicks = _polarization_clicks(clicks, q), polarization = q,
-                                       kwargs...)
+        isempty(byq[q]) || push!(jumps, _add_decay!(system, atom, identity.(byq[q]), rate;
+                                                    clicks = _polarization_clicks(clicks, q),
+                                                    polarization = q, kwargs...))
     end
+    return jumps
 end
 
 """
@@ -188,14 +205,14 @@ end
 """
     add_decay!(system, atom, levels::Pair{HyperfineManifold,<:AbstractLevel}, rate; ...)
 
-Add decay from an excited hyperfine manifold to a single leak level.
+Add decay from an excited hyperfine manifold to a single leak level. Returns the
+`Jump`s, one per excited sublevel.
 """
 function add_decay!(system, atom::AbstractAtom, levels::Pair{HyperfineManifold,<:AbstractLevel}, rate;
                     active=true, clicks=nothing, λ=nothing)
     excited, leak_level = levels
-    for e in excited
-        add_decay!(system, atom, e => leak_level, rate; active=active, clicks=clicks, λ=λ)
-    end
+    return Jump[add_decay!(system, atom, e => leak_level, rate; active=active, clicks=clicks, λ=λ)
+                for e in excited]
 end
 
 """
@@ -203,7 +220,7 @@ end
 
 Add spontaneous decay with Clebsch-Gordan branching ratios between fine-structure
 manifolds, one coherent jump per photon polarisation as for hyperfine manifolds
-(including the recoil patterns and `clicks` by polarisation).
+(including the recoil patterns and `clicks` by polarisation). Returns the `Jump`s.
 """
 function add_decay!(system, atom::AbstractAtom,
                     levels::Pair{FineManifold,FineManifold},
@@ -219,13 +236,13 @@ end
 """
     add_decay!(system, atom, levels::Pair{FineManifold,<:AbstractLevel}, rate; ...)
 
-Add decay from an excited fine-structure manifold into a single leak level.
+Add decay from an excited fine-structure manifold into a single leak level. Returns
+the `Jump`s, one per excited sublevel.
 """
 function add_decay!(system, atom::AbstractAtom,
                     levels::Pair{FineManifold,<:AbstractLevel},
                     rate; active=true, clicks=nothing, λ=nothing)
     excited, leak_level = levels
-    for e in excited
-        add_decay!(system, atom, e => leak_level, rate; active=active, clicks=clicks, λ=λ)
-    end
+    return Jump[add_decay!(system, atom, e => leak_level, rate; active=active, clicks=clicks, λ=λ)
+                for e in excited]
 end

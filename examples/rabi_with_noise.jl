@@ -24,11 +24,14 @@ dt             = 1e-9          # Time step (s)
 shots          = 100           # Number of quantum trajectories
 
 
+# The PSD is one-sided in Hz²/Hz, as laser frequency noise is specified: a servo
+# bump of 10⁴ Hz²/Hz at 1 MHz over a white floor of 1.25 × 10³ Hz²/Hz (a Lorentzian
+# linewidth π h₀ ≈ 4 kHz), a stabilised diode laser.
 noise_model = LaserPhaseNoiseModel(
-    bump_ampl      = 2.0e5,
+    bump_ampl      = 1.0e4,
     bump_center    = 1.0e6,
     bump_width     = 2e5,
-    powerlaw_ampl  = 0.25e5,
+    powerlaw_ampl  = 1.25e3,
 )
 
 noise_spectrum = Plots.plot(noise_model; fmin = 0.05e6, fmax = 4e6)
@@ -70,8 +73,11 @@ out = play(system, seq; initial_state = g, shots = shots)
 
 # ## Plot results
 #
-# We can compare against an analytical model for the damping rate from
-# X. Jiang et al., PRA 107, 042611 (2023)
+# We can compare against an analytical model for the damping rate (X. Jiang et
+# al., PRA 107, 042611 (2023)): the frequency noise at the Rabi frequency drives
+# transitions between the dressed states, and the oscillation's envelope decays
+# at `Γ = π² S_ν(Ω/2π) / 2` for a one-sided `S_ν` in Hz²/Hz (the second Gaussian
+# term, at −Ω, is negligible).
 tlist      = out.times                 # Time grid (s)
 t_us       = tlist .* 1e6              # Convert to microseconds
 P_excited  = out.detectors["P_e"]      # Trajectory-resolved populations
@@ -83,7 +89,7 @@ sigma = noise_model.bump_width
 
 Omega_eff = Ω
 
-Gamma = 0.5 * (
+Gamma = π^2 / 2 * (
     h0 +
     hg * exp(-(Ω/2π - fg)^2 / (2 * sigma^2)) +
     hg * exp(-(Ω/2π + fg)^2 / (2 * sigma^2))

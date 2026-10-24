@@ -77,6 +77,24 @@ end
 end
 
 """
+    GateModifier{F} <: AbstractModifier
+
+Zeros an envelope (a field's `_coeff` or [`Envelope`](@ref)) once the instruction time
+reaches `t_off`: how a part of a `Parallel` shorter than the whole ends on time
+rather than holding its amplitude to the end. Listed after the part's own
+modifiers, so it has the last word at every (sub-)step.
+"""
+struct GateModifier{F} <: AbstractModifier
+    field::F
+    t_off::Float64
+end
+
+@inline function update!(m::GateModifier, t::Float64)
+    t >= m.t_off && (m.field[] = zero(ComplexF64))
+    return nothing
+end
+
+"""
     RampModifier{F} <: AbstractModifier
 
 Linear ramp of a beam's amplitude to `target` over `duration`, starting from

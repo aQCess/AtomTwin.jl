@@ -51,8 +51,10 @@ Row and column frequencies `row_freqs` and `col_freqs` define a
 Cartesian grid of spots. Optional `row_amplitudes` and
 `col_amplitudes` set relative weights along each axis; if omitted,
 they default to uniform weights (`ones`). The outer product of
-row/column amplitudes is normalized and used to distribute the
-total power `P_total` across all beams.
+row/column weights is normalized and used to distribute the
+total power `P_total` across all beams: spot `(i, j)` gets the fraction
+`row[i]·col[j] / Σ`, so the weights are relative **powers** per line, not
+RF amplitudes (for which the power goes as the square).
 
 The position of each beam is computed as
 
@@ -124,7 +126,7 @@ This allows `TweezerArray` to be used like a 2D collection of
 `GaussianBeam` objects, e.g. `ta[1,2]` returns the beam in the first row 
 and the second column.
 
-Beam at (row=i, col=j) has linear index (i-1)*nrow + j
+Beam at (row=i, col=j) has linear index (i-1)*ncol + j
 """
 Base.getindex(t::TweezerArray, i::Int, j::Int) =
         t.beams[(i - 1) * length(t.col_freqs) + j]

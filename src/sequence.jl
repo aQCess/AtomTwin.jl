@@ -11,8 +11,10 @@ primary container passed to `play` when simulating instruction-level dynamics.
 # Fields
 
 - `instructions::Vector{AbstractInstruction}` – ordered list of instructions
-- `dt::Float64` – default time step for instructions (seconds)
+- `dt::Union{Float64,Nothing}` – default time step for instructions (seconds), or
+  `nothing` to derive the output grid from the Hamiltonian and `tol` at build time
 - `downsample::Int` – default output downsampling factor (default 1 = every step)
+- `tol::Float64` – target local error per step (default `1e-6`)
 
 # Per-Instruction Customization
 
@@ -48,7 +50,7 @@ Sequence(instructions::Vector{<:AbstractInstruction}, dt, downsample::Int) =
     Sequence(instructions, dt, downsample, 1e-6)
 
 """
-    Sequence(dt::Float64; downsample::Int = 1)
+    Sequence(dt::Float64; downsample::Int = 1, tol::Float64 = 1e-6)
 
 Create an empty `Sequence` with default time step `dt` and downsampling.
 
@@ -69,6 +71,8 @@ push!(seq, Wait(1e-6; downsample=10))      # overrides downsample
   Controls how often detector output is recorded: every `downsample`-th solver step
   is written to output. The quantum integrator still runs at full `dt`; only output
   is thinned. Applies uniformly to all detector types.
+- `tol::Float64`: target local error per step; the density-matrix solver sub-divides
+  `dt` to meet it (see [`Sequence(; tol)`](@ref Sequence)).
 
 # Use Cases
 

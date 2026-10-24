@@ -274,6 +274,46 @@ end
             @test abs(_rabi(() -> Sequence(; tol = 1e-9)) - ref) < 1e-8
         end
 
+        @testset "derived step follows the Taylor order" begin
+            D = AtomTwin.Dynamiq
+            atom = D.NLevelAtom(2); b = D.Basis([atom])
+            terms = [(Ref(ComplexF64(1.0)), D.Op(b, atom, 1 => 2, 2π * 1e6))]
+            for n in (3, 4, 7, 8)
+                @test D.suggested_dt(terms, 1e-6; integrator = D.Taylor(n)) ==
+                      D.suggested_dt(terms, 1e-6, n; integrator = D.Taylor(n))
+            end
+            @test D.suggested_dt(terms, 1e-6; integrator = D.Taylor(3)) <
+                  D.suggested_dt(terms, 1e-6; integrator = D.Taylor(8))
+        end
+
+        @testset "Taylor through compile and play" begin
+            # `Sequence(; tol)` with `integrator = Taylor(n)`: the derived step follows
+            # the order (more samples for a lower order) and every order meets `tol`.
+            g, e = Level("g"), Level("e")
+            a = Atom(; levels = [g, e])
+            sys = System(a)
+            c = add_coupling!(sys, a, g => e, 2π * 1e6; active = false)
+            add_detuning!(sys, a, e, 2π * 20e6)
+            add_detector!(sys, PopulationDetectorSpec(a, e; name = "Pe"))
+            seq = Sequence(; tol = 1e-6)
+            @sequence seq begin
+                Pulse(c, 1e-6)
+            end
+            function run_with(integrator)
+                job = compile(sys, seq; initial_state = [g], integrator)
+                return play(job, sys).detectors["Pe"][end], length(job.times)
+            end
+            p_cheb, n_cheb = run_with(AtomTwin.Dynamiq.Chebyshev())
+            @test n_cheb <= 2                       # exact at any step: the output grid alone
+            ns = Int[]
+            for order in (3, 4, 8)
+                p, n = run_with(AtomTwin.Dynamiq.Taylor(order))
+                @test abs(p - p_cheb) < 1e-5
+                push!(ns, n)
+            end
+            @test ns[1] > ns[2] > ns[3] > n_cheb
+        end
+
         @testset "derived step is the output resolution" begin
             # `_derive_dt` returns how often results are recorded: with no `dt`, one sample
             # per instruction (with no Hamiltonian there is no accuracy bound either).
@@ -300,7 +340,14 @@ end
             end
             p = play(sys, seq; initial_state = [g, g], shots = 1).detectors["Pr"][end]
             @test !isnan(p)
-            @test isapprox(p, 0.4645530578, atol = 1e-6)
+            # The exact answer: H is constant over the pulse, so ψ(T) = exp(−iHT)ψ₀.
+            job = compile(sys, seq; initial_state = [g, g])
+            H = sum(AtomTwin.getmatrix(f) for f in job.fields)
+            ψT = exp(-im * H * 1e-6) * getqstate(job.system, [g, g])
+            ir = a1.level_indices[r]
+            p_exact = sum(abs2(ψT[k]) for (k, el) in enumerate(sys.basis.elements) if el[1] == ir)
+            @test isapprox(p, p_exact, atol = 1e-5)
+            @test isapprox(p, 0.4645530578, atol = 1e-6)        # and unchanged
         end
     end
 
@@ -451,6 +498,25 @@ end
             end
         end
 
+        # One diagonal jump over several levels, `L = Σ vₛ|s⟩⟨s|`: a coherence
+        # decays at ½γ|vᵢ-vⱼ|² and turns at γ Im(vᵢvⱼ*) -- not at all for equal
+        # amplitudes, twice as fast as for one level for opposite ones (σz).
+        for v in ((1.0, 1.0), (1.0, -1.0), (1.0, 1.0im), (0.5, -2.0))
+            op = AtomTwin.Dynamiq.Op(Tuple{Int,Int,ComplexF64}[(3, 3, v[1]), (4, 4, v[2])],
+                                     Tuple{Int,Int,ComplexF64}[], d)
+            dg = zeros(Float64, d); dg[3] = abs2(v[1]); dg[4] = abs2(v[2])
+            J = [(Ref(ComplexF64(sqrt(1.5))), op, dg)]
+            M = zeros(ComplexF64, d, d); M[3, 3] = v[1]; M[4, 4] = v[2]
+            Id = Matrix(I, d, d)
+            𝓛 = 1.5 * (kron(conj(M), M) - 0.5 * (kron(Id, M'M) + kron(transpose(M'M), Id)))
+            for dt in (0.4, 0.1)
+                ref = reshape(exp(𝓛 * dt) * vec(ρ0), d, d)
+                ρ = copy(ρ0); q1 = copy(ρ0); q2 = copy(ρ0)
+                AtomTwin.Dynamiq.fdissipator2!(dt, ρ, J, q1, q2)
+                @test norm(ρ - ref) < 1e-12          # exact, any dt (v = $v)
+            end
+        end
+
         # Non-commuting topologies: second order, still CPTP. A cascade is the
         # real case -- population leaving 4 lands on 3, which is itself decaying
         # within the same step, and no single-step Kraus set captures that.
@@ -564,15 +630,27 @@ end
         @test ctl.probe isa AtomTwin.Dynamiq.NoProbe
 
         ctl.probe = CountProbe(0, 0)
-        out = runit()
-        fired, kmax = ctl.probe.n, ctl.probe.kmax
-        ctl.probe = AtomTwin.Dynamiq.NoProbe()     # leave the cache clean
+        local out, fired, kmax
+        try
+            out = runit()
+            fired, kmax = ctl.probe.n, ctl.probe.kmax
+        finally
+            ctl.probe = AtomTwin.Dynamiq.NoProbe() # leave the cache clean, whatever happened
+        end
 
         @test fired > 0                            # the hook is reachable
         @test kmax >= 1                            # and carries the controller state
-        # Instrumenting must not change the answer: this is the converged value
-        # the same system gives uninstrumented (see bench/bench1_small.jl).
-        @test abs(out.detectors["P"][end] - 0.4220190) < 1e-6
+        # Instrumenting must not change the answer: ρ(T) = exp(𝓛T) ρ₀ exactly, for
+        # H = Ω/2 σx and L = √Γ |g⟩⟨e| (g = 1, e = 2 in the basis).
+        Ω, Γ, T = 2π * 1e6, 2π * 1e5, 4e-6
+        H = ComplexF64[0 Ω/2; Ω/2 0]
+        M = ComplexF64[0 1; 0 0]
+        Id = Matrix{ComplexF64}(I, 2, 2)
+        𝓛 = -im * (kron(Id, H) - kron(transpose(H), Id)) +
+            Γ * (kron(conj(M), M) - 0.5 * (kron(Id, M'M) + kron(transpose(M'M), Id)))
+        ρT = reshape(exp(𝓛 * T) * vec(ComplexF64[1 0; 0 0]), 2, 2)
+        @test abs(out.detectors["P"][end] - real(ρT[2, 2])) < 1e-6
+        @test abs(out.detectors["P"][end] - 0.4220190) < 1e-6        # and unchanged
     end
 end
 
@@ -798,4 +876,67 @@ end
     end
     @test run(true; dm = true) ≈ run(false; dm = true) rtol = 1e-10
     @test run(true; dm = false) == run(false; dm = false)
+end
+
+@testset "MCWF sub-divides a coarse output step for the non-Hermitian propagation" begin
+    # Chebyshev is exact for a Hermitian H at any step but not for H_eff; a weak
+    # drive on a decaying line with Γ·dt ≫ 10 used to give a renormalised,
+    # plausible, wrong population with no warning. Reference: the master equation.
+    g, e = Level("g"), Level("e")
+    Γ = 2π * 1e6
+    function pe(Ω, dt; shots, dm)
+        a = Atom(; levels = [g, e]); s = System(a)
+        add_coupling!(s, a, g => e, Ω)
+        add_decay!(s, a, e => g, Γ)
+        add_detector!(s, PopulationDetectorSpec(a, e; name = "Pe"))
+        q = dt === nothing ? Sequence(; tol = 1e-6) : Sequence(dt)
+        push!(q, Wait(20e-6))
+        p = play(s, q; initial_state = g, frozen = true, shots = shots, density_matrix = dm,
+                 rng = Xoshiro(3)).detectors["Pe"]
+        ndims(p) == 1 ? p[end] : vec(p[end, :])
+    end
+    for Ω in (0.1Γ, 0.3Γ, Γ), dt in (50 / Γ, 200 / Γ, nothing)
+        ref = pe(Ω, 1e-8; shots = 1, dm = true)
+        ps  = pe(Ω, dt; shots = 64, dm = false)
+        m   = sum(ps) / 64
+        σ   = sqrt(sum(abs2, ps .- m) / 63 / 64)
+        @test abs(m - ref) < 4σ + 0.01
+    end
+end
+
+@testset "a one-step classical instruction moves the atoms" begin
+    g = Level("1S0")
+    function xv(dt)
+        yb = Ytterbium174Atom(; levels = [g], x_init = [0.2e-6, 0, 0], v_init = zeros(3))
+        s = System(yb, GaussianBeam(759e-9, 1e-6, 20e-3))
+        add_detector!(s, MotionDetectorSpec(yb; dims = [1, 4], name = "x"))
+        q = Sequence(dt); push!(q, Wait(2e-6))
+        play(s, q).detectors["x"][end, :]
+    end
+    one, two = xv(2e-6), xv(1e-6)
+    @test abs(one[1] - 0.2e-6) > 1e-8          # not frozen at the start
+    @test one ≈ two rtol = 0.1
+end
+
+@testset "radiation pressure moves the position at second order in dt" begin
+    g, e = Level("g"), Level("e")
+    Γ, λ = 2π * 29e6, 399e-9
+    Isat = AtomTwin.Units.hbar * (2π * AtomTwin.Units.c / λ)^3 * Γ / (12π * AtomTwin.Units.c^2)
+    function x_end(dt)
+        a = Ytterbium174Atom(; levels = [g, e], x_init = zeros(3), v_init = zeros(3))
+        s = System(a)
+        b = PlanarBeam(λ, 40Isat, [1.0, 0, 0], [0.0, 1, 0])
+        add_coupling!(s, a, g => e, Γ * sqrt(20); beam = b)
+        add_decay!(s, a, e => g, Γ)
+        add_detector!(s, MotionDetectorSpec(a; dims = [1], name = "x"))
+        q = Sequence(dt; tol = 1e-10); push!(q, Wait(400e-9))
+        play(s, q; initial_state = g, density_matrix = true).detectors["x"][end]
+    end
+    ref = x_end(0.5e-9)
+    # The impulse once entered the velocity only, leaving the position an error of
+    # a·T·dt/2 = x·dt/T (4 % at 16 ns); with the force in the drift too it is well
+    # below that at every step (the rest is the controller's sub-stepping).
+    for dt in (16e-9, 4e-9)
+        @test abs(x_end(dt) - ref) < 0.2 * abs(ref) * dt / 400e-9
+    end
 end

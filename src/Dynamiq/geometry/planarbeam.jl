@@ -47,6 +47,15 @@ struct PlanarBeam <: AbstractBeam
 end
 
 """
+    PlanarBeam(; λ, I, direction = [0, 0, 1], polarization = [1, 0, 0])
+
+Keyword constructor for `PlanarBeam`: wavelength `λ` (m), intensity `I` (W/m²),
+propagation `direction` and Jones `polarization`, as the positional form.
+"""
+PlanarBeam(; λ::Real, I::Real, direction = [0.0, 0.0, 1.0], polarization = [1.0, 0.0, 0.0]) =
+    PlanarBeam(λ, I, direction, polarization)
+
+"""
     Efield(b::PlanarBeam, r::Vector{Float64}) -> Vector{ComplexF64}
 
 Cartesian electric field of the plane wave at position `r`.
@@ -78,11 +87,15 @@ Used by `GaussianCoupling` to compute the motional phase ratio
 end
 
 """
-    getbeams(pb::PlanarBeam) -> Vector{AbstractBeam}
+    getbeams(pb::PlanarBeam)
 
-Return a vector containing the beam pb
+A plane wave cannot be a trapping beam of a `System`: it has no intensity profile
+to trap with, and the trap machinery (`copy`, `intensity`, `dEdr`) is not defined
+for it. Give it to `add_coupling!(…; beam)` as a drive instead.
 """
-getbeams(pb::PlanarBeam) = AbstractBeam[pb]
+getbeams(pb::PlanarBeam) = throw(ArgumentError(
+    "a PlanarBeam cannot be a trapping beam of a System (uniform: nothing to trap " *
+    "with); give it to add_coupling!(…; beam = pb) as a drive"))
 
 # See `peak_intensity(::GaussianBeam)`. A plane wave is uniform, so its peak is
 # its intensity.

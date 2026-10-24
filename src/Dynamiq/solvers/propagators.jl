@@ -20,7 +20,7 @@ Base.@inline stability_limit(order::Int) =
     order == 3 ? 1.732 : order == 4 ? 2.828 : order == 7 ? 1.764 : 3.395
 
 """
-    suggested_dt(terms, tol, order) -> Float64
+    suggested_dt(terms, tol[, order]; integrator = Chebyshev()) -> Float64
 
 Time step giving a local error of about `tol`, derived from the Hamiltonian
 rather than supplied by the user. Returns `Inf` when there is no Hamiltonian, so
@@ -28,10 +28,15 @@ the caller must fall back to the instruction duration.
 
 `dt = θ_max / ‖H‖`, with `θ_max` from [`propagator_theta`](@ref) for the given
 integrator and `‖H‖` a `gershgorin_bound` upper bound -- so the step is
-conservative and the true error at most the target.
+conservative and the true error at most the target. `order` defaults to the
+integrator's own, [`taylor_order`](@ref).
 """
+suggested_dt(terms::Vector{Tuple{Base.RefValue{ComplexF64},Op}}, tol::Float64;
+             integrator::AbstractIntegrator = Chebyshev()) =
+    suggested_dt(terms, tol, taylor_order(integrator); integrator = integrator)
+
 function suggested_dt(terms::Vector{Tuple{Base.RefValue{ComplexF64},Op}},
-                      tol::Float64, order::Int = 4;
+                      tol::Float64, order::Int;
                       integrator::AbstractIntegrator = Chebyshev())
     nrm = gershgorin_bound(terms; peak = true)
     nrm <= 0 && return Inf
@@ -403,14 +408,15 @@ function fdissipator2!(dt::Float64,
     end
 
     # Self-transition (dephasing) cross term. `m0[i]*m0[j]` damps a coherence at
-    # `½(Γ[i]+Γ[j])`, right for a channel that MOVES population. A
-    # self-transition damps at `½γ(vᵢ-vⱼ)²` instead -- `L = v|s⟩⟨s|` cancels on a
-    # coherence whose two states see the same amplitude. Expanding,
+    # `½(Γ[i]+Γ[j])`, right for a channel that MOVES population. A diagonal
+    # `L = Σ vₛ|s⟩⟨s|` instead takes `ρᵢⱼ` at the rate
     #
-    #   ½γ(vᵢ-vⱼ)² = ½γvᵢ² + ½γvⱼ² - γvᵢvⱼ
+    #   γ(vᵢvⱼ* - ½|vᵢ|² - ½|vⱼ|²) = -½γ|vᵢ-vⱼ|² + iγ Im(vᵢvⱼ*)
     #
-    # the first two terms are already in `Γ`, hence in `m0`; only the cross term
-    # is missing, so undo it rather than recompute the factor. Without this a
+    # -- it cancels on a coherence whose two states see the same amplitude, and
+    # doubles on one whose amplitudes are opposite (σz). The `|v|²` terms are
+    # already in `Γ`, hence in `m0`; only `γvᵢvⱼ*` is missing, signs and phase
+    # included, so apply it rather than recompute the factor. Without this a
     # coherence between two BOTH-excited states decays at the full rate instead
     # of not at all -- invisible on one two-level atom (one of vᵢ, vⱼ is always
     # 0), O(1) wrong with N atoms.
@@ -419,11 +425,10 @@ function fdissipator2!(dt::Float64,
         γ <= 0 && continue
         for (p, i, vi) in L.forward
             p == i || continue                 # self-transitions only
-            ai = abs(vi)
             for (q, j, vj) in L.forward
                 q == j || continue
                 i == j && continue             # diagonal already handled
-                ρ[i, j] *= exp(dt * γ * ai * abs(vj))
+                ρ[i, j] *= exp(dt * γ * vi * conj(vj))
             end
         end
     end

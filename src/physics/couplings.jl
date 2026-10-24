@@ -6,39 +6,50 @@ and Clebsch–Gordan factors to obtain the correct matrix elements.
 """
     update!(c::GlobalCoupling, ::Val, val)
 
-Update the Rabi rate of a `GlobalCoupling` by rescaling its operator entries.
-Called by `compile`/`recompile!` for parameter bindings.
+Set the Rabi rate of a `GlobalCoupling` (`PlanarCoupling`, `Interaction`): every
+operator entry is written from the new rate. Called by `compile`/`recompile!` for
+parameter bindings.
+
+The entries are set, not rescaled from the previous value: a single-transition
+operator has one value on every entry (`rate/2`, or `V` for an interaction, as
+built), so this is exact, revives an operator left at rate 0, and leaves a
+sampled rate with no memory of the shots that ran before it (serial and threaded
+runs of one seed agree bit for bit).
 """
 function update!(c::Union{GlobalCoupling, PlanarCoupling, Interaction}, ::Val, val::Number)
     new_rate = ComplexF64(val)
-    c.rate != 0 && Dynamiq.rescale!(c.H, new_rate / c.rate)
+    _set_entries!(c.H, new_rate * _entry_scale(c))
     c.rate = new_rate
 end
 
-# Set a JOB's field to a newly sampled rate. It is rescaled from its own `rate`,
-# never from state on the (shared) node: each thread of a multi-shot run holds a
-# deep copy of the job, and shots must not compound. A field at rate 0 has zero
-# entries and cannot be rescaled, so it takes its structure from the node's
-# field first.
-function _set_rate!(c, node_field, new_rate::ComplexF64)
-    if c.rate == 0 && new_rate != 0
-        copy!(c.H.forward, node_field.H.forward)
-        copy!(c.H.reverse, node_field.H.reverse)
-        c.rate = node_field.rate
-    end
-    update!(c, Val(:_), new_rate)
-end
+_entry_scale(::Union{GlobalCoupling, PlanarCoupling}) = 0.5     # H = Ω/2 (|e⟩⟨g| + h.c.)
+_entry_scale(::Interaction) = 1.0                                # H = V |..⟩⟨..| (+ h.c.)
 
 """
     update!(c::GaussianCoupling, ::Val, new_Ω0)
 
-Rescale the operator entries of `c.H` to reflect a new peak Rabi frequency `new_Ω0`.
-Called by `compile_node!` when the atom's position (and hence Ω₀) has changed between shots.
+Set the operator entries of `c.H` to a new peak Rabi frequency `new_Ω0` (one value,
+`Ω₀/2`, on every entry). Called by `compile_node!` when the atom's position (and
+hence Ω₀) has changed between shots; a shot that put the atom beyond the beam's
+cutoff (Ω₀ = 0) does not kill the next one.
 """
 function update!(c::GaussianCoupling, ::Val, new_Ω0::Number)
     new_Ω0 = ComplexF64(new_Ω0)
-    c.Ω0 != 0 && Dynamiq.rescale!(c.H, new_Ω0 / c.Ω0)
+    _set_entries!(c.H, new_Ω0 / 2)
     c.Ω0 = new_Ω0
+end
+
+function _set_entries!(op::Dynamiq.Op, v::ComplexF64)
+    for k in eachindex(op.forward)
+        i, j, _ = op.forward[k]
+        op.forward[k] = (i, j, v)
+    end
+    cv = conj(v)
+    for k in eachindex(op.reverse)
+        i, j, _ = op.reverse[k]
+        op.reverse[k] = (i, j, cv)
+    end
+    return op
 end
 
 """
@@ -72,9 +83,20 @@ function _add_coupling!(
 )
     if get(atom.level_indices, level[1], nothing) === nothing ||
        get(atom.level_indices, level[2], nothing) === nothing
-        @warn "Level not found in atom.level_indices" level_1=level[1], level_2=level[2], atom=atom
+        @warn "Level not found in the atom; no coupling added" level_1 = level[1] level_2 = level[2]
         return nothing
     end
+    # A beam-derived coupling has no noisy form yet; dropping the model silently
+    # gave every shot the same noiseless drive.
+    beam !== nothing && noise !== nothing && throw(ArgumentError(
+        "add_coupling!: `noise` is not applied to a beam-derived coupling; give the " *
+        "noise model without `beam`, or the beam without `noise`."))
+    # A parametric beam is not an AbstractBeam: it used to fall through to a plain
+    # global coupling, losing the profile, phase and polarization without a word.
+    beam isa ParametricBeam && throw(ArgumentError(
+        "add_coupling!: a parametric beam (a Parameter waist or power, a MixedPolarization) " *
+        "is resolved per shot only by the manifold forms, add_coupling!(sys, atom, " *
+        "g_manifold => e_manifold, beam); give a single level pair a concrete beam."))
 
     node = if beam isa PlanarBeam
         PlanarCouplingNode(Ω, atom, level, beam; active=active)
@@ -121,19 +143,23 @@ function Efield_spherical(beam, r::AbstractVector{<:Real};
     return E0, Eplus, Eminus
 end
 
+# Magnetic projection of a sublevel along the quantization axis.
+_mproj(l::HyperfineLevel) = l.mF
+_mproj(l::FineLevel) = l.mJ
+
 function rabi_frequency(
     atom::AbstractAtom,
-    g::HyperfineLevel,
-    e::HyperfineLevel,
+    g::L,
+    e::L,
     beam,
     r::AbstractVector{<:Real};
     q_axis = [0.0, 0.0, 1.0],      # quantization axis in lab frame
     d_red::Float64,                # ⟨J_g || er || J_e⟩_R in C·m
     norm::Bool = false
-)::ComplexF64
+)::ComplexF64 where {L<:Union{HyperfineLevel,FineLevel}}
 
     # selection rule
-    Δm = e.mF - g.mF
+    Δm = _mproj(e) - _mproj(g)
     if abs(Δm) > 1
         return 0.0
     end
@@ -182,9 +208,17 @@ end
 """
     rabi_frequencies(beam; q_axis=[0,0,1], r0=nothing, d_red::Float64)
 
-Polarization-resolved Rabi frequencies for an effective E1 operator,
-independent of J/F. Returns (Ω_π, Ω_σ⁺, Ω_σ⁻) computed from the
-spherical components of the beam E-field and a reduced dipole `d_red`.
+Polarization-resolved Rabi frequencies `(Ω_π, Ω_σ⁺, Ω_σ⁻) = −d_red E_q / ħ` from the
+spherical components of the beam's field, for the positional
+`add_coupling!(sys, atom, g => e, Ω_π, Ω_σ⁺, Ω_σ⁻)`, which multiplies each sublevel
+pair by its Clebsch–Gordan coefficient and nothing else.
+
+`d_red` is therefore the dipole matrix element of the transition whose
+Clebsch–Gordan coefficient is 1 — the stretched one — **not** the reduced element
+`⟨J′‖d‖J⟩` of [`reduced_dipole`](@ref), which is larger by the Wigner–Eckart factor
+(`√(2J′+1)` for a `J = 0 → 1` line). Pass that element through
+`rabi_frequencies(atom, g, e, beam)` below, which converts it, or the Hamiltonian
+is `√3` too strong on the 556 nm line.
 
 By default evaluates at `beam.r0` (Gaussian beams) or the origin
 (`PlanarBeam`, which is spatially uniform).
@@ -204,6 +238,33 @@ function rabi_frequencies(
     return Ω_π, Ω_σp, Ω_σm
 end
 
+"""
+    rabi_frequencies(atom, g::AbstractManifold, e::AbstractManifold, beam;
+                     q_axis = [0,0,1], r0 = nothing, d_red = nothing)
+
+The `(Ω_π, Ω_σ⁺, Ω_σ⁻)` that make the positional
+`add_coupling!(sys, atom, g => e, Ω_π, Ω_σ⁺, Ω_σ⁻)` build the Hamiltonian of the
+beam-derived `add_coupling!(sys, atom, g => e, beam)`: the reduced element `d_red`
+(by default the species' [`reduced_dipole`](@ref)) times the Wigner–Eckart factor
+of the `g → e` manifold pair ([`dipole_matrix_element`](@ref) over the
+Clebsch–Gordan coefficient, the same for every sublevel pair).
+"""
+function rabi_frequencies(atom::AbstractAtom, g::M, e::M, beam;
+                          q_axis = [0.0, 0.0, 1.0],
+                          r0 = hasproperty(beam, :r0) ? beam.r0 : zeros(3),
+                          d_red::Union{Float64,Nothing} = nothing,
+                          ) where {M<:Union{HyperfineManifold,FineManifold}}
+    d = @something d_red reduced_dipole(atom, first(g.levels), first(e.levels))
+    K = 0.0
+    for gl in g.levels, el in e.levels
+        cg = compute_coupling_strength(gl, el, atom, 1.0, 1.0, 1.0)
+        abs(cg) > 1e-12 || continue
+        K = dipole_matrix_element(atom, gl, el) / cg
+        break
+    end
+    return rabi_frequencies(beam; q_axis, r0, d_red = d * K)
+end
+
 
 
 """
@@ -219,8 +280,12 @@ The implementation includes:
 
   • Zeeman (3j) angular factor
   • Hyperfine recoupling (6j) factor
-  • A global phase choice such that a stretched σ⁺ transition
-    (if it exists) is positive
+
+The phases are the Edmonds/Condon–Shortley ones throughout, so the relative signs
+of couplings from two manifolds to a shared one (a Raman pair, a repumper) are
+consistent; an element need not be positive. The explicit-Ω forms
+(`compute_coupling_strength`) use bare Clebsch–Gordan coefficients instead, so
+there the cross-manifold signs are the caller's.
 
 `d_q = ê_q·d` are the spherical components that pair with the field coefficients
 `E_q = ê_q*·E` of `Efield_spherical` (E = Σ_q E_q ê_q), so d·E = Σ_q E_q d_q: there is
@@ -257,13 +322,15 @@ Returns
 A real Float64 amplitude in Racah convention.
 Forbidden transitions return 0.0.
 """
-function dipole_matrix_element(atom::AbstractAtom, g::HyperfineLevel, e::HyperfineLevel; norm=false)
+dipole_matrix_element(atom::AbstractAtom, g::HyperfineLevel, e::HyperfineLevel; norm=false) =
+    _e1_angular(g.F, g.mF, g.J, e.F, e.mF, e.J, atom.I; norm)
 
-    F,m = g.F,g.mF
-    Fp,mp = e.F,e.mF
-    J,Jp = g.J, e.J
-    I = atom.I
+# A fine-structure level is the I = 0 case, F = J: the 6j reduces to the J-level
+# Wigner–Eckart factor.
+dipole_matrix_element(atom::AbstractAtom, g::FineLevel, e::FineLevel; norm=false) =
+    _e1_angular(g.J, g.mJ, g.J, e.J, e.mJ, e.J, 0//1; norm)
 
+function _e1_angular(F, m, J, Fp, mp, Jp, I; norm=false)
     q = mp - m
     abs(q) > 1 && return 0.0
 
@@ -283,25 +350,16 @@ function dipole_matrix_element(atom::AbstractAtom, g::HyperfineLevel, e::Hyperfi
 
     amp = threej * pref * sixj
 
-    # ---- Fix global phase via stretched σ⁺ ----
-    ms = F
-    qs = 1
-    mps = ms + qs
-
-    if abs(mps) ≤ Fp
-        threej_s = (-1)^(Fp - mps) *
-                   wigner3j(Fp, 1, F,
-                            -mps, qs, ms)
-
-        if threej_s != 0
-            sixj_s = sixj
-            pref_s = pref
-            stretched = threej_s * pref_s * sixj_s
-
-            if stretched != 0
-                amp *= sign(stretched)
-                norm && (amp /= abs(stretched))
-            end
+    # The phases above are one convention for every (F, F′) pair, which is what
+    # two pairs sharing a manifold need: a sign fixed pair by pair (say, to make
+    # each stretched σ⁺ element positive) is not a basis change and flips the
+    # interference of the two paths through the shared manifold. `norm` divides
+    # by the magnitude of the stretched σ⁺ element, when the pair has one.
+    if norm
+        mps = F + 1
+        if abs(mps) ≤ Fp
+            threej_s = wigner3j(Fp, 1, F, -mps, 1, F)
+            threej_s == 0 || (amp /= abs(threej_s * pref * sixj))
         end
     end
 
@@ -366,15 +424,19 @@ hyperfine) by summing over compatible projections.
 The algorithm decomposes the hyperfine state into `|J_g, m_J; I, m_I⟩`
 components using a `clebschgordan` factor, then applies dipole
 Clebsch–Gordan coefficients for `J_g → J_e` with
-`Δm = m_Je − m_J`. Contributions for `Δm = 0, ±1` are weighted by
-`Ω_π`, `Ω_σ⁺`, `Ω_σ⁻` respectively and accumulated. Returns the total
-effective Rabi frequency.
+`Δm = m_Je − m_J`. Each `Δm = 0, ±1` reaches the fine level in a different
+nuclear-spin state `|I, m_F − m_J⟩`; those are orthogonal and do not interfere, so
+the contributions `Ω_q c_hyper c_dipole` add in quadrature (the nuclear spin is
+traced over). With one contributing polarization the result is that term, sign and
+all, and may be parametric; with several it is the positive quadrature sum of
+numbers (a parametric Rabi frequency then needs the polarizations split into
+separate couplings).
 """
 function compute_coupling_strength(g::HyperfineLevel, e::FineLevel, atom, Ω_π, Ω_σ⁺, Ω_σ⁻)
     F, mF, Jg = g.F, g.mF, g.J
     Jp, mJp = e.J, e.mJ
     I = atom.I
-    total = 0.0
+    terms = Any[]
     for m_J in -Jg:1:Jg
         m_I = mF - m_J
         abs(m_I) > I && continue
@@ -382,10 +444,23 @@ function compute_coupling_strength(g::HyperfineLevel, e::FineLevel, atom, Ω_π,
         abs(Δm) > 1 && continue
         c_hyper  = clebschgordan(Jg, m_J, I, m_I, F, mF)
         c_dipole = clebschgordan(Jg, m_J, 1, Δm, Jp, mJp)
-        total += (Δm == 0  ? Ω_π  :
-                  Δm == +1 ? Ω_σ⁺ : Ω_σ⁻) * c_hyper * c_dipole
+        c_hyper * c_dipole == 0 && continue
+        push!(terms, (Δm == 0  ? Ω_π  :
+                      Δm == +1 ? Ω_σ⁺ : Ω_σ⁻) * c_hyper * c_dipole)
     end
-    return total
+    return _incoherent_sum(terms)
+end
+
+# Amplitudes into orthogonal final states: one term is itself, several add in quadrature.
+function _incoherent_sum(terms)
+    filter!(t -> !(t isa Number && t == 0), terms)     # a polarization not driven
+    isempty(terms) && return 0.0
+    length(terms) == 1 && return terms[1]
+    all(t -> t isa Number, terms) ||
+        throw(ArgumentError("a parametric Rabi frequency reaches this fine level through " *
+                            "several polarizations, which add in quadrature; give each " *
+                            "polarization its own coupling"))
+    return sqrt(sum(abs2, terms))
 end
 
 """
@@ -397,13 +472,15 @@ Compute the effective coupling strength from a fine-structure level `g`
 
 The mirror of the hyperfine → fine method: `e` is decomposed into
 `|J_e, m_J′; I, m_I⟩` components, and `g` couples to each with the dipole
-Clebsch–Gordan coefficient `⟨J_g, m_J; 1, Δm | J_e, m_J′⟩`, `Δm = m_J′ − m_J`.
+Clebsch–Gordan coefficient `⟨J_g, m_J; 1, Δm | J_e, m_J′⟩`, `Δm = m_J′ − m_J`;
+the contributions of different polarizations start from orthogonal nuclear-spin
+states and add in quadrature.
 """
 function compute_coupling_strength(g::FineLevel, e::HyperfineLevel, atom, Ω_π, Ω_σ⁺, Ω_σ⁻)
     Jg, mJg = g.J, g.mJ
     F, mF, Je = e.F, e.mF, e.J
     I = atom.I
-    total = 0.0
+    terms = Any[]
     for m_J in -Je:1:Je
         m_I = mF - m_J
         abs(m_I) > I && continue
@@ -411,10 +488,11 @@ function compute_coupling_strength(g::FineLevel, e::HyperfineLevel, atom, Ω_π,
         abs(Δm) > 1 && continue
         c_hyper  = clebschgordan(Je, m_J, I, m_I, F, mF)
         c_dipole = clebschgordan(Jg, mJg, 1, Δm, Je, m_J)
-        total += (Δm == 0  ? Ω_π  :
-                  Δm == +1 ? Ω_σ⁺ : Ω_σ⁻) * c_hyper * c_dipole
+        c_hyper * c_dipole == 0 && continue
+        push!(terms, (Δm == 0  ? Ω_π  :
+                      Δm == +1 ? Ω_σ⁺ : Ω_σ⁻) * c_hyper * c_dipole)
     end
-    return total
+    return _incoherent_sum(terms)
 end
 
 
@@ -482,21 +560,24 @@ struct BeamRabiFrequency
     atom::AbstractAtom
     g::AbstractLevel
     e::AbstractLevel
-    q_axis::Vector{Float64}
+    q_axis::Any                          # see `_axis_of`
     d_red::Float64
+    x0::Union{Nothing, Vector{Float64}}  # where the field is read: the atom's position, or a fixed point
 end
+
+BeamRabiFrequency(beam_node, atom, g, e, q_axis, d_red) =
+    BeamRabiFrequency(beam_node, atom, g, e, q_axis, d_red, nothing)
 
 _extract_beam_node_deps(f::BeamRabiFrequency) = AbstractNode[f.beam_node]
+# Bound to the system's axis node by `compile` (see `_bind_quantization_axis!`).
+_bound_to_axis(f::BeamRabiFrequency, axis) = f.q_axis === nothing ?
+    BeamRabiFrequency(f.beam_node, f.atom, f.g, f.e, axis, f.d_red, f.x0) : f
 
-function _resolve_node_default(f::BeamRabiFrequency)
-    ComplexF64(rabi_frequency(f.atom, f.g, f.e, f.beam_node._compiled[], f.atom.x;
-                              q_axis=f.q_axis, d_red=f.d_red))
-end
+_resolve_node_default(f::BeamRabiFrequency) =
+    ComplexF64(rabi_frequency(f.atom, f.g, f.e, f.beam_node._compiled[], something(f.x0, f.atom.x);
+                              q_axis = _axis_of(f.q_axis), d_red = f.d_red))
 
-function _resolve_node_value(f::BeamRabiFrequency, param_values, rng)
-    ComplexF64(rabi_frequency(f.atom, f.g, f.e, f.beam_node._compiled[], f.atom.x;
-                              q_axis=f.q_axis, d_red=f.d_red))
-end
+_resolve_node_value(f::BeamRabiFrequency, param_values, rng) = _resolve_node_default(f)
 
 ############## PUBLIC USER API (DISPATCHES) ##############
 
@@ -527,20 +608,24 @@ end
 
 function add_coupling!(
     system, atom::AbstractAtom,
-    level::Pair{HyperfineManifold, HyperfineManifold},
+    level::Pair{M, M},
     beam;
-    q_axis::AbstractVector{<:Real} = [0.0, 0.0, 1.0],
+    q_axis::Union{Nothing, AbstractVector{<:Real}} = nothing,
     d_red::Union{Float64, Nothing} = nothing,
     noise=nothing, active=true, tol=1e-10,
-)
+) where {M<:Union{HyperfineManifold, FineManifold}}
     ground, excited = level
     _check_e1_allowed(first(ground.levels), first(excited.levels))
     # A concrete beam: couplings that follow its field at the atom.
     beam isa AbstractBeam && return add_coupling!(system, atom, level; beam, q_axis, d_red, active, tol)
+    noise === nothing || throw(ArgumentError(
+        "add_coupling!: `noise` is not applied to a beam-derived coupling; give the " *
+        "noise model without `beam`, or the beam without `noise`."))
     # A parametric beam is resolved per shot (`BeamNode`), its Rabi frequencies at the
-    # atom's initial position.
-    d_red = something(d_red, reduced_dipole(atom, first(ground.levels), first(excited.levels)))
-    q_axis_vec = Vector{Float64}(q_axis)
+    # atom's initial position. (`@something`: the species' line data is looked up only
+    # when no `d_red` is given.)
+    d_red = @something d_red reduced_dipole(atom, first(ground.levels), first(excited.levels))
+    q_axis_vec = q_axis === nothing ? nothing : Vector{Float64}(q_axis)
     couplings = Dynamiq.AbstractField[]
 
     # Create a single BeamNode for this beam (shared across all sublevel pairs)
@@ -549,7 +634,7 @@ function add_coupling!(
     push!(system, beam_node)
 
     for g in ground.levels, e in excited.levels
-        Δm = e.mF - g.mF
+        Δm = _mproj(e) - _mproj(g)
         abs(Δm) > 1 && continue  # selection rule, independent of beam params
 
         Ω = BeamRabiFrequency(beam_node, atom, g, e, q_axis_vec, d_red)
@@ -565,9 +650,12 @@ end
 """
     add_coupling!(system, atom, level::Pair{HyperfineManifold,HyperfineManifold};
                   beam=nothing, Ω_π=nothing, Ω_p=nothing, Ω_m=nothing,
-                  d_red=nothing, q_axis=[0,0,1], active=true, tol=1e-10)
+                  d_red=nothing, q_axis = nothing, active=true, tol=1e-10)
 
-Add electric-dipole couplings between hyperfine manifolds.
+Add electric-dipole couplings between hyperfine manifolds, or between fine-structure
+manifolds (`Pair{FineManifold,FineManifold}`, the `I = 0` case with `F = J`). A mixed
+pair (a hyperfine ground manifold to a fine-structure excited one) has no
+beam-derived form: give it explicit `Ω_π, Ω_σ⁺, Ω_σ⁻`.
 
 - If only `beam` is given: Rabi frequencies are derived from the beam E-field
   via `d_red`, by default the species' value for the line ([`reduced_dipole`](@ref)).
@@ -585,6 +673,11 @@ Add electric-dipole couplings between hyperfine manifolds.
   profile and phase at the atom.
 - If neither `beam` nor any Ω is provided: an error is raised.
 
+The beam's polarization is decomposed into π and σ± about the system's quantization
+axis ([`add_quantization_axis!`](@ref), ẑ if none; it may be set after the coupling
+and may be a `Parameter`), the axis the Zeeman and tensor light shifts use. `q_axis`
+fixes a different axis for this coupling alone.
+
 With a beam the couplings follow the field at the atom: a `PlanarBeam` gives
 `PlanarCoupling`s (phase `exp(ik·x)`, and the radiation pressure and recoil of the
 semiclassical motion), any other beam `GaussianCoupling`s (its profile and phase).
@@ -596,45 +689,57 @@ number, `Parameter` or `ParametricExpression`.
 """
 function add_coupling!(
     system, atom::AbstractAtom,
-    level::Pair{HyperfineManifold, HyperfineManifold};
+    level::Pair{M, M};
     beam::Union{AbstractBeam, Nothing} = nothing,
     Ω_π = nothing,
     Ω_p  = nothing,
     Ω_m  = nothing,
-    q_axis::AbstractVector{<:Real} = [0.0, 0.0, 1.0],
+    q_axis::Union{Nothing, AbstractVector{<:Real}} = nothing,
     d_red::Union{Float64, Nothing} = nothing,
     active = true,
     tol = 1e-10,
-)
+) where {M<:Union{HyperfineManifold, FineManifold}}
     beam === nothing && Ω_π === nothing && Ω_p === nothing && Ω_m === nothing &&
         error("add_coupling!: provide at least one of `beam` or `Ω_π`/`Ω_p`/`Ω_m`")
 
     ground, excited = level
-    q_axis_vec = Vector{Float64}(q_axis)
+    q_axis_vec = q_axis === nothing ? nothing : Vector{Float64}(q_axis)
     override_map = Dict{Int,Any}(0 => Ω_π, 1 => Ω_p, -1 => Ω_m)
     couplings = Dynamiq.AbstractField[]
+    # A plane wave's couplings read the field at the origin (`PlanarCoupling` adds
+    # exp(ik·x)); one node resolves it, shared by every sublevel pair.
+    beam_node = beam isa PlanarBeam ? BeamNode(beam) : nothing
+    beam_node === nothing || (build_node!(beam_node); push!(system, beam_node))
 
     for g in ground.levels, e in excited.levels
-        Δm = e.mF - g.mF
+        Δm = _mproj(e) - _mproj(g)
         abs(Δm) > 1 && continue
         override = override_map[Δm]
 
         if override === nothing
             beam === nothing && continue            # this polarization is not driven
             _check_e1_allowed(g, e)
-            d_red = something(d_red, reduced_dipole(atom, g, e))
+            d_red = @something d_red reduced_dipole(atom, g, e)
             Ω = nothing
-            ## a plane wave's Rabi frequency at the origin; `PlanarCoupling` adds exp(ik·x)
-            x0 = beam isa PlanarBeam ? zeros(3) : atom.x
-            Ω0 = rabi_frequency(atom, g, e, beam, x0; q_axis = q_axis_vec, d_red = d_red)
+            ## the Rabi frequency at the beam's reference point: the origin for a plane
+            ## wave, the focus for a Gaussian beam (the coupling follows the profile at
+            ## the atom, wherever `compile` puts it)
+            x0 = beam isa PlanarBeam ? zeros(3) : Vector{Float64}(beam.r0)
+            Ω0 = rabi_frequency(atom, g, e, beam, x0; q_axis = _axis_of(q_axis_vec), d_red = d_red)
         else
             Ω  = compute_coupling_strength(g, e, atom, override, override, override)
             Ω0 = _resolve_node_default(Ω)
         end
-        abs(Ω0) < tol && continue
+        # `tol` drops a pair the polarization or selection rules make negligible, never
+        # a parametric Ω whose default happens to be 0, nor a pair whose strength
+        # depends on an axis the system may still set or sample: those are knobs
+        # `compile` and `play` set later.
+        fixed = override === nothing ? q_axis_vec !== nothing : override isa Number
+        fixed && abs(Ω0) < tol && continue
 
         if beam isa PlanarBeam
-            push!(couplings, _add_coupling!(system, atom, g => e, something(Ω, Ω0); beam, active))
+            Ωp = Ω === nothing ? BeamRabiFrequency(beam_node, atom, g, e, q_axis_vec, d_red, zeros(3)) : Ω
+            push!(couplings, _add_coupling!(system, atom, g => e, Ωp; beam, active))
         elseif beam !== nothing
             node = GaussianCouplingNode(atom, g => e, beam, q_axis_vec,
                                         something(d_red, 0.0), g, e;
@@ -650,17 +755,28 @@ function add_coupling!(
 end
 
 # A beam-derived Rabi frequency carries the J-level 6j symbol {J′ F′ I; F J 1},
-# which vanishes for J = J′ = 0: every pair would get Ω = 0 and be dropped
-# without a word. The ¹⁷¹Yb/⁸⁷Sr clock line is E1 only through hyperfine mixing,
-# which this model does not compute, so the user must supply the strength.
+# which vanishes for J = J′ = 0 and for |ΔJ| > 1: every pair would get Ω = 0 and be
+# dropped without a word. The ¹⁷¹Yb/⁸⁷Sr clock line is E1 only through hyperfine
+# mixing, which this model does not compute, so the user must supply the strength.
 function _check_e1_allowed(g, e)
-    (hasproperty(g, :J) && hasproperty(e, :J) && g.J == 0 && e.J == 0) || return nothing
-    throw(ArgumentError(
-        "add_coupling!: $(g.label) → $(e.label) is J = 0 → 0, E1-forbidden at the J level, " *
-        "so a beam-derived Rabi frequency is identically zero. For a clock line made " *
-        "allowed by hyperfine mixing (¹⁷¹Yb, ⁸⁷Sr) give the polarization-resolved Rabi " *
-        "frequencies: add_coupling!(sys, atom, g => e, Ω_π, Ω_σ⁺, Ω_σ⁻; beam), or the " *
-        "Ω_π/Ω_p/Ω_m keywords with `beam`."))
+    (hasproperty(g, :J) && hasproperty(e, :J)) || return nothing
+    if g.J == 0 && e.J == 0
+        throw(ArgumentError(
+            "add_coupling!: $(g.label) → $(e.label) is J = 0 → 0, E1-forbidden at the J level, " *
+            "so a beam-derived Rabi frequency is identically zero. For a clock line made " *
+            "allowed by hyperfine mixing (¹⁷¹Yb, ⁸⁷Sr) give the polarization-resolved Rabi " *
+            "frequencies: add_coupling!(sys, atom, g => e, Ω_π, Ω_σ⁺, Ω_σ⁻; beam), or the " *
+            "Ω_π/Ω_p/Ω_m keywords with `beam`."))
+    end
+    abs(g.J - e.J) <= 1 || throw(ArgumentError(
+        "add_coupling!: $(g.label) → $(e.label) has |ΔJ| = $(abs(g.J - e.J)) > 1: not an " *
+        "E1 line, so a beam-derived Rabi frequency is identically zero."))
+    if hasproperty(g, :F) && hasproperty(e, :F)
+        abs(g.F - e.F) <= 1 || throw(ArgumentError(
+            "add_coupling!: $(g.label) → $(e.label) has |ΔF| = $(abs(g.F - e.F)) > 1: not an " *
+            "E1 line, so a beam-derived Rabi frequency is identically zero."))
+    end
+    return nothing
 end
 
 

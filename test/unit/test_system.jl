@@ -324,3 +324,169 @@ end
     @test abs(Hs[1, 1]) > 2π * 1e5                  # the ¹S₀ trap shift (≈ 560 kHz) is there
     @test any(abs(Hs[i, j]) > 0 for i in 3:6, j in 3:6 if i != j)    # tensor mixing in ³P₁
 end
+
+@testset "an unknown species needs its mass and nuclear spin" begin
+    @test_throws ArgumentError AtomTwin.AtomWrapper{:Cesium133}()
+    @test_throws ArgumentError AtomTwin.AtomWrapper{:Cesium133}(; mass = 133 * AtomTwin.Units.amu)
+    cs = AtomTwin.AtomWrapper{:Cesium133}(; mass = 133 * AtomTwin.Units.amu, I = 7//2)
+    @test cs.m ≈ 133 * AtomTwin.Units.amu
+    @test cs.I == 7//2
+end
+
+@testset "a coupling to a level the atom lacks warns and adds nothing" begin
+    g, e = Level("g"), Level("e")
+    atom = Atom(; levels = [g, e]); sys = System(atom)
+    c = @test_logs (:warn, r"not found") add_coupling!(sys, atom, g => Level("x"), 2π * 1e6)
+    @test isempty(c)
+    @test isempty(sys.nodes)
+end
+
+@testset "beam constructors take any real numbers, positionally or by keyword" begin
+    b1 = GaussianBeam(532e-9, 1e-6, 1)
+    b2 = GaussianBeam(; λ = 532e-9, w0 = 1e-6, P = 1, r0 = [0, 0, 0])
+    @test b1 isa GaussianBeam && b2 isa GaussianBeam && b1.I0 == b2.I0
+    g1 = GeneralGaussianBeam(532e-9, 1e-6, 2e-6, 1, [0, 0, 1], [1, 0, 0])
+    g2 = GeneralGaussianBeam(; λ = 532e-9, w0x = 1e-6, w0y = 2e-6, P = 1)
+    @test g1 isa GeneralGaussianBeam && g2 isa GeneralGaussianBeam && g1.I0 == g2.I0
+    @test GeneralGaussianBeam(532e-9, Parameter(:w, 1e-6), 2e-6, 1.0, [0, 0, 1], [1, 0, 0]) isa
+          AtomTwin.ParametricBeam
+    p1 = PlanarBeam(556e-9, 1.0, [0, 1, 0], [0, 0, 1])
+    p2 = PlanarBeam(; λ = 556e-9, I = 1, direction = [0, 1, 0], polarization = [0, 0, 1])
+    @test p1.k == p2.k && p1.pol == p2.pol && p1.I == p2.I
+end
+
+@testset "detector specs take the same keywords" begin
+    g, e = Level("g"), Level("e")
+    atom = Atom(; levels = [g, e]); sys = System(atom)
+    name = SubString("P_e", 1)
+    @test PopulationDetectorSpec(atom, e; name).params.name == "P_e"
+    @test CoherenceDetectorSpec(atom, g => e; name).params.name == "P_e"
+    d = ExpectationDetectorSpec(sys, atom, AtomTwin.projector(e); name, tspan = [1e-6])
+    @test d.tspan == [1e-6] && d.params.name == "P_e"
+end
+
+@testset "gethamiltonian rejects keywords it does not take" begin
+    g, e = Level("g"), Level("e")
+    atom = Atom(; levels = [g, e]); sys = System(atom)
+    add_coupling!(sys, atom, g => e, 2π * 1e6)
+    @test size(gethamiltonian(sys)) == (2, 2)
+    @test_throws MethodError gethamiltonian(sys; bogus = 1)
+end
+
+@testset "Dynamiq basis and operator utilities" begin
+    D = AtomTwin.Dynamiq
+    a = D.NLevelAtom(2); b = D.Basis([a], [(1,), (2,)])
+    @test a._pidx == [[1], [2]]                       # explicit elements set the index lists
+    @test D.productstate(b, (2,)) == ComplexF64[0, 1]
+    @test_throws ArgumentError D.productstate(b, (3,))
+    # A scaled operator keeps its forward/reverse split, so a complex time
+    # coefficient still gives a Hermitian term.
+    H = D.Op(b, a, 1 => 2, 1.0)
+    function applied(op, c)
+        M = zeros(ComplexF64, 2, 2)
+        for j in 1:2
+            v = zeros(ComplexF64, 2); v[j] = 1; w = zeros(ComplexF64, 2)
+            D.apply!(w, [(Ref(ComplexF64(c)), op)], v, ComplexF64(1)); M[:, j] = w
+        end
+        M
+    end
+    M2 = applied(2 * H, cis(0.3)); @test M2 ≈ M2'
+    @test applied(2 * H, cis(0.3)) ≈ 2 * applied(H, cis(0.3))
+end
+
+@testset "an instant retune moves the atom in a quantum run, at second order" begin
+    g = Level("1S0")
+    function run(dt; quantum)
+        tw = TweezerArray(λ = 759e-9, w0 = 1e-6, P_total = 20e-3, row_freqs = [0.0], col_freqs = [0.0])
+        yb = Ytterbium174Atom(; levels = [g], x_init = [0.0, 0, 0], v_init = [0.0, 0, 0])
+        s = System([yb], [tw])
+        add_detector!(s, MotionDetectorSpec(yb; dims = [1, 4], name = "x"))
+        q = Sequence(dt)
+        @sequence q begin
+            Wait(2e-6)
+            FreqCol(tw, 1, 0.3e6)
+            Wait(2e-6)
+        end
+        o = quantum ? play(s, q; initial_state = g) : play(s, q)
+        o.detectors["x"][end, :]
+    end
+    xq, xc = run(4e-9; quantum = true), run(4e-9; quantum = false)
+    @test abs(xq[1]) > 1e-8                       # the atom follows the displaced trap
+    @test xq ≈ xc rtol = 1e-9                     # as the classical solver has it
+    ## the first drift after the retune uses the force at the new trap position
+    x = [run(dt; quantum = false)[1] for dt in (8e-9, 4e-9, 2e-9)]
+    @test 3.3 < (x[1] - x[2]) / (x[2] - x[3]) < 4.7
+end
+
+@testset "a parametric beam on a single level pair is refused, not silently dropped" begin
+    g, e = Level("g"), Level("e")
+    a = Atom(; levels = [g, e])
+    pb = GaussianBeam(556e-9, Parameter(:w0, 1e-6), 1e-3)
+    @test_throws ArgumentError add_coupling!(System(a), a, g => e, 2π * 1e6; beam = pb)
+end
+
+@testset "GeneralGaussianBeam waists lie along the lab axes; the bare field vector" begin
+    D = AtomTwin.Dynamiq
+    b = GeneralGaussianBeam(532e-9, 1e-6, 2e-6, 1e-3, [0, 0, 1], [1, 0, 0])
+    I0 = D.intensity(b, [0.0, 0, 0])
+    @test D.intensity(b, [1e-6, 0, 0]) / I0 ≈ exp(-2)          # w0x = 1 µm along lab x
+    @test D.intensity(b, [0, 1e-6, 0]) / I0 ≈ exp(-0.5)        # w0y = 2 µm along lab y
+    @test b.u ≈ [1, 0, 0] && b.v ≈ [0, 1, 0]
+    bx = GeneralGaussianBeam(532e-9, 1e-6, 2e-6, 1e-3, [1, 0, 0], [0, 1, 0])
+    @test bx.u ≈ [0, 1, 0] && bx.v ≈ [0, 0, 1]
+    r = [0.3e-6, 0.2e-6, 1e-6]
+    b._coeff[] = 0.5
+    @test D.efield_vector(b, r) ≈ D.Efield(b, r) ./ 0.5          # efield_vector excludes _coeff
+    @test D.efield_scalar(b, r) ≈ 0.5 * D._efield_bare(b, r)
+    b._coeff[] = 1.0
+    ## the force evaluation allocates nothing
+    a = Ytterbium171Atom(; levels = [Level("1S0")], x = [0.2e-6, 0.1e-6, 0.3e-6])
+    bs = [b]
+    AtomTwin._init_species_data!(a, a.inner, bs)
+    a.inner._P[1] = 1.0
+    measure(at, beams) = (AtomTwin.Dynamiq.force(at, beams); @allocated AtomTwin.Dynamiq.force(at, beams))
+    @test measure(a.inner, bs) == 0
+end
+
+@testset "force over a Vector{AbstractBeam} allocates nothing" begin
+    # The job's beam list is abstractly typed; the polarization lookup must stay
+    # concrete there or every accumulation boxes (a 60× slower sorting example).
+    D = AtomTwin.Dynamiq
+    a = Ytterbium171Atom(; levels = [Level("1S0")], x = [0.2e-6, 0.1e-6, 0.3e-6])
+    bs = AbstractBeam[GaussianBeam(759e-9, 1e-6, 1e-3; r0 = [1e-6 * k, 0, 0]) for k in 0:3]
+    push!(bs, GeneralGaussianBeam(759e-9, 1e-6, 2e-6, 1e-3, [0, 0, 1], [0, 1, 0]))
+    AtomTwin._init_species_data!(a, a.inner, bs)
+    a.inner._P[1] = 1.0
+    f(atom, beams) = AtomTwin.Dynamiq.force(atom, beams)   # qualified: a captured local would box
+    f(a.inner, bs)
+    @test (@allocated f(a.inner, bs)) == 0
+    @test sum(abs, f(a.inner, bs)) > 0
+end
+
+@testset "same-wavelength beams interfere according to their polarizations" begin
+    D = AtomTwin.Dynamiq
+    λ = 759e-9
+    b1 = GeneralGaussianBeam(λ, 5e-6, 5e-6, 10e-3, [0, 0, 1], [0, 1, 0])      # k ∥ z, pol ŷ
+    b2 = GeneralGaussianBeam(λ, 5e-6, 5e-6, 10e-3, [1, 0, 0], [0, 1, 0])      # k ∥ x, pol ŷ: interferes
+    b3 = GeneralGaussianBeam(λ, 5e-6, 5e-6, 10e-3, [1, 0, 0], [0, 0, 1])      # k ∥ x, pol ẑ: does not
+    r = [λ / 8, 0.0, λ / 8]
+    force(beams) = (a = Ytterbium171Atom(; levels = [Level("1S0")], x = r);
+                    AtomTwin._init_species_data!(a, a.inner, beams; q_axis = [1.0, 0, 0]);
+                    a.inner._P[1] = 1.0;                               # the level is occupied
+                    collect(D.force(a.inner, beams)))
+    single = force([b1]) .+ force([b3])
+    @test force([b1, b3]) ≈ single rtol = 1e-9
+    @test !isapprox(force([b1, b2]), force([b1]) .+ force([b2]); rtol = 0.1)
+end
+
+@testset "detector names are unique; a plane wave is not a trap" begin
+    g, e = Level("g"), Level("e")
+    a = Atom(; levels = [g, e]); s = System(a)
+    add_detector!(s, PopulationDetectorSpec(a, g))
+    @test_throws ArgumentError add_detector!(s, PopulationDetectorSpec(a, e))
+    add_detector!(s, PopulationDetectorSpec(a, e; name = "Pe"))
+    @test length(s.detector_specs) == 2
+    pw = PlanarBeam(759e-9, 1e9, [0.0, 0, 1], [1.0, 0, 0])
+    @test_throws ArgumentError System(a, pw)
+    @test_throws ArgumentError MotionDetectorSpec(pw; dims = [1])
+end

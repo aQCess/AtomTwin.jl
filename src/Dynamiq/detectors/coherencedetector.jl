@@ -97,7 +97,7 @@ CoherenceDetectorSpec(atom::AbstractAtom;
 Record the current coherence value at time step `i`.
 
 For a pure state \\(\\vert\\psi\\rangle\\), the coherence \\(\\rho_{ij}\\)
-is computed as \\(\\psi_i \\psi_j^{\\ast}\\) summed over all basis elements
+is computed as \\(\\psi_j \\psi_i^{\\ast}\\) (= ρ_{ji}, the documented convention) summed over all basis elements
 corresponding to \\(|i\\rangle\\langle j|\\). For a density matrix
 \\(\\rho\\), the corresponding matrix elements \\(\\rho_{ij}\\) are summed.
 """

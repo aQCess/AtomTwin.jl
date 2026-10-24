@@ -38,7 +38,10 @@ end
         Pulse(coupling, T_total)
     end
     out = play(sys, seq; initial_state = g)
-    @test maximum(out.detectors["P_e"]) < 0.6
+    P, t = out.detectors["P_e"], out.times
+    @test maximum(P) ≈ 0.5 atol = 0.01                             # Ω²/Ω_eff²
+    @test P[argmin(abs.(t .- π / (√2 * Ω)))] ≈ 0.5 atol = 0.01      # the first maximum...
+    @test P[argmin(abs.(t .- 2π / (√2 * Ω)))] ≈ 0.0 atol = 0.01     # ...and return, at Ω_eff = √2 Ω
 end
 
 # ── B. Lindblad dissipation ───────────────────────────────────────────────────
@@ -91,6 +94,28 @@ end
     @test all(isapprox.(out.detectors["P_g"], 0.5; atol = 1e-9))
     # Coherence damps at γ/2 (standard L=√γ|e⟩⟨e| convention), not γ
     @test isapprox(abs(out.detectors["coh"][end]), 0.5 * exp(-γ * 1e-6 / 2); rtol = 1e-2)
+end
+
+@testset "Lindblad: pure dephasing in MCWF agrees with the master equation" begin
+    # The trajectory realisation of L = √γ|e⟩⟨e| (a no-jump decay of the |e⟩
+    # amplitude at γ/2 and projective jumps) must average to the same γ/2 coherence
+    # decay with the populations untouched.
+    g, e = Level("g"), Level("e")
+    atom = Atom(; levels = [g, e])
+    sys  = System(atom)
+    γ = 2π * 1e6
+    add_dephasing!(sys, atom, e, γ)
+    add_detector!(sys, PopulationDetectorSpec(atom, e; name = "P_e"))
+    add_detector!(sys, CoherenceDetectorSpec(atom, g => e; name = "coh"))
+    seq = Sequence(1e-9; downsample = 1000)
+    @sequence seq begin
+        Wait(1e-6)
+    end
+    N = 4000
+    out = play(sys, seq; initial_state = (1/√2)*g + (1/√2)*e, shots = N, rng = MersenneTwister(5))
+    σ = 0.5 / sqrt(N)
+    @test abs(mean(out.detectors["coh"][end, :])) ≈ 0.5 * exp(-γ * 1e-6 / 2) atol = 4σ
+    @test mean(out.detectors["P_e"][end, :]) ≈ 0.5 atol = 4σ
 end
 
 # ── C. Selection rules ────────────────────────────────────────────────────────
@@ -214,7 +239,7 @@ end
     rng = Xoshiro(2)
     kb_v = 1.380_649e-23
     amu  = 1.660_539_066_60e-27
-    m    = 171 * amu
+    m    = AtomTwin.ATOM_DEFAULTS[:Ytterbium171].mass
     T    = 10e-6   # 10 µK
     σ_v  = sqrt(kb_v * T / m)   # expected per-axis velocity std
 
@@ -283,6 +308,14 @@ using AtomTwin.Units: c, hbar
             @test scattering_rate_per_Wcm2(atom, st, λ) > 0
         end
     end
+end
+
+@testset "polarizability wavelengths are in nanometres; metres are rejected" begin
+    yb = Ytterbium171Atom(; levels = [Level("1S0")])
+    for f in (light_shift_coeff_Hz_per_Wcm2, polarizability_au, scattering_rate_per_Wcm2)
+        @test_throws ArgumentError f(yb, "1S0", 759e-9)
+    end
+    @test_throws ArgumentError polarizability_si(AtomTwin.YB171_POLARIZABILITY_1S0, 759e-9)
 end
 # The models were refitted to these (Kroeze et al., arXiv:2509.04416, Table 7),
 # with the clock magic wavelength weighted at its experimental uncertainty and the
@@ -922,7 +955,9 @@ end
             Pulse(cp, 1e-4)
         end
         out = play(sys, seq; initial_state = g[0], shots = shots, frozen = true)
-        dip = Dict(yb.level_indices[e[m]] => yb.inner.dipole[yb.level_indices[e[m]] => yb.level_indices[g[0]]]
+        ## the run's atom (the job's private copy) carries the photon dipoles about the axis
+        a = compile(sys, seq; initial_state = [g[0]]).atoms[1]
+        dip = Dict(yb.level_indices[e[m]] => a.dipole[yb.level_indices[e[m]] => yb.level_indices[g[0]]]
                    for m in (-1, 0, 1))
         sum(out.detectors["pi"]), sum(out.detectors["sigma"]), dip, yb
     end
@@ -1226,4 +1261,322 @@ end
     @test abs(Ωπ) < 1e-9 * abs(Ωp)
     @test abs(Ωp) ≈ 5e-34 * E0 / √2 / AtomTwin.Units.hbar rtol = 1e-9
     @test abs(Ωm) ≈ abs(Ωp) rtol = 1e-12
+end
+
+@testset "manifold decays and Zeeman detunings return what they add" begin
+    S0  = HyperfineManifold(1//2, 0; label = "1S0", term = l"1S0")
+    P32 = HyperfineManifold(3//2, 1; label = "3P1", term = l"3P1")
+    leak = Level("leak")
+    yb  = Ytterbium171Atom(; levels = [S0..., P32..., leak])
+    sys = System(yb)
+    js = add_decay!(sys, yb, P32 => S0, 2π * 1e5)
+    @test js isa Vector{Jump} && length(js) == 3            # one per polarisation
+    jl = add_decay!(sys, yb, P32 => leak, 2π * 1e4)
+    @test jl isa Vector{Jump} && length(jl) == length(P32)  # one per sublevel
+    @test add_dephasing!(sys, yb, S0, 2π * 1e3) isa Vector{Jump}
+    zd = add_zeeman_detunings!(sys, yb, P32; B = 1e-4)
+    @test eltype(zd) <: AtomTwin.Dynamiq.Detuning && length(zd) == length(P32)
+end
+
+@testset "a beam drives fine-structure manifolds as the I = 0 hyperfine ones" begin
+    # ¹⁷⁴Yb 556 nm with FineManifolds: the σ⁺ stretched line at I_sat has Ω = Γ/√2, and
+    # every form gives the Hamiltonian of the equivalent F = J hyperfine manifolds.
+    S0f, P1f = FineManifold(0; label = "1S0", term = l"1S0"), FineManifold(1; label = "3P1", term = l"3P1")
+    S0h = HyperfineManifold(0//1, 0; label = "1S0", term = l"1S0")
+    P1h = HyperfineManifold(1//1, 1; label = "3P1", term = l"3P1")
+    yb0 = Ytterbium174Atom()
+    Γ, ω = getdecayrates(yb0)["3P1" => "1S0"], 2π * getlinefrequencies(yb0)["3P1" => "1S0"]
+    Isat = AtomTwin.Units.hbar * ω^3 * Γ / (12π * AtomTwin.Units.c^2)
+    λ = 2π * AtomTwin.Units.c / ω
+    pw = PlanarBeam(λ, Isat, [0.0, 0, 1], [1.0, 1im, 0] / √2)
+    gb = GaussianBeam(λ, 20e-6, 1e-6; pol = [1.0, 0.3im, 0.2])
+    function H(S0, P1, beam, form)
+        yb = Ytterbium174Atom(; levels = [S0..., P1...]); s = System(yb)
+        form == :positional ? add_coupling!(s, yb, S0 => P1, beam) :
+                              add_coupling!(s, yb, S0 => P1; beam)
+        gethamiltonian(s), yb
+    end
+    Hf, yb = H(S0f, P1f, pw, :positional)
+    @test abs(Hf[yb.level_indices[P1f[1//1]], yb.level_indices[S0f[0//1]]]) ≈ Γ / (2√2) rtol = 1e-12
+    for beam in (pw, gb), form in (:positional, :keyword)
+        @test H(S0f, P1f, beam, form)[1] ≈ H(S0h, P1h, beam, form)[1] rtol = 1e-12
+    end
+end
+
+@testset "a coupling rescaled by a complex rate stays Hermitian" begin
+    # A Gaussian-beam coupling is refreshed per shot at the atom's position, with the
+    # beam phase exp(ik·z): the rescale of its operator must conjugate the reverse half.
+    g, e = Level("g"), Level("e")
+    beam = GaussianBeam(556e-9, 5e-6, 1e-3)
+    a = Atom(; levels = [g, e], x_init = gaussian(0.0, 0.0, 100e-9))
+    s = System(a)
+    c = add_coupling!(s, a, g => e, 2π * 1e6; beam, active = false)
+    add_detector!(s, PopulationDetectorSpec(a, g; name = "Pg"))
+    add_detector!(s, PopulationDetectorSpec(a, e; name = "Pe"))
+    q = Sequence(1e-9)
+    @sequence q begin
+        Pulse(c, 2e-6)
+    end
+    o = play(s, q; initial_state = g, shots = 4, frozen = true, rng = MersenneTwister(1))
+    @test maximum(abs.(o.detectors["Pg"] .+ o.detectors["Pe"] .- 1)) < 1e-9
+    H = AtomTwin.Dynamiq.Op(s.basis, a.inner, 1 => 2, 2π * 1e6)
+    AtomTwin.Dynamiq.rescale!(H, cis(0.7))
+    M = Matrix(AtomTwin.Dynamiq.sparse(H))
+    @test M ≈ M'
+end
+
+@testset "add_vdwinteraction! reads `transition` as add_interaction! does" begin
+    g, r = Level("g"), Level("r")
+    a1 = Atom(; levels = [g, r], x_init = [0.0, 0, 0])
+    a2 = Atom(; levels = [g, r], x_init = [3e-6, 0, 0])
+    for tr in ((r, r) => (r, r), (g, r) => (g, r), (g, r) => (r, g))
+        s1 = System([a1, a2]); add_interaction!(s1, (a1, a2), tr, 1.0)
+        s2 = System([a1, a2]); f = add_vdwinteraction!(s2, (a1, a2), tr, 1.0; V_cap = Inf)
+        @test findall(!iszero, Matrix(gethamiltonian(s1))) ==
+              findall(!iszero, Matrix(AtomTwin.Dynamiq.sparse(f.H)))
+    end
+    ## different level objects on the two atoms
+    g1, r1, g2, r2 = Level("g1"), Level("r1"), Level("g2"), Level("r2")
+    b1 = Atom(; levels = [g1, r1], x_init = [0.0, 0, 0])
+    b2 = Atom(; levels = [g2, r2], x_init = [3e-6, 0, 0])
+    s = System([b1, b2])
+    @test add_interaction!(s, (b1, b2), (r1, r2) => (r1, r2), 1.0) isa AtomTwin.Dynamiq.AbstractField
+    @test add_vdwinteraction!(s, (b1, b2), (r1, r2) => (r1, r2), 1.0) isa AtomTwin.Dynamiq.AbstractField
+    ## a parametric C6 with the default cap
+    s3 = System([a1, a2])
+    @test add_vdwinteraction!(s3, (a1, a2), (r, r) => (r, r), Parameter(:C6, 2π * 1e6 * (4e-6)^6)) isa
+          AtomTwin.Dynamiq.AbstractField
+end
+
+@testset "a Gaussian-beam coupling is built at the beam's focus and follows the atom per shot" begin
+    g, e = Level("g"), Level("e")
+    site = [10e-6, 0.0, 0.0]                        # 10 waists from the origin
+    beam = GaussianBeam(556e-9, 1e-6, 1e-3; r0 = site)
+    ## explicit Ω: an atom `x_init` places at the site sees the full Ω
+    a = Atom(; levels = [g, e], x_init = site); s = System(a)
+    c = add_coupling!(s, a, g => e, 2π * 1e6; beam, active = false)
+    add_detector!(s, PopulationDetectorSpec(a, e; name = "Pe"))
+    q = Sequence(1e-9)
+    @sequence q begin
+        Pulse(c, 0.5e-6)                              # a π pulse at the focus
+    end
+    @test play(s, q; initial_state = g, frozen = true).detectors["Pe"][end] ≈ 1 atol = 1e-6
+    ## beam-derived: every |Δm| ≤ 1 pair is kept (the axis may still change its strength),
+    ## although the atom sits at the origin until compile
+    S0 = HyperfineManifold(1//2, 0; label = "1S0", term = l"1S0")
+    P1 = HyperfineManifold(3//2, 1; label = "3P1", term = l"3P1")
+    yb = Ytterbium171Atom(; levels = [S0..., P1...], x_init = site)
+    @test length(add_coupling!(System(yb), yb, S0 => P1; beam)) == 6
+    ## a shot beyond the beam's cutoff zeroes the operator; the next shot gets it back
+    node = only(n for n in s.nodes if n isa AtomTwin.GaussianCouplingNode)
+    f = node._field
+    AtomTwin._refresh_gaussian!(node, f, [0.0, 0, 0], Dict{Symbol,Any}(), Random.default_rng())
+    @test f.Ω0 == 0
+    AtomTwin._refresh_gaussian!(node, f, site, Dict{Symbol,Any}(), Random.default_rng())
+    @test abs(f.Ω0) ≈ 2π * 1e6 && abs(f.H.forward[1][3]) ≈ π * 1e6
+end
+
+@testset "build-time tol keeps a parametric Ω or rate whose default is zero" begin
+    S0 = HyperfineManifold(1//2, 0; label = "1S0", term = l"1S0")
+    P1 = HyperfineManifold(3//2, 1; label = "3P1", term = l"3P1")
+    yb = Ytterbium171Atom(; levels = [S0..., P1...]); s = System(yb)
+    cs = add_coupling!(s, yb, S0 => P1; Ω_p = Parameter(:Ω, 0.0), active = false)
+    @test length(cs) == 2
+    add_detector!(s, PopulationDetectorSpec(yb, P1[3//2]; name = "Pe"))
+    q = Sequence(1e-9)
+    @sequence q begin
+        Pulse(cs, 0.5e-6)
+    end
+    @test play(s, q; initial_state = S0[1//2], frozen = true, Ω = 2π * 1e6).detectors["Pe"][end] ≈ 1 atol = 1e-6
+    @test length(add_decay!(System(yb), yb, P1 => S0, Parameter(:Γ, 0.0))) == 3
+end
+
+@testset "a hyperfine → fine coupling adds its polarizations in quadrature" begin
+    g = HyperfineLevel(2//1, 1//2, 0//1)                 # |F = 2, m = 0⟩ of a J = 1/2 ground state
+    e = FineLevel(1//2, 1//2)
+    rb = Rubidium87Atom(; levels = [g, e])              # I = 3/2
+    Ωπ = AtomTwin.compute_coupling_strength(g, e, rb, 1.0, 0.0, 0.0)
+    Ωσ = AtomTwin.compute_coupling_strength(g, e, rb, 0.0, 1.0, 0.0)
+    both = AtomTwin.compute_coupling_strength(g, e, rb, 1.0, 1.0, 0.0)
+    @test both ≈ hypot(Ωπ, Ωσ)
+    @test both ≈ AtomTwin.compute_coupling_strength(g, e, rb, 1.0, -1.0, 0.0)   # the relative sign is unphysical
+    @test AtomTwin.compute_coupling_strength(g, e, rb, Parameter(:Ω, 1.0), 0.0, 0.0) isa ParametricExpression
+    @test_throws ArgumentError AtomTwin.compute_coupling_strength(g, e, rb, Parameter(:Ω, 1.0), 1.0, 0.0)
+end
+
+@testset "rabi_frequencies(atom, g, e, beam) reproduces the beam-derived Hamiltonian" begin
+    S0 = HyperfineManifold(1//2, 0; label = "1S0", term = l"1S0")
+    P1 = HyperfineManifold(3//2, 1; label = "3P1", term = l"3P1")
+    yb0 = Ytterbium171Atom()
+    Γ, ω = getdecayrates(yb0)["3P1" => "1S0"], 2π * getlinefrequencies(yb0)["3P1" => "1S0"]
+    Isat = AtomTwin.Units.hbar * ω^3 * Γ / (12π * AtomTwin.Units.c^2)
+    beam = PlanarBeam(2π * AtomTwin.Units.c / ω, Isat, [0.0, 0, 1], [1.0, 0.3im, 0.2])
+    H(f) = (yb = Ytterbium171Atom(; levels = [S0..., P1...]); s = System(yb); f(s, yb); gethamiltonian(s))
+    Hb = H((s, yb) -> add_coupling!(s, yb, S0 => P1, beam))
+    Hp = H((s, yb) -> add_coupling!(s, yb, S0 => P1, rabi_frequencies(yb, S0, P1, beam)...))
+    @test Hp ≈ Hb rtol = 1e-12
+    ## the bare form takes the stretched-transition element, √3 below the reduced one on this line
+    d = reduced_dipole(yb0, S0[1//2], P1[3//2])
+    Hr = H((s, yb) -> add_coupling!(s, yb, S0 => P1, rabi_frequencies(beam; d_red = d)...))
+    @test maximum(abs.(Hr)) ≈ √3 * maximum(abs.(Hb)) rtol = 1e-9
+end
+
+@testset "beam-derived couplings keep one phase convention across manifold pairs" begin
+    # ⁸⁷Rb D1 (J = J′ = ½, I = 3/2): the far-detuned π–π Raman amplitude |1, 1⟩ → |2, 1⟩
+    # summed over F′ = 1, 2 vanishes (no rank-2 electronic operator for J = ½, rank 0 is
+    # diagonal in F); it does not for σ⁺–π. A sign fixed pair by pair broke this.
+    rb = Rubidium87Atom()
+    lv(F, m) = HyperfineLevel(F, 1//2, m, 0.0, "")
+    d(F, m, Fp, mp) = AtomTwin.dipole_matrix_element(rb, lv(F, m), lv(Fp, mp))
+    raman(m1, q1, m2) = sum(d(2//1, m2, Fp, m1 + q1) * d(1//1, m1, Fp, m1 + q1)
+                            for Fp in (1//1, 2//1) if abs(m1 + q1) <= Fp)
+    @test abs(raman(1//1, 0, 1//1)) < 1e-12          # π–π
+    @test abs(raman(0//1, 0, 0//1)) < 1e-12
+    @test abs(raman(0//1, 1, 1//1)) > 0.1             # σ⁺–π
+end
+
+@testset "d_red is honoured where there is no line data, and E1 selection rules are checked" begin
+    g, e = Level("g"), Level("e")
+    S = FineManifold(0; label = "S"); P = FineManifold(1; label = "P"); D = FineManifold(2; label = "D")
+    a = Atom(; levels = [S..., P..., D...])
+    pw = PlanarBeam(600e-9, 1.0, [0.0, 0, 1], [1.0, 0, 0])
+    gb = GaussianBeam(600e-9, 10e-6, 1e-3)
+    pb = GaussianBeam(600e-9, 10e-6, Parameter(:P, 1e-3))
+    ## every |Δm| ≤ 1 pair, resolved at compile about the system's axis; an explicit
+    ## `q_axis` fixes the strengths, and `tol` then drops the π pair of x̂ light
+    @test length(add_coupling!(System(a), a, S => P; beam = pw, d_red = 1e-29)) == 3
+    @test length(add_coupling!(System(a), a, S => P, gb; d_red = 1e-29)) == 3
+    @test length(add_coupling!(System(a), a, S => P, pb; d_red = 1e-29)) == 3
+    @test length(add_coupling!(System(a), a, S => P; beam = pw, d_red = 1e-29, q_axis = [0, 0, 1.0])) == 2
+    @test_throws ErrorException add_coupling!(System(a), a, S => P; beam = pw)          # no line data, no d_red
+    @test_throws ArgumentError add_coupling!(System(a), a, S => D; beam = pw, d_red = 1e-29)   # |ΔJ| = 2
+    ## noise is not silently dropped with a beam
+    b = Atom(; levels = [g, e])
+    @test_throws ArgumentError add_coupling!(System(b), b, g => e, 1.0; beam = pw, noise = LaserPhaseNoiseModel())
+    ## a parametric Gaussian beam carries its polarization
+    rp = AtomTwin._resolve_beam_default(GaussianBeam(600e-9, Parameter(:w, 1e-6), 1e-3; pol = [0, 1, 0]))
+    @test rp.pol ≈ ComplexF64[0, 1, 0]
+end
+
+@testset "atom construction rejects duplicate levels and an F outside |J−I| … J+I" begin
+    g1, g2 = HyperfineManifold(1//2, 0), HyperfineManifold(1//2, 0)
+    @test_throws ArgumentError Ytterbium171Atom(; levels = [g1..., g2...])
+    a = Ytterbium171Atom(; levels = [HyperfineManifold(1//2, 0; label = "a")...,
+                                     HyperfineManifold(1//2, 0; label = "b")...])
+    @test length(a.level_indices) == 4
+    P32 = HyperfineManifold(3//2, 1; label = "3P1", term = l"3P1")
+    @test_throws ArgumentError Ytterbium174Atom(; levels = [P32...])      # I = 0 has no F = 3/2
+    @test Ytterbium171Atom(; levels = [P32...]) isa AbstractAtom
+end
+
+@testset "polarizability bookkeeping warns once and checks the level's J against its model" begin
+    g, e = Level("g"), Level("e")
+    a = Atom(; levels = [g, e])
+    beam = GaussianBeam(1064e-9, 1e-6, 10e-3)
+    @test_logs (:warn, r"no polarizability models") AtomTwin._init_species_data!(a, a.inner, [beam])
+    @test_logs AtomTwin._init_species_data!(a, a.inner, AtomTwin.AbstractBeam[])     # no beam, no warning
+    yb = Ytterbium171Atom(; levels = [Level("1S0"), Level("leak")])
+    @test_logs (:warn, r"No polarizability model for 1 level") AtomTwin._init_species_data!(yb, yb.inner, [GaussianBeam(759e-9, 1e-6, 1e-3)])
+    bad = Ytterbium171Atom(; levels = [HyperfineManifold(1//2, 0; term = "3P1")...])   # a string term skips the J check
+    @test_throws ErrorException AtomTwin._init_species_data!(bad, bad.inner, [GaussianBeam(520e-9, 1e-6, 1e-3)])
+    ## a fine level is the I = 0 picture on any isotope, as for its couplings
+    P1 = FineManifold(1; label = "3P1", term = l"3P1")
+    a171, a174 = Ytterbium171Atom(; levels = [P1...]), Ytterbium174Atom(; levels = [P1...])
+    b = GaussianBeam(520e-9, 1e-6, 1e-3)
+    AtomTwin._init_species_data!(a171, a171.inner, [b]); AtomTwin._init_species_data!(a174, a174.inner, [b])
+    λ = AtomTwin.getwavelength(b)
+    @test a171.inner.alpha[λ] ≈ a174.inner.alpha[λ]
+    @test a171.inner.alpha[λ][1] != a171.inner.alpha[λ][2]                 # the tensor part is there
+end
+
+@testset "species masses are isotope masses" begin
+    # AME2020 (Wang et al., Chin. Phys. C 45, 030003): ¹⁷⁴Yb 173.938 866 4 u,
+    # ⁸⁷Rb 86.909 180 5 u, ¹⁷¹Yb 170.936 330 2 u, ⁸⁸Sr 87.905 612 2 u.
+    @test Ytterbium174Atom().m / AtomTwin.Units.amu ≈ 173.9388664 rtol = 1e-7
+    @test Rubidium87Atom().m / AtomTwin.Units.amu ≈ 86.9091805 rtol = 1e-7
+    @test Ytterbium171Atom().m / AtomTwin.Units.amu ≈ 170.9363302 rtol = 1e-7
+    @test Strontium88Atom().m / AtomTwin.Units.amu ≈ 87.9056122 rtol = 1e-7
+end
+
+@testset "gethamiltonian refreshes explicit light shifts for the current axis; elliptical trap light warns" begin
+    P1 = HyperfineManifold(1//1, 1; label = "3P1", term = l"3P1")
+    tw = GaussianBeam(520e-9, 1e-6, 1e-3; pol = [1.0, 0, 0])
+    function H(order)
+        sr = Strontium88Atom(; levels = [P1...]); s = System(sr)
+        order == :axis_first && add_quantization_axis!(s, [1.0, 0, 0])
+        add_light_shift!(s, sr, P1, tw)
+        order == :axis_last && add_quantization_axis!(s, [1.0, 0, 0])
+        real.(diag(gethamiltonian(s)))
+    end
+    @test H(:axis_last) ≈ H(:axis_first)
+    @test H(:axis_last)[1] != H(:axis_last)[2]                   # ε ∥ axis: m = 0 differs from |m| = 1
+    sr = Strontium88Atom(; levels = [P1...])
+    circ = GaussianBeam(520e-9, 1e-6, 1e-3; pol = [1.0, 1im, 0] / √2)
+    @test_logs (:warn, r"not linearly polarised") match_mode = :any AtomTwin._init_species_data!(sr, sr.inner, [circ])
+    @test_logs AtomTwin._init_species_data!(sr, sr.inner, [tw])
+end
+
+@testset "laser phase noise reproduces its spectrum: white floor and servo bump" begin
+    # S_ν in Hz²/Hz, φ = 2π∫δν dt: a white floor h₀ gives Var[φ(T) − φ(0)] = 2π² h₀ T,
+    # a servo bump Var[φ] = ∫ S_ν/f² df.
+    g, e = Level("g"), Level("e")
+    function trace(nm, T, dt)
+        a = Atom(; levels = [g, e]); s = System(a)
+        add_coupling!(s, a, g => e, 1.0; noise = nm), collect(dt:dt:T)
+    end
+    h0, T, dt = 2.5e4, 100e-6, 2e-8
+    nf, tspan = trace(LaserPhaseNoiseModel(bump_ampl = 0.0, powerlaw_ampl = h0), T, dt)
+    Random.seed!(nf.rng, 11)
+    v = 0.0
+    for _ in 1:300
+        z = AtomTwin.generate_noise(tspan, 0.0, nf)
+        φ = cumsum(vcat(0.0, angle.(z[2:end] ./ z[1:end-1])))
+        v += (φ[end] - φ[1])^2 / 300
+    end
+    @test 0.75 < v / (2π^2 * h0 * T) < 1.1
+    hg, fg, σ = 2e5, 1e6, 2e5
+    nf2, tspan2 = trace(LaserPhaseNoiseModel(bump_ampl = hg, bump_center = fg, bump_width = σ, powerlaw_ampl = 0.0), 20e-6, 2e-9)
+    Random.seed!(nf2.rng, 12)
+    v2 = sum(angle(AtomTwin.generate_noise(tspan2, 0.0, nf2)[end])^2 for _ in 1:300) / 300
+    f = exp.(range(log(1e4), log(1e8); length = 20000))
+    @test v2 ≈ sum(AtomTwin.laser_phase_psd(f, nf2.noise) .* f .* log(f[2] / f[1])) rtol = 0.15
+    @test AtomTwin.laser_phase_psd(fg, nf2.noise) ≈ hg / fg^2        # S_φ = S_ν/f²
+end
+
+@testset "laser phase noise damps a Rabi oscillation at π² S_ν(Ω/2π)/2" begin
+    # A white frequency-noise floor h₀ (one-sided, Hz²/Hz) on a resonant drive: the
+    # noise at the Rabi frequency drives transitions between the dressed states and
+    # the oscillation's envelope decays at Γ = π² h₀ / 2 (half the Ramsey dephasing
+    # rate π² h₀), so P_e(t) = ½(1 − cos(Ωt) e^{−Γt}). Checked through the whole
+    # path: model → NoisyField → per-shot synthesis → solver.
+    g, e = Level("g"), Level("e")
+    atom = Atom(; levels = [g, e])
+    sys  = System(atom)
+    Ω, h0 = 2π * 1e6, 4e4
+    Γ = π^2 * h0 / 2
+    noise = LaserPhaseNoiseModel(bump_ampl = 0.0, powerlaw_ampl = h0, powerlaw_exp = 0.0)
+    c = add_coupling!(sys, atom, g => e, Ω; noise, active = false)
+    add_detector!(sys, PopulationDetectorSpec(atom, e; name = "P_e"))
+    T = 9.5e-6                                     # cos(ΩT) = −1
+    seq = Sequence(2π / (20Ω); tol = 1e-4)
+    @sequence seq begin
+        Pulse(c, T)
+    end
+    N = 600
+    out = play(sys, seq; initial_state = g, shots = N, rng = MersenneTwister(11))
+    Pe = mean(out.detectors["P_e"][end, :])
+    @test Pe ≈ 0.5 * (1 + exp(-Γ * T)) atol = 4 * 0.5 / sqrt(N)   # 0.58; the old synthesis gave 0.9
+    @test Pe < 0.75
+end
+
+@testset "a symbolic operator materialises as the low-level operator does" begin
+    g, e = Level("g"), Level("e")
+    a1, a2 = Atom(; levels = [g, e]), Atom(; levels = [g, e])
+    s = System([a1, a2])
+    P = Matrix(AtomTwin.Dynamiq.sparse(AtomTwin.Op(AtomTwin.projector(e), s, a2)))
+    s2 = System([a1, a2]); add_detuning!(s2, a2, e, -1.0)            # H_ee = −δ = |e⟩⟨e| on atom 2
+    @test P ≈ gethamiltonian(s2)
+    X = Matrix(AtomTwin.Dynamiq.sparse(AtomTwin.Op(AtomTwin.transition(g => e), s, a1)))
+    s3 = System([a1, a2]); add_coupling!(s3, a1, g => e, 2.0)
+    @test X + X' ≈ gethamiltonian(s3)
 end

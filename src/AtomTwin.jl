@@ -47,7 +47,7 @@ using .Dynamiq: PopulationDetector, CoherenceDetector
 using .Dynamiq: ExpectationDetector
 import .Dynamiq: ExpectationDetectorSpec   # extended with an (sys, atom, Operator) method in operators.jl
 using .Dynamiq: PhotoDetector, PhotoDetectorSpec
-using .Dynamiq: MoveModifier, AmplitudeModifier, AbstractBoundaryModifier, SetModifier, ResetModifier, PositionModifier, begin_instruction!, end_instruction!, restore_beam!
+using .Dynamiq: MoveModifier, AmplitudeModifier, AbstractBoundaryModifier, SetModifier, ResetModifier, GateModifier, PositionModifier, SetPositionModifier, begin_instruction!, end_instruction!, restore_beam!
 using .Dynamiq: Units; export Units
 
 import Base: copy
@@ -61,7 +61,6 @@ include("levels.jl")
 include("tweezerarray.jl")
 include("instructions.jl")
 include("sequence.jl")
-include("interp.jl")
 include("compile.jl")
 include("system.jl")
 include("atoms/polarizability.jl")

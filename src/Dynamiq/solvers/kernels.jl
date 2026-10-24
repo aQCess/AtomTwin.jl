@@ -1,13 +1,11 @@
-"""
-Features:
-
-- Semiclassical simulation of atomic dynamics including motion.
-- Accurate treatment of multilevel effects and light shifts.
-- Efficient sparse representation of operators.
-- Efficient simulation of closed and open system dynamics using high-order
-  Trotter-like or Magnus-like decompositions.
-- Support for both global and local Hamiltonian terms.
-"""
+# Features:
+#
+# - Semiclassical simulation of atomic dynamics including motion.
+# - Accurate treatment of multilevel effects and light shifts.
+# - Efficient sparse representation of operators.
+# - Efficient simulation of closed and open system dynamics using high-order
+#   Trotter-like or Magnus-like decompositions.
+# - Support for both global and local Hamiltonian terms.
 
 using StatsBase   # sample, Weights
 using Polyester   # @batch
@@ -213,6 +211,27 @@ const _ZERO3 = (0.0, 0.0, 0.0)
     atom.v[3] = muladd(s, I[3], atom.v[3])
     return atom
 end
+
+"""
+    radiation_drift!(rp, dt)
+
+The drift half of the radiation force: `x ← x + (F_rad/2m) dt²` with the force
+held in `rp.F`, the one at the step's start. The impulse (`radiation_step!`,
+`radiation_commit!`) moves the velocity only; without this the position lags by
+`a·dt/2` per step, a first-order error, while the dipole force's velocity-Verlet
+drift (`fdrift!`) is second order.
+"""
+@inline function radiation_drift!(rp::RadiationPressure, dt::Float64)
+    @inbounds for a in eachindex(rp.atoms)
+        F = rp.F[a]
+        s = 0.5 * dt * dt * rp.hm[a]
+        atom = rp.atoms[a]
+        atom.x[1] = muladd(s, F[1], atom.x[1]); atom.x[2] = muladd(s, F[2], atom.x[2])
+        atom.x[3] = muladd(s, F[3], atom.x[3])
+    end
+    return rp
+end
+radiation_drift!(::Nothing, dt) = nothing
 
 # Below this the excited branch is empty and its momentum `D = E/P` undefined.
 const _PMIN = 1e-12

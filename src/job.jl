@@ -4,7 +4,12 @@
 Compiled simulation execution structure containing all runtime state and operators.
 
 This object should not be constructed directly by users. Instead, use
-`compile(system, sequence; shots=1)` which handles optimization and memory preallocation.
+`compile(system, sequence)` which handles optimization and memory preallocation.
+
+A job is a snapshot: it owns a private copy of the `System` it was compiled from
+(`system`), and its atoms, fields and jumps are that copy's. Nothing a run does
+reaches the user's `System`, two jobs compiled from one `System` are independent,
+and a change to the `System` after `compile` takes effect at the next `compile`.
 
 # Structure
 - **Runtime state** (reset between shots): `state`, `atoms`, `beams` (restored from
@@ -56,6 +61,60 @@ struct SimulationJob{S}
                              # be recovered
     tol::Float64             # target local relative error, forwarded to the propagator
     integrator::Dynamiq.AbstractIntegrator  # propagator backend, forwarded to the solver
+    system::System           # the job's private copy of the System (nodes, atoms, specs)
+    parameter_names::Set{Symbol}  # every `Parameter` a `play` keyword may set
+    param_values::Dict{Symbol, Any}  # the values the job was last given (compile, recompile!, play)
+end
+
+# `play` keywords that reach `compile`/`recompile!` through `kwargs` and are not
+# parameter overrides.
+const _PLAY_KEYWORDS = (:shots, :savefinalstate, :frozen, :density_matrix, :parallel_thresh,
+                        :shot_callback, :initial_state, :rng, :integrator)
+
+_parameter_values(kwargs) = Dict{Symbol,Any}(k => v for (k, v) in kwargs if !(k in _PLAY_KEYWORDS))
+
+# Every `Parameter` reachable from the system and the sequence, by name: the DAG
+# nodes' knobs (a `BeamRabiFrequency` reaches its parametric beam), the atoms'
+# `x_init`/`v_init`, the trapping beams, the quantization axis, the instructions.
+function _parameter_names(sys::System, seq::Sequence)
+    names, seen = Set{Symbol}(), Base.IdSet{Any}()
+    _collect_parameters!(names, sys, seen)
+    _collect_parameters!(names, seq, seen)
+    return names
+end
+
+_collect_parameters!(names, p::Parameter, seen) = (push!(names, p.name); nothing)
+_collect_parameters!(names, e::ParametricExpression, seen) =
+    (foreach(a -> _collect_parameters!(names, a, seen), e.args); nothing)
+# Leaves: values, compiled objects (whose knobs live on their nodes), and types
+_collect_parameters!(names, ::Union{Number, AbstractString, Symbol, Nothing, Function, Type,
+                                   Module, Random.AbstractRNG, AbstractArray{<:Number}, IO,
+                                   Basis, NLevelAtom, Dynamiq.AbstractField, Jump,
+                                   Dynamiq.Op}, seen) = nothing
+_collect_parameters!(names, x::Union{AbstractArray, Tuple, Pair, NamedTuple}, seen) =
+    (foreach(e -> _collect_parameters!(names, e, seen), x); nothing)
+_collect_parameters!(names, x::AbstractDict, seen) =
+    (foreach(v -> _collect_parameters!(names, v, seen), values(x)); nothing)
+_collect_parameters!(names, x::Base.RefValue, seen) = _collect_parameters!(names, x[], seen)
+function _collect_parameters!(names, x, seen)      # any other struct: its fields
+    if ismutable(x)
+        x in seen && return nothing
+        push!(seen, x)
+    end
+    for i in 1:nfields(x)
+        isdefined(x, i) && _collect_parameters!(names, getfield(x, i), seen)
+    end
+    return nothing
+end
+
+# A keyword that names no `Parameter` is a typo (`Omeg = …`, `delta` for `δ`): it used
+# to run the default silently, a flat line that looks like physics.
+function _check_parameter_names(known::Set{Symbol}, param_values)
+    unknown = setdiff(keys(param_values), known)
+    isempty(unknown) && return nothing
+    throw(ArgumentError("unknown parameter(s) $(join(sort!(collect(unknown)), ", ")); " *
+                        "the system and sequence define " *
+                        (isempty(known) ? "none" : join(sort!(collect(known)), ", "))))
 end
 
 
@@ -92,6 +151,7 @@ _detector_outputs(job) = Dict{String, Any}(
 _tovector(state::AbstractLevel) = [state]
 _tovector(state::Tuple) = collect(state)
 _tovector(state::AbstractVector) = state
+_tovector(state::AbstractMatrix) = state     # a density matrix in the basis
 _tovector(state) = [state]
 
 # The field that actually carries `H`. Every `AbstractField` is a leaf except
@@ -178,9 +238,14 @@ function _derive_dt(seq::Sequence, fields;
 end
 
 """
-    compile(system::System, sequence::Sequence; initial_state=nothing, density_matrix=false) -> SimulationJob
+    compile(system::System, sequence::Sequence; initial_state = system.initial_state,
+            density_matrix = false, integrator = Chebyshev(), rng, kwargs...) -> SimulationJob
 
 Compile a System and Sequence into an executable SimulationJob with preallocated single-shot storage.
+
+The job works on a **private copy** of `system`: compiling and playing it never changes
+the system's fields or atoms, and two jobs compiled from one system are independent.
+A change to the system after `compile` takes effect at the next `compile`.
 
 Builds heterogeneous time grids when the Sequence has per-instruction `dt` or `downsample`
 overrides, enabling cost optimization across protocol phases.
@@ -189,9 +254,11 @@ overrides, enabling cost optimization across protocol phases.
 - `system`: System specification (atoms, beams, nodes, detectors)
 - `sequence`: Pulse sequence to execute (instruction list with base timestep `dt`).
   Individual instructions can override `dt` and `downsample` via `push!` keyword arguments.
-- `initial_state`: Initial quantum state (required for quantum systems)
+- `initial_state`: Initial quantum state (default: the system's; empty for a classical run)
 - `density_matrix`: Use density matrix formalism if `true` (default: `false`)
-- Additional keyword arguments are treated as parameter overrides (e.g. `Ω = 2π*1e6`)
+- Additional keyword arguments are treated as parameter overrides (e.g. `Ω = 2π*1e6`).
+  A keyword that names no `Parameter` of the system or sequence is an error; the
+  keywords of `play` (`shots`, `savefinalstate`, …) are passed through.
 
 # Returns
 - `SimulationJob` ready for execution, containing single-shot detector output buffers
@@ -213,15 +280,31 @@ job = compile(sys, seq)  # builds per-instruction time grids automatically
 - Each call to `compile()` creates a single-shot job. Multi-shot execution in `play()`
   uses thread-local copies of this job, with results aggregated into output matrices.
 """
-function compile(sys::System, seq::Sequence;
-    initial_state = sys.initial_state,
+function compile(user_sys::System, seq::Sequence;
+    initial_state = user_sys.initial_state,
     density_matrix = false,
     integrator::Dynamiq.AbstractIntegrator = Dynamiq.Chebyshev(),
     rng = Random.default_rng(),
-    shots::Integer = 1,
     kwargs...)
-      
-    param_values = Dict{Symbol,Any}(kwargs)
+
+    isempty(seq) && throw(ArgumentError("compile: the sequence has no instructions"))
+    param_values = _parameter_values(kwargs)
+    parameter_names = _parameter_names(user_sys, seq)
+    _check_parameter_names(parameter_names, param_values)
+
+    # The job's own copy of the system. Every node's field, every atom and every
+    # detector spec below is the copy's, so the shot-by-shot values written into
+    # them (a sampled Ω, a thermal position) never reach `user_sys`, and
+    # `gethamiltonian(user_sys)` keeps reporting the system as declared.
+    sys = deepcopy(user_sys)
+    _bind_quantization_axis!(sys)
+    # The user's handles -- the coupling a `Pulse` names, the array a `MoveCol`
+    # moves, the detuning an `On` switches -- must resolve to the copy's objects, or
+    # the instruction would drive the user's field while the solver evolves the
+    # job's. `resolve` consults `cache` first, so it is seeded with original => copy
+    # for every node output, beam and atom (by position: `deepcopy` keeps the order),
+    # and copy => copy so the copy's own objects pass through unchanged.
+    cache = _handle_map(user_sys, sys)
 
     # Photo (click) detectors count individual quantum jumps, which only exist in
     # the statevector / wavefunction Monte Carlo solver. The density-matrix solver
@@ -232,8 +315,6 @@ function compile(sys::System, seq::Sequence;
               "play(...; density_matrix = false). The density-matrix solver has no " *
               "discrete quantum jumps to count.")
     end
-
-    cache = IdDict{Any, Any}()
 
     sorted_nodes = _topological_sort(sys.nodes)
 
@@ -249,8 +330,8 @@ function compile(sys::System, seq::Sequence;
     end
 
     # Collect all beams: trapping beams from sys.beams + coupling beams from BeamNodes
-    resolved_trapping = AbstractBeam[resolve(b, param_values; cache=cache) for b in sys.beams]
-    resolved_coupling = AbstractBeam[n._compiled[] for n in sorted_nodes if n isa BeamNode]
+    resolved_trapping = AbstractBeam[resolve(b, param_values; cache=cache, rng=rng) for b in sys.beams]
+    resolved_coupling = _coupling_beams(sorted_nodes)
     resolved_beams    = vcat(resolved_trapping, resolved_coupling)
 
     # === PHASE 2: INITIALIZE ATOMS (uses resolved beams, may sample positions/velocities) ===
@@ -304,14 +385,17 @@ function compile(sys::System, seq::Sequence;
 
     # Resolver function that uses the SAME cache for pointer sharing
     resolve_target = obj -> begin
-        resolved_obj = resolve(obj, param_values; cache=cache)
+        resolved_obj = resolve(obj, param_values; cache=cache, rng=rng)
         return update_noisy_field_time_refs!(resolved_obj, global_time_ref)
     end
 
     # Initialize quantum state
     if !isempty(initial_state)
         qstate = getqstate(sys, initial_state; density_matrix=density_matrix)
+        # The detectors built below bind to this array (the job's live state); the
+        # user's system keeps a handle on it too, as `getqstate(sys)` documents.
         sys.state[] = qstate
+        user_sys.state[] = qstate
     else
         qstate = nothing
     end
@@ -334,7 +418,7 @@ function compile(sys::System, seq::Sequence;
 
     for (i, inst) in enumerate(seq)
         # Resolve instruction if it contains deferred objects (using same cache)
-        resolved_inst = resolve(inst, param_values; cache=cache)
+        resolved_inst = resolve(inst, param_values; cache=cache, rng=rng)
 
         # Per-instruction dt: instruction's own, else the sequence's, else derived.
         dt_i = something(resolved_inst.dt, seq.dt, derived_dt)
@@ -397,13 +481,16 @@ function compile(sys::System, seq::Sequence;
         dur = instruction_duration(seq[i])
         push!(inst_dts, (dur > 0 && step_counts[i] > 0) ? dur / step_counts[i] : req)
     end
-    inst_ds  = [something(seq[i].downsample, seq.downsample) for i in 1:n_instructions]
+    inst_ds  = Int[something(seq[i].downsample, seq.downsample) for i in 1:n_instructions]
 
     # `stepgrid` has already refined `dt` so `downsample` divides the step count,
     # so this divides exactly. `cld` rather than `÷` regardless, so that any path
     # which bypasses that refinement still sizes the buffer for the final partial
     # group instead of silently dropping the endpoint.
-    ds_counts  = [max(1, cld(step_counts[i], inst_ds[i])) for i in 1:n_instructions]
+    # An instruction with no steps (`On`, `Off`, a retune, `Wait(0)`) has no sample:
+    # one would duplicate the previous instruction's final time.
+    ds_counts  = [step_counts[i] == 0 ? 0 : max(1, cld(step_counts[i], inst_ds[i]))
+                  for i in 1:n_instructions]
     ds_offsets = cumsum([0; ds_counts])
     ds_total   = ds_offsets[end]
 
@@ -429,7 +516,7 @@ function compile(sys::System, seq::Sequence;
         times[seg] .= range(abs_start + step, step=step, length=ds_counts[i])
         # The last sample is the instruction's final step, which is only a whole
         # `step` from the previous one when `ds_i` divides `step_counts[i]`.
-        times[ds_offsets[i+1]] = abs_start + step_counts[i] * dt_i
+        ds_counts[i] > 0 && (times[ds_offsets[i+1]] = abs_start + step_counts[i] * dt_i)
         abs_start += step_counts[i] * dt_i
     end
 
@@ -497,29 +584,40 @@ function compile(sys::System, seq::Sequence;
                         n_auto_fields, resolved_jumps,
                         modifiers, boundary_modifiers, detectors, local_tspans,
                         detector_outputs, detector_grids, times, inst_ds, inst_dts, seq.tol,
-                        integrator)
+                        integrator, sys, parameter_names, param_values)
 end
 
 
 """
+    recompile!(job::SimulationJob; rng = Random.default_rng(), kwargs...)
     recompile!(job::SimulationJob, sys::System; kwargs...)
 
 Reinitialize a `SimulationJob` for a new Monte Carlo trajectory.
 
 Updates all DAG node outputs in-place (re-sampling parameter values and noise),
 reinitializes atom velocities, resets the quantum state, and zeroes detector outputs.
+Works on the job's own copy of the system (`job.system`); the `sys` argument of the
+two-argument form is accepted for compatibility and not read.
 
-Additional keyword arguments override parameter values (same as `compile`).
+Additional keyword arguments set parameter values (same as `compile`) and the job
+remembers them: a parameter not named keeps the value it was last given, by
+`compile`, `recompile!` or `play`, else its default. So `recompile!(job; Δ = x);
+play(job, sys)` and `play(job, sys; Δ = x)` are the same sweep step.
 
 # Thread Safety
-Safe to call on thread-local job copies (`deepcopy(job)`). MUST NOT be called on
-shared job objects. The `sys` argument may be shared across threads.
+Safe to call on thread-local job copies (`deepcopy(job)`, which copies the job's
+system with it). MUST NOT be called on a job another thread is running.
 """
-function recompile!(job::SimulationJob, sys::System;
+recompile!(job::SimulationJob, ::System; kwargs...) = recompile!(job; kwargs...)
+
+function recompile!(job::SimulationJob;
                     rng = Random.default_rng(),
                     kwargs...)
 
-    param_values = Dict{Symbol, Any}(kwargs)
+    new_values = _parameter_values(kwargs)
+    _check_parameter_names(job.parameter_names, new_values)
+    param_values = merge!(job.param_values, new_values)
+    sys = job.system
 
     # Phase 0: restore trapping beams to their compile-time state. Inner-loop
     # modifiers (Move/Position/Amplitude) mutate beam.r0/_coeff in place; without
@@ -531,21 +629,24 @@ function recompile!(job::SimulationJob, sys::System;
 
     sorted_nodes = _topological_sort(sys.nodes)
 
-    # Phase 1: recompile BeamNodes first
+    # Phase 1: recompile BeamNodes and the quantization axis first (a sampled axis
+    # reaches the beam-derived couplings through the axis node, see
+    # `_bind_quantization_axis!`)
     for node in sorted_nodes
-        node isa BeamNode && recompile_node!(node, nothing, rng, param_values)
+        (node isa BeamNode || node isa QuantizationAxisNode) &&
+            recompile_node!(node, nothing, rng, param_values)
     end
 
     # Collect beams for atom reinitialization. `job.beams` is the trapping beams
     # followed by the compile-time coupling beams (see `compile`); take only the
     # former, since the coupling beams were just re-resolved.
-    resolved_coupling = AbstractBeam[n._compiled[] for n in sorted_nodes if n isa BeamNode]
+    resolved_coupling = _coupling_beams(sorted_nodes)
     all_beams = vcat(job.beams[1:length(job.initial_beams)], resolved_coupling)
 
     # Phase 2: reinitialize atoms, with the same quantization axis `compile`
     # used. The tensor polarizability depends on it, so omitting it recomputes α
     # against ẑ from the second shot on.
-    q_axis = _shot_quantization_axis(sys, rng, param_values)
+    q_axis = getquantizationaxis(sys)
     _set_photon_dipoles!(sys, q_axis)
     for i in 1:length(sys.atoms)
         initialize!(sys.atoms[i], job.atoms[i]; beams=all_beams, rng=rng,
@@ -561,7 +662,11 @@ function recompile!(job::SimulationJob, sys::System;
 
     # Phase 3: recompile remaining nodes, each in its declared switch state.
     _foreach_job_output(job, sorted_nodes) do node, f
-        recompile_node!(node, f, rng, param_values)   # jumps: cheap unless resampled
+        if node isa DecayNode
+            recompile_node!(node, f, rng, param_values; basis = sys.basis)   # cheap unless resampled
+        else
+            recompile_node!(node, f, rng, param_values)
+        end
         _reset_activity!(node, f)
     end
 
@@ -576,6 +681,34 @@ function recompile!(job::SimulationJob, sys::System;
     _reset_run_state!(job)
     return job
 end
+
+# original => copy for everything a user may hold a handle to (what `add_*!` and
+# `System` hand out): node outputs (fields, jumps), trapping beams, atom wrappers
+# and their inner atoms. An explicit walk, because `deepcopy` records no map for
+# immutable structs (`Detuning` is one).
+function _handle_map(user_sys::System, sys::System)
+    cache = IdDict{Any, Any}()
+    bind!(u, c) = (cache[u] = c; cache[c] = c)
+    for (u, c) in zip(user_sys.nodes, sys.nodes)
+        fu, fc = node_output(u), node_output(c)
+        (fu isa AtomTwin.Dynamiq.AbstractField || fu isa Jump) && bind!(fu, fc)
+        fu isa NoisyField && bind!(fu.coupling, fc.coupling)
+    end
+    for (u, c) in zip(user_sys.beams, sys.beams)
+        bind!(u, c)
+    end
+    for (u, c) in zip(user_sys.atoms, sys.atoms)
+        bind!(u, c)
+        bind!(u.inner, c.inner)
+    end
+    return cache
+end
+
+# The coupling beams the atoms see (polarizability, dipole force): every `BeamNode`'s
+# resolved beam except a plane wave, which has no profile to trap with (its
+# radiation pressure is the `PlanarCoupling`'s own).
+_coupling_beams(sorted_nodes) = AbstractBeam[n._compiled[] for n in sorted_nodes
+                                             if n isa BeamNode && !(n._compiled[] isa PlanarBeam)]
 
 # Put the atoms back where `compile` left them: position, velocity, and the motion
 # caches of the previous run. Shot 1 of every `play` needs it; later shots are

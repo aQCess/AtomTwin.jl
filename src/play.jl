@@ -44,7 +44,8 @@ workflows with repeated executions, consider using [`compile`](@ref) followed by
   drive, no moving beam, no dipole force that would move it by a picometre over the
   run) takes the frozen solvers automatically; the result is the same.
 - Additional `kwargs` are treated as parameter values for resolving `Parameter`s and
-  other parametric components in the system and sequence
+  other parametric components in the system and sequence. A keyword that names no
+  `Parameter` is an error.
 
 # Returns
 Returns a `NamedTuple` with the following fields:
@@ -58,6 +59,8 @@ Returns a `NamedTuple` with the following fields:
 # Notes
 - For quantum systems, `initial_state` must be specified in `sys.initial_state` or overridden via this argument 
 - Each shot reinitializes atomic velocities/positions with fresh randomness
+- The run works on a private copy of `sys` (see [`compile`](@ref)): the system's
+  fields and atoms are as declared before and after `play`
 - Detector measurements occur at the **end** of each timestep, not the beginning
 - Multi-shot simulations use parallel execution when `shots ≥ 4` and `Threads.nthreads() > 1`,
   and run serially when `play` is itself called inside a `Threads.@threads` loop
@@ -111,12 +114,14 @@ function play(sys::System, seq::Sequence;
     end
 
     job = compile(sys, seq; initial_state = s, density_matrix=density_matrix, rng=rng,
-                  shots=shots, kwargs...)
-    return play(job, sys; initial_state = s, density_matrix=density_matrix, rng=rng,
-                shots=shots, shot_callback=shot_callback, frozen=frozen, kwargs...)
+                  kwargs...)
+    # `compile` just resolved the parameters and drew the samples for shot 1.
+    return _play_job(job; initial_state = s, recompile_first = false,
+                     density_matrix=density_matrix, rng=rng, shots=shots,
+                     shot_callback=shot_callback, frozen=frozen, kwargs...)
 end
 
-function _execute_shot!(shot, local_job, sys, shot_rng, all_outputs_vec,
+function _execute_shot!(shot, local_job, shot_rng, all_outputs_vec,
                         det_names, n_detectors, final_states, savefinalstate;
                         frozen::Bool = false, kwargs...)
 
@@ -139,35 +144,42 @@ end
 Run a compiled job -- the "compile once, play many" form of
 `play(sys, seq)`, taking the same keywords.
 
-Every run starts clean, whatever ran before: every shot from `initial_state` if
-given (for this run only) or else the state the job was compiled with, with the
-detectors zeroed and every field in its declared switch state.
+Every run starts clean, whatever ran before: every shot, the first included, is
+re-resolved with the keywords given (a parameter value, which the job then
+remembers, on top of the values it was last given by `compile`, `recompile!` or
+`play`; a fresh draw of every sampled quantity) and starts from `initial_state` if given (for this run only) or
+else the state the job was compiled with, with the detectors zeroed and every
+field in its declared switch state. The job is a snapshot of `sys` at `compile`
+(see [`compile`](@ref)); `sys` itself is not read.
 """
-function play(job::SimulationJob, sys::System; initial_state = nothing, kwargs...)
-    job.state === nothing && return _play_shots(job, sys; kwargs...)
+play(job::SimulationJob, sys::System; kwargs...) = _play_job(job; recompile_first = true, kwargs...)
+
+function _play_job(job::SimulationJob; initial_state = nothing, recompile_first::Bool, kwargs...)
+    job.state === nothing && return _play_shots(job; recompile_first, kwargs...)
     # Every shot starts from `job.initial_state` -- shot 1 via `_reset_run_state!`,
     # the rest via `recompile!` -- so a requested state goes there, restored
-    # afterwards. (`sys.state[]` alone is never read by the solvers.)
+    # afterwards.
     compiled = copy(job.initial_state)
     if initial_state !== nothing && !isempty(_tovector(initial_state))
-        s0 = getqstate(sys, _tovector(initial_state);
+        s0 = getqstate(job.system, _tovector(initial_state);
                        density_matrix = job.state isa AbstractMatrix)
         size(s0) == size(compiled) || throw(ArgumentError(
             "initial_state gives a state of size $(size(s0)), but the job was compiled " *
             "for $(size(compiled)); compile with the same `density_matrix`"))
         job.initial_state .= s0
     end
-    sys.state[] = copy(job.initial_state)
+    job.system.state[] = copy(job.initial_state)
     try
-        return _play_shots(job, sys; kwargs...)
+        return _play_shots(job; recompile_first, kwargs...)
     finally
         job.initial_state .= compiled
     end
 end
 
-# `density_matrix` is accepted with the rest of `play`'s keywords but not used:
-# the job knows what it was compiled as.
-function _play_shots(job::SimulationJob, sys::System;
+# `recompile_first`: whether shot 1 is re-resolved too. A replayed job must be
+# (its keywords, a fresh draw); a job `play(sys, seq)` just compiled already was.
+function _play_shots(job::SimulationJob;
+                     recompile_first::Bool = true,
                      savefinalstate::Bool=false,
                      shots::Int = 1,
                      frozen::Bool = false,
@@ -178,6 +190,16 @@ function _play_shots(job::SimulationJob, sys::System;
                      kwargs...)
 
     @assert shots > 0 "shots must be positive"
+    # The job remembers the values it is given (set here, before the threads copy it).
+    new_values = _parameter_values(kwargs)
+    _check_parameter_names(job.parameter_names, new_values)
+    merge!(job.param_values, new_values)
+    # The job knows what it was compiled as; a keyword that disagrees would have
+    # run the other solver silently.
+    job.state !== nothing && density_matrix !== nothing &&
+        Bool(density_matrix) != (job.state isa AbstractMatrix) && throw(ArgumentError(
+            "play: `density_matrix = $density_matrix`, but the job was compiled with " *
+            "`density_matrix = $(job.state isa AbstractMatrix)`; compile again"))
     density_matrix = job.state isa AbstractMatrix
 
     if density_matrix && isempty(job.jumps)
@@ -219,16 +241,18 @@ function _play_shots(job::SimulationJob, sys::System;
     # clicks, and any coupling the last run left switched on.
     _reset_run_state!(job)
     _foreach_job_output((node, f) -> _reset_activity!(node, f), job,
-                        _topological_sort(sys.nodes))
+                        _topological_sort(job.system.nodes))
 
     # Single-shot fast path
     if shots == 1
         shot_seed = rand(rng, UInt)
         shot_rng = Random.Xoshiro(shot_seed)
+        recompile_first && recompile!(job; rng = shot_rng, kwargs...)
         result = _play(job; rng=shot_rng, savefinalstate=savefinalstate, frozen=frozen)
         final_states = savefinalstate ? [result.final_state] : typeof(job.state)[]
+        # Copies: the job's own buffers are refilled by its next run.
         return (
-            detectors = result.detectors,
+            detectors = Dict{String, Any}(k => copy(v) for (k, v) in result.detectors),
             times = result.times,
             final_states = final_states
         )
@@ -262,9 +286,9 @@ function _play_shots(job::SimulationJob, sys::System;
     
     if use_parallel
         # Memory check
-        job_size = Base.summarysize((job, sys))
+        job_size = Base.summarysize(job)
         memory_required = job_size * Threads.maxthreadid()
-        memory_available = Sys.total_memory() - Base.gc_live_bytes()
+        memory_available = Sys.free_memory()
         
         if memory_required > 0.8 * memory_available
             @warn """Insufficient memory for multithreading.
@@ -285,13 +309,11 @@ function _play_shots(job::SimulationJob, sys::System;
     
     # Execute
     if use_parallel
-        # One copy of the job and the system per thread, reused across shots.
-        # `recompile!` resolves per-shot values into `sys.nodes` (a sampled beam)
-        # and reads atom positions through `sys.atoms`, so the system cannot be
-        # shared; copying the pair together keeps `sys.atoms[i].inner` the job's
-        # atom. Each thread makes its own copy, so its state is allocated on that
-        # thread.
-        thread_copies = Vector{Tuple{typeof(job), System}}(undef, Threads.maxthreadid())
+        # One copy of the job per thread, reused across shots. `recompile!`
+        # resolves per-shot values into the job's system (a sampled beam, the
+        # axis) and its atoms, which the copy carries with it. Each thread makes
+        # its own copy, so its state is allocated on that thread.
+        thread_copies = Vector{typeof(job)}(undef, Threads.maxthreadid())
 
         # `:static` pins each task to one thread for the whole body, so
         # `threadid()` is a stable identity. Bare `@threads` is `:dynamic` on
@@ -301,26 +323,20 @@ function _play_shots(job::SimulationJob, sys::System;
         # even on 1.11.
         Threads.@threads :static for shot in 1:shots
             tid = Threads.threadid()
-            isassigned(thread_copies, tid) || (thread_copies[tid] = deepcopy((job, sys)))
-            local_job, local_sys = thread_copies[tid]
-            if shot != 1
-                recompile!(local_job, local_sys;
-                                rng=shot_rngs[shot],
-                                kwargs...)
-            end
-            _execute_shot!(shot, local_job, local_sys, shot_rngs[shot],
+            isassigned(thread_copies, tid) || (thread_copies[tid] = deepcopy(job))
+            local_job = thread_copies[tid]
+            (shot != 1 || recompile_first) &&
+                recompile!(local_job; rng=shot_rngs[shot], kwargs...)
+            _execute_shot!(shot, local_job, shot_rngs[shot],
                         all_outputs_vec, det_names, n_detectors, final_states,
                         savefinalstate; frozen = frozen, kwargs...)
             shot_callback !== nothing && shot_callback(shot, shots)
         end
     else
         for shot in 1:shots
-            if shot != 1
-                recompile!(job, sys;
-                                rng=shot_rngs[shot],
-                                kwargs...)
-            end
-            _execute_shot!(shot, job, sys, shot_rngs[shot],
+            (shot != 1 || recompile_first) &&
+                recompile!(job; rng=shot_rngs[shot], kwargs...)
+            _execute_shot!(shot, job, shot_rngs[shot],
                         all_outputs_vec, det_names, n_detectors, final_states,
                         savefinalstate; frozen = frozen, kwargs...)
             shot_callback !== nothing && shot_callback(shot, shots)
@@ -378,14 +394,17 @@ function _play(job::SimulationJob;
     n_instructions = length(job.modifiers)
     if job.state === nothing
         # Classical evolution
+        # An instruction with no steps (`On`, `Off`, a retune) still switches:
+        # its boundary modifiers run, only the evolution is skipped.
         @inbounds for i in 1:n_instructions
-            isempty(job.local_tspans[i]) && continue
             for m in job.boundary_modifiers[i]; begin_instruction!(m); end
             for m in job.modifiers[i]; begin_instruction!(m); end
-            evolve!(job.atoms, job.local_tspans[i];
-                    beams=job.beams, modifiers=job.modifiers[i],
-                    detectors=job.detectors[i], rng=rng, frozen=false,
-                    downsample=job.downsamples[i], dt=job.inst_dts[i])
+            _reprime_forces!(job, i)
+            isempty(job.local_tspans[i]) ||
+                evolve!(job.atoms, job.local_tspans[i];
+                        beams=job.beams, modifiers=job.modifiers[i],
+                        detectors=job.detectors[i], rng=rng, frozen=false,
+                        downsample=job.downsamples[i], dt=job.inst_dts[i])
             for m in job.boundary_modifiers[i]; end_instruction!(m); end
         end
     else
@@ -394,16 +413,17 @@ function _play(job::SimulationJob;
         # same answer, less work (see `_is_static`).
         frozen = frozen || _is_static(job)
         @inbounds for i in 1:n_instructions
-            isempty(job.local_tspans[i]) && continue
             for m in job.boundary_modifiers[i]; begin_instruction!(m); end
             for m in job.modifiers[i]; begin_instruction!(m); end
-            evolve!((job.state, job.atoms), job.local_tspans[i];
-                    fields=job.fields, beams=job.beams, jumps=job.jumps,
-                    modifiers=job.modifiers[i], detectors=job.detectors[i],
-                    rng=rng, frozen=frozen, downsample=job.downsamples[i],
-                    dt=job.inst_dts[i],
-                    tol=_propagator_tol(job.tol), steptol=job.tol,
-                    integrator=job.integrator)
+            _reprime_forces!(job, i)
+            isempty(job.local_tspans[i]) ||
+                evolve!((job.state, job.atoms), job.local_tspans[i];
+                        fields=job.fields, beams=job.beams, jumps=job.jumps,
+                        modifiers=job.modifiers[i], detectors=job.detectors[i],
+                        rng=rng, frozen=frozen, downsample=job.downsamples[i],
+                        dt=job.inst_dts[i],
+                        tol=_propagator_tol(job.tol), steptol=job.tol,
+                        integrator=job.integrator)
             for m in job.boundary_modifiers[i]; end_instruction!(m); end
         end
     end
@@ -453,4 +473,16 @@ function _is_static(job::SimulationJob)
 end
 
 _acts_on_beam(m) = m isa Dynamiq.PositionModifier || m isa Dynamiq.MoveModifier ||
+                   m isa Dynamiq.SetPositionModifier ||
                    (hasproperty(m, :field) && getproperty(m, :field) isa Dynamiq.AbstractBeam)
+
+# A boundary modifier that moves a beam (an instant retune) changes the force at
+# the atoms' unchanged positions; the velocity-Verlet force cached from the previous
+# instruction is then stale and the next drift would use it (an O(dt) error).
+function _reprime_forces!(job, i)
+    any(m -> m isa Dynamiq.SetPositionModifier, job.boundary_modifiers[i]) || return
+    for a in job.atoms
+        Dynamiq.reset_force!(a)
+    end
+    return
+end

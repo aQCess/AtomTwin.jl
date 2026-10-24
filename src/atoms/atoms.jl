@@ -211,7 +211,7 @@ Construct a parametric atomic species wrapper of type `S`, e.g.
 `AtomWrapper{:Ytterbium171}()`.
 
 Defaults for `mass` and `I` are taken from `ATOM_DEFAULTS` if not provided
-explicitly. `polarizabilities` — a `Dict` from term (`"1P1"` or `l"1P1"`) to
+explicitly; a species with no entry there must be given both. `polarizabilities` — a `Dict` from term (`"1P1"` or `l"1P1"`) to
 [`PolarizabilityModel`](@ref) — adds models for states the species does not ship
 and overrides those it does, for this atom only; levels match them by term as
 usual.
@@ -220,11 +220,32 @@ function AtomWrapper{S}(; levels=nothing, x=zeros(3), v=zeros(3),
                          x_init=nothing, v_init=nothing,
                          mass=nothing, I=nothing, polarizabilities=nothing) where S
     
-    defaults = get(ATOM_DEFAULTS, S, (mass=87amu, I=1//2))
-    
+    defaults = get(ATOM_DEFAULTS, S, nothing)
+    defaults === nothing && (mass === nothing || I === nothing) &&
+        throw(ArgumentError("no species defaults for :$S; pass `mass` and `I`, or use " *
+                            "one of $(join(sort!(collect(keys(ATOM_DEFAULTS))), ", "))"))
+
     m = mass === nothing ? defaults.mass : mass
     I_used = I === nothing ? defaults.I : I
-    
+
+    if levels !== nothing
+        # Levels are immutable values: two manifolds with the same quantum numbers,
+        # label and term give equal levels, which would share one basis index.
+        allunique(levels) || throw(ArgumentError(
+            "levels must be distinct: give manifolds with the same quantum numbers " *
+            "different `label`s or `term`s"))
+        # A generic `Atom` given no `I` has no nuclear spin to check against (its
+        # default is a placeholder); a species, or an explicit `I`, has.
+        if I !== nothing || S !== :Generic
+            for l in levels
+                l isa HyperfineLevel || continue
+                abs(l.J - I_used) <= l.F <= l.J + I_used || throw(ArgumentError(
+                    "level $(l.label): F = $(l.F) is outside |J − I| … J + I for J = $(l.J) " *
+                    "and I = $I_used ($S); the manifold was declared for another isotope"))
+            end
+        end
+    end
+
     nlevels = levels === nothing ? 1 : length(levels)
 
     inner = NLevelAtom(nlevels;
@@ -291,14 +312,15 @@ const Potassium39Atom = AtomWrapper{:Potassium39}
 
 Internal dictionary of default species parameters keyed by a `Symbol`.
 Each entry stores a named tuple `(mass, I)` used by `AtomWrapper{S}` when explicit
-values are not provided.
+values are not provided. Masses are the AME2020 atomic masses (Wang et al., Chin.
+Phys. C 45, 030003 (2021)), not mass numbers.
 """
 const ATOM_DEFAULTS = Dict{Symbol, NamedTuple}(
-    :Ytterbium171 => (mass = 171amu, I = 1//2),
-    :Ytterbium174 => (mass = 174amu, I = 0//1),
-    :Rubidium87 => (mass = 87amu, I = 3//2),
-    :Strontium88 => (mass = 88amu, I = 0//1),
-    :Potassium39 => (mass = 39amu, I = 3//2),
+    :Ytterbium171 => (mass = 170.93633amu, I = 1//2),
+    :Ytterbium174 => (mass = 173.93887amu, I = 0//1),
+    :Rubidium87 => (mass = 86.90918amu, I = 3//2),
+    :Strontium88 => (mass = 87.90561amu, I = 0//1),
+    :Potassium39 => (mass = 38.96371amu, I = 3//2),
     :Generic => (mass = 87amu, I = 1//2)
 )
 
@@ -363,6 +385,15 @@ function _beam_epsilon_z(beam, q_axis)
     return abs(sum(conj(p[i]) * q_axis[i] for i in 1:3)) / n
 end
 
+# |ε × ε*| of a beam's unit polarisation: 0 for linear light, 1 for circular.
+function _beam_ellipticity(beam)
+    hasproperty(beam, :pol) || return 0.0
+    p = ComplexF64.(collect(getproperty(beam, :pol)))
+    n2 = sum(abs2, p)
+    n2 == 0 && return 0.0
+    return norm(cross(p, conj(p))) / n2
+end
+
 """
     _quantization_frame(q_axis) -> (x′, y′, z′)
 
@@ -398,7 +429,7 @@ const _NO_SET   = Set{Int}()
 # with 0 < |Δm| ≤ 2. Returned with that manifold's F and the two m.
 function _tensor_pairs(a::AtomWrapper)
     key(l::HyperfineLevel) = (_level_term(l), l.F, l.J, l.mF)
-    key(l::FineLevel)      = a.I == 0//1 ? (_level_term(l), l.J, l.J, l.mJ) : nothing
+    key(l::FineLevel)      = (_level_term(l), l.J, l.J, l.mJ)    # the I = 0 picture
     key(l)                 = nothing
     out = _NO_PAIRS
     lv  = a.levels
@@ -444,7 +475,16 @@ otherwise silent: that level feels no trap.
 function _init_species_data!(a::AtomWrapper, inner::NLevelAtom, beams;
                              q_axis = [0.0, 0.0, 1.0], tensor_pairs::Symbol = :keep)
     models = _polarizability_models(a)
-    isempty(models) && return nothing
+    if isempty(models)
+        # Not an error (a generic atom may want no trap), but say so once: with
+        # beams present the atom is silently untrapped otherwise.
+        isempty(beams) || @warn """
+            $(getspecies(a)) ships no polarizability models: every level takes α = 0 \
+            and feels no light shift and no dipole force from the beams.
+            Pass `polarizabilities = Dict(term => model)` to the atom, or use a species \
+            with data.""" maxlog = 1 _id = Symbol(getspecies(a), :_no_polarizability_models)
+        return nothing
+    end
     wavelengths = unique([getwavelength(b) for b in beams])
     # Per shot (`:keep`) with nothing mixed at compile there is nothing to refresh.
     mixing  = !(tensor_pairs === :keep && isempty(inner._cpairs))
@@ -470,6 +510,17 @@ function _init_species_data!(a::AtomWrapper, inner::NLevelAtom, beams;
                   "in wavelength.")
         end
         ε_z = first(εs)
+        # Only the scalar and tensor (rank-0 and rank-2) light shifts are modelled.
+        # Elliptical light also has a vector (rank-1) shift — a fictitious magnetic
+        # field ∝ m_F, the leading polarization-dependent shift of a J = ½ ground
+        # state — which is missing, so say so once per wavelength.
+        if any(b -> _beam_ellipticity(b) > 1e-6, same_λ)
+            @warn """
+                  beam at λ = $(round(λ * 1e9; digits = 3)) nm is not linearly polarised: \
+                  its vector (rank-1) light shift, a fictitious magnetic field ∝ m_F, is \
+                  not modelled; only the scalar and tensor parts enter.\
+                  """ maxlog = 1 _id = Symbol(:vector_light_shift_, round(Int, λ * 1e12))
+        end
         # compute polarizability for every internal level
         α_si = map(a.levels) do l
             key = _level_term(l)
@@ -478,12 +529,18 @@ function _init_species_data!(a::AtomWrapper, inner::NLevelAtom, beams;
                 return 0.0
             end
             model = models[key]
+            if l isa Union{HyperfineLevel, FineLevel} && l.J != model.J
+                error("level $(l.label) declares J = $(l.J) but its polarizability model " *
+                      "'$key' has J = $(model.J): the term or the level's J is wrong")
+            end
             if l isa HyperfineLevel
-                α = polarizability_si(model, λ * 1e9; 
+                α = polarizability_si(model, λ * 1e9;
                                         F = l.F, mF = l.mF, I = a.I, ε_z = ε_z)
-            elseif a.I == 0//1 && l isa FineLevel
-                α = polarizability_si(model, λ * 1e9; 
-                                        F = l.J, mF = l.mJ, I = a.I, ε_z = ε_z)
+            elseif l isa FineLevel
+                # A fine-structure level is the I = 0 picture, F = J, whatever the
+                # isotope: the same convention the couplings use for it.
+                α = polarizability_si(model, λ * 1e9;
+                                        F = l.J, mF = l.mJ, I = 0//1, ε_z = ε_z)
             else
                 α = polarizability_si(model, λ * 1e9)
             end
@@ -524,7 +581,7 @@ function _init_species_data!(a::AtomWrapper, inner::NLevelAtom, beams;
               Unmatched: $(join(map(t -> isempty(t) ? "(no term)" : "'$t'", missing_terms), ", "))
               Known: $(join(sort(collect(keys(models))), ", "))
               Set `term=` on the level or manifold if one of these was meant.\
-              """
+              """ maxlog = 1 _id = Symbol(getspecies(a), :_unmatched_terms)
     end
     return nothing
 end
@@ -632,7 +689,7 @@ function initialize!(a::AtomWrapper, inner::NLevelAtom;
                      param_values = Dict{Symbol,Any}(),
                      q_axis       = [0.0, 0.0, 1.0],
                      tensor_pairs = :keep)
-    # 0. Drop any force cached by a previous shot. `fclassical!` (velocity Verlet)
+    # 0. Drop any force cached by a previous shot. `fdrift!`/`fkick!` (velocity Verlet)
     #    reuses the last step's force as this step's F_old, so a stale value from
     #    another shot — or from the position this atom had before re-initialising
     #    below — would corrupt the first step of the trajectory.
@@ -680,11 +737,8 @@ Convenience wrapper that initializes an AbstractAtom in place using its inner NL
 This forwards to initialize!(::AtomWrapper, ::NLevelAtom), passing atom.inner
 and the supplied beams and rng.
 """
-function initialize!(atom::AbstractAtom;
-                     beams  = AbstractBeam[],  # or atom.beams if you store them
-                     rng    = Random.default_rng(),
-                     q_axis = [0.0, 0.0, 1.0])
-    initialize!(atom, atom.inner; beams = beams, rng = rng, q_axis = q_axis)
+function initialize!(atom::AbstractAtom; kwargs...)
+    initialize!(atom, atom.inner; kwargs...)
     return atom
 end
 

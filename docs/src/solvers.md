@@ -27,16 +27,29 @@ What `tol` controls depends on the solver:
 - **Schrödinger and MCWF.** Each step is a Chebyshev expansion of
   `exp(-iH dt)`, exact to machine precision for a Hamiltonian that is constant over
   the step, at any step length. A time-dependent drive (a shaped `Pulse`, a ramp, a
-  move) is read once per step, at its midpoint, so `dt` must resolve it; `compile`
-  warns when it may not.
+  move) is read once per step, at its midpoint (once per sub-step when plane-wave
+  drives on moving atoms sub-divide the step, see below), so `dt` must resolve it;
+  `compile` warns when it may not. The MCWF effective Hamiltonian is not Hermitian, and
+  there the expansion is exact only up to a step set by its anti-Hermitian part
+  (of order `10/Γ`): the solver divides a longer `dt` into such steps, each jump
+  still placed on the dense output of the step it falls in.
+- **Radiation pressure** (plane-wave drives on moving atoms) is integrated over
+  sub-steps fixed by the drives' rotation (0.1 rad per sub-step), not by `tol`:
+  the impulse of a coherent drive carries a bias of ~0.3 % per absorption cycle
+  that only a finer `dt` reduces. The density-matrix solver, which integrates it
+  over its own sub-steps, does not have this floor.
 - **Master equation.** Each step is divided into Strang-split sub-steps until a
   step-doubling estimate of the error is below `tol`; drives are read at every
   sub-step, and the dissipator is an exact, trace-preserving channel. Here `tol`
   controls the result.
 
 The Taylor propagator is available as
-`compile(…; integrator = AtomTwin.Dynamiq.Taylor(order))`; it is stable only for
-`‖H‖·dt < 2√2` and is not supported by the MCWF solver.
+`compile(…; integrator = AtomTwin.Dynamiq.Taylor(order))`; it is stable only below
+an order-dependent `‖H‖·dt` (`2√2` for order 4; see `stability_limit`) and is not
+supported by the MCWF solver. On the statevector solver
+with an explicit `dt` its accuracy is set by `dt` alone (local error
+`∝ (‖H‖ dt)^(order+1)`): `tol` sub-divides only the density-matrix step, and the
+automatic step of `Sequence(; tol)`. Chebyshev, the default, has no such limit.
 
 ## Quantum jumps
 

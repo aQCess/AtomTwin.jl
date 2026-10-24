@@ -209,7 +209,7 @@ struct ChebyshevWorkspace
     ϕkp1::Vector{ComplexF64}
     coef::Vector{Float64}
 end
-ChebyshevWorkspace(dim::Int; maxdeg::Int = 4096) =
+ChebyshevWorkspace(dim::Int; maxdeg::Int = 256) =     # `ensure_degree!` grows it
     ChebyshevWorkspace(zeros(ComplexF64, dim), zeros(ComplexF64, dim),
                        zeros(ComplexF64, dim), zeros(Float64, maxdeg))
 
