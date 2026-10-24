@@ -416,7 +416,7 @@ function force(atom::A, beams::Vector{<:AbstractBeam}) where {A}
             if getwavelength(b) == λ
                 e  = efield_scalar(b, x_pos)
                 dE = dEdr(b, x_pos)
-                p1, p2, p3 = _pol3(b)
+                p1, p2, p3 = _pol3(b)::NTuple{3,ComplexF64}
                 E1 += e * p1; E2 += e * p2; E3 += e * p3
                 G11 += dE[1] * p1; G12 += dE[1] * p2; G13 += dE[1] * p3
                 G21 += dE[2] * p1; G22 += dE[2] * p2; G23 += dE[2] * p3
@@ -451,14 +451,15 @@ function force(atom::A, beams::Vector{<:AbstractBeam}) where {A}
     return Fx, Fy, Fz
 end
 
-# A beam's unit polarization as three scalars; x̂ for a beam type without one.
-@inline function _pol3(b)
-    if hasproperty(b, :pol)
-        p = getproperty(b, :pol)
-        return @inbounds (ComplexF64(p[1]), ComplexF64(p[2]), ComplexF64(p[3]))
-    end
-    return (1.0 + 0.0im, 0.0 + 0.0im, 0.0 + 0.0im)
-end
+# A beam's unit polarization as three scalars; x̂ for a beam type without one. One
+# method per concrete type with a fixed return type: `beams` is a
+# `Vector{AbstractBeam}`, and a generic `getproperty(b, :pol)` on an abstract `b`
+# inferred as `Any` turned every accumulation in `force` into a boxed allocation
+# (3.7 GiB per run of the sorting example).
+@inline _pol3(b::Union{GaussianBeam, GeneralGaussianBeam}) =
+    @inbounds (b.pol[1], b.pol[2], b.pol[3])::NTuple{3,ComplexF64}
+@inline _pol3(b::PlanarBeam) = b.pol
+@inline _pol3(::AbstractBeam) = (1.0 + 0.0im, 0.0 + 0.0im, 0.0 + 0.0im)
 
 """
     fdrift!(dt, atom, beams)
@@ -677,7 +678,7 @@ function wfmc(psi::Vector{ComplexF64},
     # test renormalises the state. So the output step is sub-divided to the step
     # the bound allows (`suggested_dt`), as the density-matrix solver sub-divides
     # to its tolerance; jump times stay exact, on each sub-step's dense output.
-    nsub = _nonhermitian_substeps(Heff_terms, dt, tol, integrator)
+    nsub = _nonhermitian_substeps(Heff_terms, spec, dt, tol, integrator)
     h    = dt / nsub
     plan = plan_step(integrator, psi, h, spec; tol = tol)
     D    = ChebyshevDense(length(psi))
@@ -701,10 +702,15 @@ end
 
 # Sub-steps per output step for the non-Hermitian MCWF propagation: the largest
 # step `propagator_theta` allows for the operator's anti-Hermitian radius, at the
-# drives' peak amplitude.
-function _nonhermitian_substeps(Heff, dt::Float64, tol::Float64, integrator)
-    hmax = suggested_dt(Heff, tol; integrator = integrator)
-    return max(1, ceil(Int, dt / hmax))
+# drives' peak amplitude -- `suggested_dt`'s bound, with the radius read from the
+# `spec` the Chebyshev plan already computed (its `Dict` scan cost 35 ms per shot
+# at d = 4096) and the norm from the allocation-free Gershgorin row sums.
+function _nonhermitian_substeps(Heff, spec::SpectralSpec, dt::Float64, tol::Float64, integrator)
+    nrm = gershgorin_bound(Heff; peak = true)
+    nrm <= 0 && return 1
+    θ = propagator_theta(integrator, tol, taylor_order(integrator),
+                         SpectralSpec(-nrm, nrm, spec.Iradius))
+    return max(1, ceil(Int, dt * nrm / θ))
 end
 
 # Does the modifier move or re-amplify a beam? In a frozen run that is the only
@@ -826,7 +832,7 @@ function wfmc_semiclassical(psi::Vector{ComplexF64},
     # of the driven states' rotation. Jumps need none (see `mcwf_advance!`). The
     # non-Hermitian expansion needs its own bound, as in `wfmc`.
     nsub = max(rp === nothing ? 1 : _radiation_substeps(rp, H, dt, modifiers),
-               _nonhermitian_substeps(Heff_terms, dt, tol, integrator))
+               _nonhermitian_substeps(Heff_terms, spec, dt, tol, integrator))
     h    = dt / nsub
     plan = plan_step(integrator, psi, h, spec; tol = tol)
     D    = ChebyshevDense(length(psi))

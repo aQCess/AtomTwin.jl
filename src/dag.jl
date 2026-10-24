@@ -435,6 +435,12 @@ function _jump(node::DecayNode, basis::Basis, Gamma_val)
     idx = node.atom.level_indices
     j = Jump(basis, node.atom.inner, [(idx[e] => idx[g]) => c for ((e, g), c) in node.branches], Gamma_val)
     j._coeff[] = ComplexF64(node.active ? 1.0 : 0.0)
+    # The solver caches (H_nh for MCWF, the L†L diagonal for the master equation)
+    # are built here, once per System, and travel with the job's copy; built per
+    # `compile` they cost ~3 ms per 12 decays at d = 4096, more than the copy.
+    # A changed rate clears them (`update!`), and the solvers rebuild lazily.
+    AtomTwin.Dynamiq.precompute!(j, Vector)
+    AtomTwin.Dynamiq.precompute!(j, Matrix)
     return j
 end
 

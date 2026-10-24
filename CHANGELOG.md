@@ -79,14 +79,20 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   numbers; trap frequencies move by up to 0.05 %); the Rb D1 reduced dipole is
   4.231 ea₀.
 - **Laser phase noise.** The synthesised phase noise was far too weak: `S_φ` was
-  taken as `S_ν/(2πf)²` for an `S_ν` in Hz²/Hz (it is `S_ν/f²`), the one-sided PSD
+  taken as `S_ν/(2πf)²` for an `S_ν` in Hz²/Hz (it is `S_ν/f²`: `S_ν = f² S_φ` for a
+  frequency in Hz, de Léséleuc et al. PRA 97, 053803, the convention of Jiang et al.
+  PRA 107, 042611 and of the model's own documentation; `(2πf)²` is the relation for
+  an angular-frequency PSD), the one-sided PSD
   was doubled, the sinusoid amplitude was `2√(…)` for `√(2…)`, and the band started
   at `1/T`, which drops most of a white floor's phase diffusion — together ~10× too
   little phase variance for a servo bump and ~100× for a white floor. The
   synthesis now reproduces `Var[φ(T) − φ(0)] = 2π² h₀ T` for a white floor `h₀` to
   ~10 % and a servo bump's `∫S_ν/f² df` to a few %; the band starts at `1/(100T)`
   and `n_freqs` defaults to 300. **Every run with a `LaserPhaseNoiseModel`
-  changes**, the `rabi_with_noise` example included.
+  changes**, the `rabi_with_noise` example included: its `powerlaw_ampl = 2.5e4` and
+  `bump_ampl = 2e5` Hz²/Hz, chosen to look right under the old synthesis, are a
+  78 kHz-linewidth laser (Jiang et al. quote `h₀ = 13–100 Hz²/Hz` and bumps of
+  `10³–10⁴`); at the correct strength they collapse the oscillation within 3 µs.
 - **Instruction constructors** take any `Real` duration, `On`/`Off` a vector with
   `dt`/`downsample`, `MoveRow`/`RampRow`/`RampCol` a vector of rows and a
   `Parameter` delta, like their column twins; `FreqRow/Col` keep the array's `r0`.
@@ -162,6 +168,19 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   Coupling and interaction entries are set from the rate itself; serial and
   threaded runs of one seed agree bit for bit. (A jump's entries are still
   rescaled, by `√(Γ′/Γ)`.)
+- **Performance, measured against `devel` with `bench/` and the examples suite.**
+  Three regressions introduced earlier on this branch were found and removed before
+  the merge: the polarization lookup in `force` boxed every accumulation when the
+  beam list is abstractly typed (the `atom_sorting` example took 1.1 s for 19 ms);
+  the MCWF sub-division bound re-scanned the operator terms (35 ms per shot at
+  d = 4096, a second Chebyshev spectral scan); and a job's private copy rebuilt the
+  jumps' solver caches at every `compile` (3 ms per 12 decays at d = 4096). The
+  caches are now built once at `add_decay!` and travel with the copy; the bound
+  reads the spectrum the plan already has. What remains per `compile` is the copy
+  of the System, 0.8 ms at d = 4096 with 24 nodes. Benchmarks 1, 3 and 4 are at
+  parity; benchmark 2 pays the copy (+4 % TDSE, within noise for WFMC); the
+  `rabi_with_noise` example is 2× slower from `n_freqs = 300` (was 100) and the
+  wider band, which the corrected noise needs.
 - **Sanitation.** `is_classical` was always `false`; the `recompile!` docstring
   claimed the system may be shared across threads; `getqstate` and `noise.jl`
   referred to a `play!` that does not exist; `compile` documented a wrong

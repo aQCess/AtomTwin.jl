@@ -296,23 +296,15 @@ function compile(user_sys::System, seq::Sequence;
     # detector spec below is the copy's, so the shot-by-shot values written into
     # them (a sampled Ω, a thermal position) never reach `user_sys`, and
     # `gethamiltonian(user_sys)` keeps reporting the system as declared.
-    copies = IdDict{Any, Any}()
-    sys = Base.deepcopy_internal(user_sys, copies)::System
+    sys = deepcopy(user_sys)
     _bind_quantization_axis!(sys)
     # The user's handles -- the coupling a `Pulse` names, the array a `MoveCol`
-    # moves -- must resolve to the copy's objects, or the instruction would drive
-    # the user's field while the solver evolves the job's. `resolve` consults
-    # `cache` first, so it is seeded with the copy map.
-    # The copy's own objects resolve to themselves (`resolve` would otherwise copy a
-    # beam it does not know, and a detector would watch a beam no instruction moves).
-    cache = IdDict{Any, Any}()
-    for (k, v) in copies
-        if k isa Union{AtomTwin.Dynamiq.AbstractField, AbstractBeam, TweezerArray,
-                       AbstractAtom, NLevelAtom, Jump}
-            cache[k] = v
-            cache[v] = v
-        end
-    end
+    # moves, the detuning an `On` switches -- must resolve to the copy's objects, or
+    # the instruction would drive the user's field while the solver evolves the
+    # job's. `resolve` consults `cache` first, so it is seeded with original => copy
+    # for every node output, beam and atom (by position: `deepcopy` keeps the order),
+    # and copy => copy so the copy's own objects pass through unchanged.
+    cache = _handle_map(user_sys, sys)
 
     # Photo (click) detectors count individual quantum jumps, which only exist in
     # the statevector / wavefunction Monte Carlo solver. The density-matrix solver
@@ -688,6 +680,28 @@ function recompile!(job::SimulationJob;
     
     _reset_run_state!(job)
     return job
+end
+
+# original => copy for everything a user may hold a handle to (what `add_*!` and
+# `System` hand out): node outputs (fields, jumps), trapping beams, atom wrappers
+# and their inner atoms. An explicit walk, because `deepcopy` records no map for
+# immutable structs (`Detuning` is one).
+function _handle_map(user_sys::System, sys::System)
+    cache = IdDict{Any, Any}()
+    bind!(u, c) = (cache[u] = c; cache[c] = c)
+    for (u, c) in zip(user_sys.nodes, sys.nodes)
+        fu, fc = node_output(u), node_output(c)
+        (fu isa AtomTwin.Dynamiq.AbstractField || fu isa Jump) && bind!(fu, fc)
+        fu isa NoisyField && bind!(fu.coupling, fc.coupling)
+    end
+    for (u, c) in zip(user_sys.beams, sys.beams)
+        bind!(u, c)
+    end
+    for (u, c) in zip(user_sys.atoms, sys.atoms)
+        bind!(u, c)
+        bind!(u.inner, c.inner)
+    end
+    return cache
 end
 
 # The coupling beams the atoms see (polarizability, dipole force): every `BeamNode`'s

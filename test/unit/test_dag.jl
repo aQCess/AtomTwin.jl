@@ -151,6 +151,38 @@ end
     @test s2.nodes[1]._field !== s.nodes[1]._field && gethamiltonian(s2) == H0
 end
 
+@testset "an instruction drives the job's copy of every field it names" begin
+    # `Detuning` is an immutable struct: a handle map built from `deepcopy` alone missed
+    # it, so a `Pulse` on an inactive `add_detuning!` term switched the user's object and
+    # the job's stayed off. Ramsey: Rx(π/2)·Z(π)·Rx(π/2) returns |g⟩; without Z, |e⟩.
+    Ω = Δ = 2π * 1e6
+    function ramsey(kind)
+        g, e = Level("g"), Level("e")
+        atom = Atom(; levels = [g, e])
+        sys  = System(atom)
+        sq   = add_coupling!(sys, atom, g => e, Ω; active = false)
+        z    = kind == :none ? nothing : add_detuning!(sys, atom, e, Δ; active = false)
+        add_detector!(sys, PopulationDetectorSpec(atom, e; name = "Pe"))
+        seq = Sequence(1e-9)
+        push!(seq, Pulse(sq, π / 2 / Ω))
+        if kind == :pulse
+            push!(seq, Pulse(z, π / Δ))
+        elseif kind == :shaped
+            push!(seq, Pulse(z, π / Δ; amplitudes = ones(20)))
+        elseif kind == :onoff
+            push!(seq, On(z)); push!(seq, Wait(π / Δ)); push!(seq, Off(z))
+        else
+            push!(seq, Wait(π / Δ))
+        end
+        push!(seq, Pulse(sq, π / 2 / Ω))
+        play(sys, seq; initial_state = g).detectors["Pe"][end]
+    end
+    @test ramsey(:none) ≈ 1 atol = 1e-6
+    for kind in (:pulse, :shaped, :onoff)
+        @test ramsey(kind) ≈ 0 atol = 1e-6
+    end
+end
+
 @testset "a replayed job applies its keywords and draws afresh from shot 1" begin
     g, e = Level("g"), Level("e")
     a = Atom(; levels = [g, e])
