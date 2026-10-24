@@ -45,10 +45,10 @@ Gaussian servo bump with a power-law background.
 
 ```julia
 noise_model = LaserPhaseNoiseModel(
-    bump_ampl   = 2.0e5,    # Hz²/Hz, the one-sided frequency-noise PSD S_ν(f)
+    bump_ampl   = 1.0e4,    # Hz²/Hz, the one-sided frequency-noise PSD S_ν(f)
     bump_center = 1.0e6,    # Hz — servo resonance at 1 MHz
     bump_width  = 2.0e5,    # Hz — Gaussian σ
-    powerlaw_ampl = 0.25e5, # Hz²/Hz — white noise floor h₀ (linewidth π h₀)
+    powerlaw_ampl = 1.25e3, # Hz²/Hz — white noise floor h₀ (linewidth π h₀ ≈ 4 kHz)
 )
 
 coupling = add_coupling!(system, atom, g => e, Ω; noise = noise_model)

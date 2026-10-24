@@ -89,10 +89,11 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   synthesis now reproduces `Var[φ(T) − φ(0)] = 2π² h₀ T` for a white floor `h₀` to
   ~10 % and a servo bump's `∫S_ν/f² df` to a few %; the band starts at `1/(100T)`
   and `n_freqs` defaults to 300. **Every run with a `LaserPhaseNoiseModel`
-  changes**, the `rabi_with_noise` example included: its `powerlaw_ampl = 2.5e4` and
-  `bump_ampl = 2e5` Hz²/Hz, chosen to look right under the old synthesis, are a
-  78 kHz-linewidth laser (Jiang et al. quote `h₀ = 13–100 Hz²/Hz` and bumps of
-  `10³–10⁴`); at the correct strength they collapse the oscillation within 3 µs.
+  changes**. The model's defaults and the `rabi_with_noise` example, whose
+  `powerlaw_ampl = 2.5e4` and `bump_ampl = 2e5` Hz²/Hz had been chosen to look right
+  under the old synthesis (a 78 kHz-linewidth laser at face value), are rescaled by
+  `1/(2π²)` to `1.25e3` and `1e4` Hz²/Hz (a 4 kHz linewidth), so the example's damping
+  is what it was.
 - **Instruction constructors** take any `Real` duration, `On`/`Off` a vector with
   `dt`/`downsample`, `MoveRow`/`RampRow`/`RampCol` a vector of rows and a
   `Parameter` delta, like their column twins; `FreqRow/Col` keep the array's `r0`.

@@ -17,7 +17,9 @@ NOISE MODELS
 Realistic laser phase noise model using a parameterized one-sided frequency-noise
 power spectral density (PSD) `S_ν(f)` in Hz²/Hz (the convention of Day et al.,
 npj Quantum Inf. 8, 72 (2022)); the phase noise is `S_φ(f) = S_ν(f)/f²`. A white
-floor `powerlaw_ampl = h₀` gives a Lorentzian linewidth `π h₀`.
+floor `powerlaw_ampl = h₀` gives a Lorentzian linewidth `π h₀` (in Hz; `2π² h₀` as
+a rate in rad/s). The defaults, a 1 MHz servo bump of 10⁴ Hz²/Hz over a 1.25 × 10³
+Hz²/Hz floor (a 4 kHz linewidth), are a stabilised diode laser.
 
 A noise trace is a sum of `n_freqs` sinusoids at log-spaced frequencies from two
 decades below the trace's fundamental to the Nyquist limit, each with a random
@@ -48,10 +50,10 @@ struct LaserPhaseNoiseModel <: AbstractNoiseModel
     powerlaw_exp::Float64       # 'd' parameter
     n_freqs::Int                 # number of frequency components
     function LaserPhaseNoiseModel(;
-            bump_ampl = 2.0e5,
+            bump_ampl = 1.0e4,
             bump_center = 1.0e6,
             bump_width = 2.0e5,
-            powerlaw_ampl = 0.25e5,
+            powerlaw_ampl = 1.25e3,
             powerlaw_exp = 0.0,
             n_freqs = 300)
         new(bump_ampl, bump_center, bump_width, powerlaw_ampl, powerlaw_exp, n_freqs)
